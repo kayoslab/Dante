@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dante-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dante}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dante-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-dante}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dante} -d ${POSTGRES_DB:-dante}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # LocalStack — runs Secrets Manager, KMS, Lambda, EventBridge, IAM, STS, S3,
+  # CloudWatch Logs on a single port (4566). Free tier covers everything we
+  # need; Cognito User Pools require Pro and we use a real dev pool instead.
+  # Mounting the Docker socket lets LocalStack execute Lambda functions in
+  # sibling containers (the proper runtime, not the in-process simulator).
+  localstack:
+    # Pinned to 3.8 — the final release before LocalStack switched to
+    # mandatory auth-token verification even for Community usage. Free
+    # tier features are unchanged at this version; the community license
+    # covers everything in SERVICES below.
+    #
+    # If a future bump becomes necessary, create a free account at
+    # app.localstack.cloud and set LOCALSTACK_AUTH_TOKEN in .env — the
+    # token unlocks both the Community signing and Pro previews.
+    image: localstack/localstack:3.8
+    container_name: dante-localstack
+    restart: unless-stopped
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: secretsmanager,kms,lambda,events,iam,sts,s3,logs
+      DEFAULT_REGION: eu-central-1
+      PERSIST_DEFAULT: 0
+      DEBUG: 0
+      # Tell LocalStack to spawn Lambda containers via the host's Docker
+      # daemon (mounted below). Required for real Node.js runtime testing.
+      LAMBDA_EXECUTOR: docker-reuse
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      # /_localstack/health is the new path; /health is the legacy alias.
+      test: ["CMD", "curl", "-fsS", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+    # Explicit names keep the volumes stable across project/folder renames.
+    # Without these, docker compose derives the prefix from the directory
+    # name, and a rename would orphan the existing data (or silently
+    # create a fresh empty volume on the next `up`).
+    name: dante_postgres_data
+  localstack_data:
+    name: dante_localstack_data

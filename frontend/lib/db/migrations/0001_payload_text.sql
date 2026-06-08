@@ -1,0 +1,1 @@
+ALTER TABLE "raw_employee_snapshot" ALTER COLUMN "payload" SET DATA TYPE text;

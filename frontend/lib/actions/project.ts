@@ -1,0 +1,467 @@
+"use server";
+
+import { and, eq, inArray } from "drizzle-orm";
+import { z } from "zod";
+
+import { db } from "@/lib/db/client";
+import { getProjectDetail, type ProjectDetail, type Rate } from "@/lib/db/queries/project";
+import {
+  assignment,
+  customer,
+  frameworkAgreement,
+  project,
+  projectRate,
+} from "@/lib/db/schema";
+
+import {
+  err,
+  fromZod,
+  ok,
+  requireActionRole,
+  type ActionResult,
+} from "./_action-helpers";
+
+const IsoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD");
+
+const BillingAliases: Record<string, string> = {
+  "t-and-m": "time_and_material",
+  tm: "time_and_material",
+  time_and_material: "time_and_material",
+  fp: "fixed_price",
+  "fixed-price": "fixed_price",
+  fixed_price: "fixed_price",
+};
+
+const CreateProjectSchema = z.object({
+  customer_id: z.number().int(),
+  name: z.string().min(1).max(200),
+  billing_model: z.string(),
+  framework_id: z.number().int().nullable().optional(),
+  agreed_amount_eur: z.number().nullable().optional(),
+  planned_start_date: IsoDate.nullable().optional(),
+  planned_end_date: IsoDate.nullable().optional(),
+  status: z.string().default("active"),
+  notes: z.string().nullable().optional(),
+});
+
+const UpdateProjectSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  framework_id: z.number().int().nullable().optional(),
+  clear_framework: z.boolean().optional(),
+  agreed_amount_eur: z.number().nullable().optional(),
+  planned_start_date: IsoDate.nullable().optional(),
+  planned_end_date: IsoDate.nullable().optional(),
+  status: z.string().optional(),
+  notes: z.string().nullable().optional(),
+});
+
+const RateCreateSchema = z.object({
+  profile: z.string().min(1).max(120),
+  daily_rate_eur: z.number().positive(),
+  valid_from: IsoDate.nullable().optional(),
+});
+
+const RateUpdateSchema = z.object({
+  daily_rate_eur: z.number().positive(),
+});
+
+// ----------------------------------------------------------------------------
+// Project CRUD
+// ----------------------------------------------------------------------------
+
+export async function createProjectAction(
+  input: unknown,
+): Promise<ActionResult<ProjectDetail>> {
+  const auth = await requireActionRole("manager");
+  if (!auth.ok) return auth.result;
+
+  const parsed = CreateProjectSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+
+  const customerExists = await db
+    .select({ id: customer.customer_id })
+    .from(customer)
+    .where(eq(customer.customer_id, parsed.data.customer_id));
+  if (customerExists.length === 0) {
+    return err("not_found", `customer not found: ${parsed.data.customer_id}`);
+  }
+
+  const billing_model = BillingAliases[parsed.data.billing_model.toLowerCase()];
+  if (!billing_model) {
+    return err(
+      "conflict",
+      `billing_model must be one of t-and-m | fixed-price (or full names). Got: ${parsed.data.billing_model}`,
+    );
+  }
+  if (
+    billing_model === "fixed_price" &&
+    (parsed.data.agreed_amount_eur === undefined ||
+      parsed.data.agreed_amount_eur === null)
+  ) {
+    return err("conflict", "fixed-price projects require agreed_amount_eur");
+  }
+
+  if (parsed.data.framework_id !== null && parsed.data.framework_id !== undefined) {
+    const [fwRow] = await db
+      .select({ customer_id: frameworkAgreement.customer_id })
+      .from(frameworkAgreement)
+      .where(eq(frameworkAgreement.framework_id, parsed.data.framework_id));
+    if (!fwRow) {
+      return err("not_found", `framework not found: ${parsed.data.framework_id}`);
+    }
+    if (fwRow.customer_id !== parsed.data.customer_id) {
+      return err("conflict", "framework belongs to a different customer");
+    }
+  }
+
+  const name = parsed.data.name.trim();
+  const dup = await db
+    .select({ id: project.project_id })
+    .from(project)
+    .where(
+      and(
+        eq(project.customer_id, parsed.data.customer_id),
+        eq(project.name, name),
+      ),
+    );
+  if (dup.length > 0) {
+    return err("conflict", `project '${name}' already exists for this customer`);
+  }
+
+  const now = new Date();
+  let inserted;
+  try {
+    inserted = await db
+      .insert(project)
+      .values({
+        customer_id: parsed.data.customer_id,
+        framework_id: parsed.data.framework_id ?? null,
+        name,
+        billing_model,
+        agreed_amount_eur:
+          parsed.data.agreed_amount_eur === null ||
+          parsed.data.agreed_amount_eur === undefined
+            ? null
+            : String(parsed.data.agreed_amount_eur),
+        planned_start_date: parsed.data.planned_start_date ?? null,
+        planned_end_date: parsed.data.planned_end_date ?? null,
+        status: parsed.data.status,
+        notes: parsed.data.notes ?? null,
+        created_at: now,
+        updated_at: now,
+      })
+      .returning({ project_id: project.project_id });
+  } catch (e) {
+    if (isUniqueViolation(e)) {
+      return err("conflict", `could not create project (unique violation)`);
+    }
+    throw e;
+  }
+
+  const detail = await getProjectDetail(inserted[0].project_id);
+  if (!detail) return err("internal_error", "created project not found");
+  return ok(detail);
+}
+
+export async function updateProjectAction(
+  project_id: number,
+  input: unknown,
+): Promise<ActionResult<ProjectDetail>> {
+  const auth = await requireActionRole("manager");
+  if (!auth.ok) return auth.result;
+
+  if (!Number.isInteger(project_id)) {
+    return err("validation_error", `invalid project id: ${project_id}`);
+  }
+  const parsed = UpdateProjectSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+
+  const [current] = await db
+    .select({ customer_id: project.customer_id })
+    .from(project)
+    .where(eq(project.project_id, project_id));
+  if (!current) {
+    return err("not_found", `project not found: ${project_id}`);
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (parsed.data.name !== undefined) updates.name = parsed.data.name.trim();
+  if (parsed.data.clear_framework) {
+    updates.framework_id = null;
+  } else if (parsed.data.framework_id !== null && parsed.data.framework_id !== undefined) {
+    const [fwRow] = await db
+      .select({ customer_id: frameworkAgreement.customer_id })
+      .from(frameworkAgreement)
+      .where(eq(frameworkAgreement.framework_id, parsed.data.framework_id));
+    if (!fwRow) {
+      return err("not_found", `framework not found: ${parsed.data.framework_id}`);
+    }
+    if (fwRow.customer_id !== current.customer_id) {
+      return err("conflict", "framework belongs to a different customer");
+    }
+    updates.framework_id = parsed.data.framework_id;
+  }
+  if (parsed.data.agreed_amount_eur !== undefined) {
+    updates.agreed_amount_eur =
+      parsed.data.agreed_amount_eur === null
+        ? null
+        : String(parsed.data.agreed_amount_eur);
+  }
+  if (parsed.data.planned_start_date !== undefined) {
+    updates.planned_start_date = parsed.data.planned_start_date;
+  }
+  if (parsed.data.planned_end_date !== undefined) {
+    updates.planned_end_date = parsed.data.planned_end_date;
+  }
+  if (parsed.data.status !== undefined) updates.status = parsed.data.status;
+  if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes;
+
+  if (Object.keys(updates).length === 0) {
+    const d = await getProjectDetail(project_id);
+    if (!d) return err("not_found", `project not found: ${project_id}`);
+    return ok(d);
+  }
+  updates.updated_at = new Date();
+
+  try {
+    await db
+      .update(project)
+      .set(updates)
+      .where(eq(project.project_id, project_id));
+  } catch (e) {
+    if (isUniqueViolation(e)) {
+      return err("conflict", "project name already exists for this customer");
+    }
+    throw e;
+  }
+
+  const detail = await getProjectDetail(project_id);
+  if (!detail) return err("not_found", `project not found: ${project_id}`);
+  return ok(detail);
+}
+
+export async function deleteProjectAction(
+  project_id: number,
+  force = false,
+): Promise<ActionResult<null>> {
+  const auth = await requireActionRole("manager");
+  if (!auth.ok) return auth.result;
+
+  if (!Number.isInteger(project_id)) {
+    return err("validation_error", `invalid project id: ${project_id}`);
+  }
+
+  const [existing] = await db
+    .select({ name: project.name })
+    .from(project)
+    .where(eq(project.project_id, project_id));
+  if (!existing) {
+    return err("not_found", `project not found: ${project_id}`);
+  }
+
+  const rates = await db
+    .select({ id: projectRate.profile })
+    .from(projectRate)
+    .where(eq(projectRate.project_id, project_id));
+  const asns = await db
+    .select({ id: assignment.assignment_id })
+    .from(assignment)
+    .where(eq(assignment.project_id, project_id));
+
+  if ((rates.length > 0 || asns.length > 0) && !force) {
+    return err(
+      "has_children",
+      `project '${existing.name}' has ${rates.length} rate(s) and ${asns.length} assignment(s). Pass force=true to cascade.`,
+    );
+  }
+
+  if (force) {
+    if (asns.length > 0) {
+      await db.delete(assignment).where(eq(assignment.project_id, project_id));
+    }
+    if (rates.length > 0) {
+      await db.delete(projectRate).where(eq(projectRate.project_id, project_id));
+    }
+  }
+  await db.delete(project).where(eq(project.project_id, project_id));
+  // inArray is referenced only as a guard against unused-import warnings
+  // when force=false; keep the type-narrowing import alive here.
+  void inArray;
+  return ok(null);
+}
+
+// ----------------------------------------------------------------------------
+// Project rates
+// ----------------------------------------------------------------------------
+
+async function defaultProjectRateValidFrom(project_id: number): Promise<string> {
+  const [row] = await db
+    .select({ planned_start_date: project.planned_start_date })
+    .from(project)
+    .where(eq(project.project_id, project_id));
+  if (row && row.planned_start_date) return row.planned_start_date;
+  return new Date().toISOString().slice(0, 10);
+}
+
+export async function addProjectRateAction(
+  project_id: number,
+  input: unknown,
+): Promise<ActionResult<Rate>> {
+  const auth = await requireActionRole("manager");
+  if (!auth.ok) return auth.result;
+
+  if (!Number.isInteger(project_id)) {
+    return err("validation_error", `invalid project id: ${project_id}`);
+  }
+  const parsed = RateCreateSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+
+  const exists = await db
+    .select({ id: project.project_id })
+    .from(project)
+    .where(eq(project.project_id, project_id));
+  if (exists.length === 0) {
+    return err("not_found", `project not found: ${project_id}`);
+  }
+
+  const profile = parsed.data.profile.trim();
+  if (!profile) return err("conflict", "rate profile cannot be empty");
+  const valid_from =
+    parsed.data.valid_from ?? (await defaultProjectRateValidFrom(project_id));
+
+  const dup = await db
+    .select({ existing: projectRate.daily_rate_eur })
+    .from(projectRate)
+    .where(
+      and(
+        eq(projectRate.project_id, project_id),
+        eq(projectRate.profile, profile),
+        eq(projectRate.valid_from, valid_from),
+      ),
+    );
+  if (dup.length > 0) {
+    return err(
+      "conflict",
+      `rate for profile '${profile}' on this project effective ${valid_from} already exists (€${dup[0].existing}/day)`,
+    );
+  }
+
+  await db.insert(projectRate).values({
+    project_id,
+    profile,
+    valid_from,
+    daily_rate_eur: String(parsed.data.daily_rate_eur),
+  });
+
+  return ok({
+    profile,
+    valid_from,
+    daily_rate_eur: String(parsed.data.daily_rate_eur),
+  });
+}
+
+export async function updateProjectRateAction(
+  project_id: number,
+  profile: string,
+  valid_from: string,
+  input: unknown,
+): Promise<ActionResult<Rate>> {
+  const auth = await requireActionRole("manager");
+  if (!auth.ok) return auth.result;
+
+  if (!Number.isInteger(project_id)) {
+    return err("validation_error", `invalid project id: ${project_id}`);
+  }
+  if (!IsoDate.safeParse(valid_from).success) {
+    return err("validation_error", "valid_from must be YYYY-MM-DD");
+  }
+  const parsed = RateUpdateSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+
+  const existing = await db
+    .select({ existing: projectRate.daily_rate_eur })
+    .from(projectRate)
+    .where(
+      and(
+        eq(projectRate.project_id, project_id),
+        eq(projectRate.profile, profile),
+        eq(projectRate.valid_from, valid_from),
+      ),
+    );
+  if (existing.length === 0) {
+    return err(
+      "not_found",
+      `no rate for profile '${profile}' on project ${project_id} with valid_from ${valid_from}`,
+    );
+  }
+
+  await db
+    .update(projectRate)
+    .set({ daily_rate_eur: String(parsed.data.daily_rate_eur) })
+    .where(
+      and(
+        eq(projectRate.project_id, project_id),
+        eq(projectRate.profile, profile),
+        eq(projectRate.valid_from, valid_from),
+      ),
+    );
+
+  return ok({
+    profile,
+    valid_from,
+    daily_rate_eur: String(parsed.data.daily_rate_eur),
+  });
+}
+
+export async function deleteProjectRateAction(
+  project_id: number,
+  profile: string,
+  valid_from: string,
+): Promise<ActionResult<null>> {
+  const auth = await requireActionRole("manager");
+  if (!auth.ok) return auth.result;
+
+  if (!Number.isInteger(project_id)) {
+    return err("validation_error", `invalid project id: ${project_id}`);
+  }
+  if (!IsoDate.safeParse(valid_from).success) {
+    return err("validation_error", "valid_from must be YYYY-MM-DD");
+  }
+  const existing = await db
+    .select({ existing: projectRate.daily_rate_eur })
+    .from(projectRate)
+    .where(
+      and(
+        eq(projectRate.project_id, project_id),
+        eq(projectRate.profile, profile),
+        eq(projectRate.valid_from, valid_from),
+      ),
+    );
+  if (existing.length === 0) {
+    return err(
+      "not_found",
+      `no rate for profile '${profile}' on project ${project_id} with valid_from ${valid_from}`,
+    );
+  }
+  await db
+    .delete(projectRate)
+    .where(
+      and(
+        eq(projectRate.project_id, project_id),
+        eq(projectRate.profile, profile),
+        eq(projectRate.valid_from, valid_from),
+      ),
+    );
+  return ok(null);
+}
+
+function isUniqueViolation(e: unknown): boolean {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    "code" in e &&
+    (e as { code?: string }).code === "23505"
+  );
+}

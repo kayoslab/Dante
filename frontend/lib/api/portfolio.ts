@@ -1,0 +1,21 @@
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import { apiGet } from "./_fetch";
+import type { BenchConsultant, BenchSummary, PortfolioMonthly, PortfolioProjectRow } from "./types";
+
+export type { PortfolioMonthly };
+export type { PortfolioProjectRow };
+export type { BenchSummary };
+export type { BenchConsultant };
+
+export function usePortfolioMonthly(month: string) {
+  return useQuery<PortfolioMonthly>({
+    queryKey: ["portfolio", "monthly", month],
+    queryFn: async () => {
+      return apiGet<PortfolioMonthly>("/portfolio/monthly", { query: { month } });
+    },
+    enabled: /^\d{4}-\d{2}$/.test(month),
+    staleTime: 30_000,
+  });
+}

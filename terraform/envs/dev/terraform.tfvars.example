@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (gitignored) and edit before `terraform apply`.
+
+seed_admin_emails = ["admin@example.com"]
+
+# Override the defaults if your local dev server runs on a different port.
+# callback_urls = ["http://localhost:3000/api/auth/callback/cognito"]
+# logout_urls   = ["http://localhost:3000"]

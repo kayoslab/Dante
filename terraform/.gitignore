@@ -1,0 +1,23 @@
+# Local state — dev only. Production will use the S3 backend (see backend.tf).
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Lock files for providers (committed) — keep them
+# .terraform.lock.hcl is NOT ignored on purpose
+
+# Local plugin cache
+.terraform/
+.terraform.d/
+
+# Sensitive variable values (the per-env email seed lives here)
+*.tfvars
+!*.tfvars.example
+
+# CLI config overrides
+.terraformrc
+terraform.rc

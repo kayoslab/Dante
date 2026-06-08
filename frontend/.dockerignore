@@ -1,0 +1,14 @@
+node_modules
+.next
+.next/cache
+dist
+*.log
+.env
+.env.*
+!.env.example
+.git
+.DS_Store
+README.md
+AGENTS.md
+CLAUDE.md
+docker-compose.yml

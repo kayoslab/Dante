@@ -1,0 +1,102 @@
+import { sql } from "drizzle-orm";
+import type { NextRequest } from "next/server";
+
+import { db } from "@/lib/db/client";
+import { addMonths, firstOfMonth } from "@/lib/db/_monthly-helpers";
+import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  return handle(async () => {
+    await requireApiSession({ minRole: "manager" });
+    const { id: rawId } = await params;
+    const project_id = Number(rawId);
+    if (!Number.isInteger(project_id)) {
+      throw Validation(`invalid project id: ${rawId}`);
+    }
+    const { searchParams } = new URL(req.url);
+    const from_raw = searchParams.get("from_month") ?? "";
+    const to_raw = searchParams.get("to_month") ?? "";
+    if (!/^\d{4}-\d{2}$/.test(from_raw) || !/^\d{4}-\d{2}$/.test(to_raw)) {
+      throw Validation("from_month and to_month must be YYYY-MM");
+    }
+    let from_month = `${from_raw}-01`;
+    let to_month = `${to_raw}-01`;
+    from_month = firstOfMonth(from_month);
+    to_month = firstOfMonth(to_month);
+    if (to_month < from_month) {
+      throw Validation("to_month must be >= from_month");
+    }
+
+    const projRes = await db.execute(sql`
+      SELECT name, billing_model, agreed_amount_eur
+      FROM project WHERE project_id = ${project_id}
+    `);
+    const projRow = (projRes.rows as Array<Record<string, unknown>>)[0];
+    if (!projRow) throw NotFound(`project not found: ${project_id}`);
+    const project_name = projRow.name as string;
+    const billing_model = projRow.billing_model as string;
+    const agreed_amount = projRow.agreed_amount_eur as string | null;
+
+    const points: Array<Record<string, unknown>> = [];
+    let cur = from_month;
+    while (cur <= to_month) {
+      const monthYm = cur.slice(0, 7);
+      const b = await fetchSelf(
+        req,
+        `/api/projects/${project_id}/monthly?month=${monthYm}`,
+      );
+      points.push({
+        month: b.month,
+        working_days_in_month: b.working_days_in_month,
+        revenue: b.revenue,
+        cost: b.cost,
+        margin: b.margin,
+        margin_pct: b.margin_pct,
+        cumulative_cost: b.cumulative_cost,
+        remaining_budget: b.remaining_budget,
+        recognized_revenue: b.recognized_revenue ?? null,
+        recognized_margin: b.recognized_margin ?? null,
+        cumulative_recognized_revenue: b.cumulative_recognized_revenue ?? null,
+        cumulative_margin: b.cumulative_margin ?? null,
+        pct_complete: b.pct_complete ?? null,
+        over_budget: (b.over_budget as boolean | undefined) ?? false,
+        recognition_method: b.recognition_method ?? null,
+        n_assignments: (b.assignments as unknown[]).length,
+        rate_unresolved_days: b.rate_unresolved_days,
+        tracked_hours: b.tracked_hours ?? null,
+        tracked_days: b.tracked_days ?? null,
+        tracked_revenue: b.tracked_revenue ?? null,
+        has_personio_mapping:
+          (b.has_personio_mapping as boolean | undefined) ?? false,
+      });
+      cur = addMonths(cur, 1);
+    }
+
+    return {
+      project_id,
+      project_name,
+      billing_model,
+      agreed_amount_eur:
+        agreed_amount === null ? null : Number(agreed_amount).toFixed(2),
+      from_month: from_month.slice(0, 7),
+      to_month: to_month.slice(0, 7),
+      points,
+    };
+  });
+}
+
+async function fetchSelf(
+  req: NextRequest,
+  path: string,
+): Promise<Record<string, unknown>> {
+  const origin = new URL(req.url).origin;
+  // Forward the session cookie so the Proxy doesn't gate internal aggregation
+  // fetches back to /login. Server-to-server fetch has no cookie by default.
+  const cookie = req.headers.get("cookie") ?? "";
+  const res = await fetch(origin + path, { headers: { cookie } });
+  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  return (await res.json()) as Record<string, unknown>;
+}

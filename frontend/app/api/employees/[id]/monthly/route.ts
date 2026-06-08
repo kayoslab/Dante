@@ -1,0 +1,305 @@
+import Decimal from "decimal.js";
+import { sql } from "drizzle-orm";
+import type { NextRequest } from "next/server";
+
+import { db } from "@/lib/db/client";
+import {
+  absencesForEmployee,
+  burdenFactor,
+  employeeFte,
+  entityMonthlyCost,
+  fmt,
+  fpRecognizedRevenueForMonth,
+  holidaysForYearOf,
+  lastOfMonth,
+  projectTotalWeightedAllocInMonth,
+  resolveRateForDay,
+  workingDaysInRange,
+} from "@/lib/db/_monthly-helpers";
+import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  return handle(async () => {
+    await requireApiSession({ minRole: "manager" });
+    const { id: rawId } = await params;
+    const employee_id = Number(rawId);
+    if (!Number.isInteger(employee_id)) {
+      throw Validation(`invalid employee id: ${rawId}`);
+    }
+    const { searchParams } = new URL(req.url);
+    const monthRaw = searchParams.get("month") ?? "";
+    if (!/^\d{4}-\d{2}$/.test(monthRaw)) {
+      throw Validation(`month must be YYYY-MM (got ${JSON.stringify(monthRaw)})`);
+    }
+    const month_start = `${monthRaw}-01`;
+    const month_end = lastOfMonth(month_start);
+
+    const empRes = await db.execute(sql`
+      SELECT ec.first_name, ec.last_name, ec.status,
+             COALESCE(a.is_real_employee, TRUE) AS is_real,
+             ec.hire_date, ec.employment_end_date
+      FROM employee_current ec
+      LEFT JOIN employee_annotation a ON a.employee_id = ec.employee_id
+      WHERE ec.employee_id = ${employee_id}
+    `);
+    const empRow = (empRes.rows as Array<Record<string, unknown>>)[0];
+    if (!empRow) throw NotFound(`employee not found: ${employee_id}`);
+
+    const first_name = empRow.first_name as string | null;
+    const last_name = empRow.last_name as string | null;
+    const status = empRow.status as string | null;
+    const is_real = empRow.is_real as boolean;
+    const hire_date = (empRow.hire_date as string | null) ?? null;
+    const end_date = (empRow.employment_end_date as string | null) ?? null;
+    const who_name = `${first_name ?? ""} ${last_name ?? ""}`;
+
+    const holidays = holidaysForYearOf(month_start);
+    const working_days = workingDaysInRange(month_start, month_end, holidays);
+    const n_wd = working_days.length;
+    const burden = await burdenFactor();
+
+    // under_contract gate
+    let under_contract = true;
+    if (hire_date !== null && month_end < hire_date) under_contract = false;
+    if (end_date !== null && month_start > end_date) under_contract = false;
+
+    if (!under_contract) {
+      const basis =
+        hire_date !== null
+          ? `not under contract (hired ${hire_date}` +
+            (end_date !== null ? `, left ${end_date}` : "") +
+            ")"
+          : "not under contract";
+      return {
+        entity_kind: "employee",
+        entity_id: employee_id,
+        who_name,
+        status,
+        is_real_employee: Boolean(is_real),
+        month: monthRaw,
+        month_start,
+        month_end,
+        working_days_in_month: n_wd,
+        monthly_cost_full: null,
+        monthly_cost_basis: basis,
+        revenue: "0.00",
+        margin: "0.00",
+        margin_pct: null,
+        utilization_pct: "0.0000",
+        fte: "0.000",
+        rate_unresolved_days: 0,
+        assignments: [],
+        under_contract: false,
+        hire_date,
+        employment_end_date: end_date,
+      };
+    }
+
+    const { monthly_cost: monthly_cost_full, basis: cost_basis } =
+      await entityMonthlyCost(employee_id, null, null, burden);
+
+    // Contract prorating
+    const contract_clipped_start =
+      hire_date !== null && hire_date > month_start ? hire_date : month_start;
+    const contract_clipped_end =
+      end_date !== null && end_date < month_end ? end_date : month_end;
+    const contract_workdays = working_days.filter(
+      (d) => d >= contract_clipped_start && d <= contract_clipped_end,
+    );
+    const contract_share =
+      n_wd > 0
+        ? new Decimal(contract_workdays.length).div(n_wd)
+        : new Decimal(1);
+    let monthly_cost_prorated =
+      monthly_cost_full !== null
+        ? monthly_cost_full.mul(contract_share)
+        : null;
+    let cost_basis_prorated = cost_basis;
+    if (monthly_cost_full !== null && contract_share.lt(1)) {
+      cost_basis_prorated = `${cost_basis} · prorated to ${contract_workdays.length}/${n_wd} workdays under contract`;
+    }
+
+    const fte = await employeeFte(employee_id);
+    const [absences, unpaid_absences] = await absencesForEmployee(
+      employee_id,
+      month_start,
+      month_end,
+      holidays,
+    );
+
+    // Strip unpaid leave days inside the contract window from the cost
+    // numerator. Note Python uses `len(contract_workdays) > 0` check.
+    const unpaid_in_contract = contract_workdays.filter((d) =>
+      unpaid_absences.has(d),
+    );
+    if (
+      unpaid_in_contract.length > 0 &&
+      monthly_cost_prorated !== null &&
+      contract_workdays.length > 0
+    ) {
+      const unpaid_share = new Decimal(
+        contract_workdays.length - unpaid_in_contract.length,
+      ).div(contract_workdays.length);
+      monthly_cost_prorated = monthly_cost_prorated.mul(unpaid_share);
+      const plural = unpaid_in_contract.length === 1 ? "" : "s";
+      cost_basis_prorated = `${cost_basis_prorated} · ${unpaid_in_contract.length} unpaid leave day${plural} excluded`;
+    }
+
+    const asnRes = await db.execute(sql`
+      SELECT a.assignment_id, a.project_id, p.name AS project_name, c.name AS customer_name,
+             p.billing_model, p.framework_id, a.profile,
+             a.allocation_pct, a.start_date, a.end_date,
+             a.daily_rate_override_eur,
+             rt.role_tier
+      FROM assignment a
+      JOIN project p ON p.project_id = a.project_id
+      JOIN customer c ON c.customer_id = p.customer_id
+      LEFT JOIN employee_role_tier rt ON rt.employee_id = a.employee_id
+      WHERE a.employee_id = ${employee_id}
+        AND a.start_date <= ${month_end}::date
+        AND (a.end_date IS NULL OR a.end_date >= ${month_start}::date)
+      ORDER BY a.assignment_id
+    `);
+
+    const assignment_rows: Array<Record<string, unknown>> = [];
+    let total_revenue = new Decimal(0);
+    let total_alloc_weighted = new Decimal(0);
+    const project_weighted_cache = new Map<number, Decimal>();
+
+    for (const raw of asnRes.rows as Array<Record<string, unknown>>) {
+      const asn_id = raw.assignment_id as number;
+      const project_id = raw.project_id as number;
+      const project_name = raw.project_name as string;
+      const customer_name = raw.customer_name as string;
+      const billing = raw.billing_model as string;
+      const framework_id = raw.framework_id as number | null;
+      const profile = raw.profile as string | null;
+      const alloc = new Decimal(raw.allocation_pct as string);
+      const a_start = raw.start_date as string;
+      const a_end = raw.end_date as string | null;
+      const rate_ov =
+        raw.daily_rate_override_eur === null ||
+        raw.daily_rate_override_eur === undefined
+          ? null
+          : new Decimal(raw.daily_rate_override_eur as string);
+      const role_tier = raw.role_tier as string | null;
+      const effective_profile = profile ?? role_tier;
+
+      const a_window_start = a_start > month_start ? a_start : month_start;
+      const a_window_end =
+        a_end === null ? month_end : a_end < month_end ? a_end : month_end;
+      const active_days = working_days.filter(
+        (d) => d >= a_window_start && d <= a_window_end,
+      );
+      const absent_active = active_days.filter((d) => absences.has(d));
+      const billable_count = active_days.length - absent_active.length;
+      const weighted_alloc_i =
+        n_wd > 0 ? alloc.mul(active_days.length).div(n_wd) : new Decimal(0);
+      total_alloc_weighted = total_alloc_weighted.add(weighted_alloc_i);
+
+      let revenue = new Decimal(0);
+      let rate_unresolved_days = 0;
+      if (billing === "time_and_material") {
+        for (const day of active_days) {
+          if (absences.has(day)) continue;
+          const r = await resolveRateForDay(
+            project_id,
+            framework_id,
+            effective_profile,
+            day,
+            rate_ov,
+          );
+          if (r !== null) {
+            revenue = revenue.add(r.mul(alloc).mul(fte));
+          } else {
+            rate_unresolved_days++;
+          }
+        }
+      } else {
+        if (!project_weighted_cache.has(project_id)) {
+          project_weighted_cache.set(
+            project_id,
+            await projectTotalWeightedAllocInMonth(
+              project_id,
+              month_start,
+              month_end,
+              working_days,
+            ),
+          );
+        }
+        const proj_total = project_weighted_cache.get(project_id)!;
+        const fp_rec = await fpRecognizedRevenueForMonth(
+          project_id,
+          month_start,
+          month_end,
+        );
+        if (fp_rec !== null && proj_total.gt(0) && weighted_alloc_i.gt(0)) {
+          revenue = fp_rec.mul(weighted_alloc_i).div(proj_total);
+        }
+      }
+
+      // base (assignment_id, profile, allocation_pct, active_working_days,
+      //       absence_days, billable_days, rate_unresolved_days)
+      // then employee-specific (project_id, project_name, customer_name,
+      //       billing_model, revenue).
+      assignment_rows.push({
+        assignment_id: asn_id,
+        profile: effective_profile,
+        allocation_pct: alloc.toFixed(4),
+        active_working_days: active_days.length,
+        absence_days: absent_active.length,
+        billable_days: billable_count,
+        rate_unresolved_days,
+        project_id,
+        project_name,
+        customer_name,
+        billing_model: billing,
+        revenue: fmt(revenue, 2),
+      });
+      total_revenue = total_revenue.add(revenue);
+    }
+
+    const monthly_cost_dec = monthly_cost_prorated ?? new Decimal(0);
+    const margin = total_revenue.sub(monthly_cost_dec);
+    const margin_pct = monthly_cost_dec.gt(0)
+      ? margin.div(monthly_cost_dec).mul(100)
+      : null;
+    const utilization = total_alloc_weighted.gt(0)
+      ? Number(total_alloc_weighted.toString())
+      : 0;
+    const total_rate_unresolved = assignment_rows.reduce(
+      (a, r) => a + (r.rate_unresolved_days as number),
+      0,
+    );
+
+    return {
+      entity_kind: "employee",
+      entity_id: employee_id,
+      who_name,
+      status,
+      is_real_employee: Boolean(is_real),
+      month: monthRaw,
+      month_start,
+      month_end,
+      working_days_in_month: n_wd,
+      monthly_cost_full:
+        monthly_cost_prorated === null ? null : fmt(monthly_cost_prorated, 2),
+      monthly_cost_basis: cost_basis_prorated,
+      revenue: fmt(total_revenue, 2),
+      margin: fmt(margin, 2),
+      margin_pct: margin_pct === null ? null : fmt(margin_pct, 2),
+      utilization_pct: utilization.toFixed(4),
+      fte: fmt(fte, 3),
+      rate_unresolved_days: total_rate_unresolved,
+      assignments: assignment_rows,
+      under_contract: true,
+      hire_date,
+      employment_end_date: end_date,
+    };
+
+    void req; // silence unused-var lint
+  });
+}
