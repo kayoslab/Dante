@@ -2,14 +2,17 @@ import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
 import { db } from "@/lib/db/client";
+import { audit } from "@/lib/auth/audit";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { checkRateLimit } from "@/lib/api/rate-limit";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   return handle(async () => {
-    await requireApiSession({ minRole: "manager" });
+    const ctx = await requireApiSession({ minRole: "manager" });
+    checkRateLimit(ctx.user_id, "salary", { per_minute: 30 });
     const { id: rawId } = await params;
     const employee_id = Number(rawId);
     if (!Number.isInteger(employee_id)) {
@@ -39,5 +42,11 @@ export async function GET(
           ? null
           : Number(r.weekly_working_hours).toFixed(2),
     }));
+    await audit(ctx, {
+      action: "view_salary_history",
+      target_type: "employee",
+      target_id: employee_id,
+    });
+
   });
 }

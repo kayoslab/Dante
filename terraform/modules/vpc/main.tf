@@ -26,7 +26,7 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  azs = slice(data.aws_availability_zones.available.names, 0, var.az_count)
+  azs  = slice(data.aws_availability_zones.available.names, 0, var.az_count)
   name = "${var.name_prefix}-${var.environment}"
 
   # /16 → /24 subnets. Layout: public 0..N, app 10..10+N, data 20..20+N
@@ -217,15 +217,21 @@ resource "aws_security_group" "endpoints" {
 data "aws_region" "current" {}
 
 resource "aws_vpc_endpoint" "interface" {
-  for_each            = toset(var.interface_endpoint_services)
-  vpc_id              = aws_vpc.this.id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
-  vpc_endpoint_type   = "Interface"
+  for_each          = toset(var.interface_endpoint_services)
+  vpc_id            = aws_vpc.this.id
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
+  vpc_endpoint_type = "Interface"
   # Interface endpoints attach ENIs to both app + data subnets so RDS-side
   # tooling (if any) and the Lambda can both use them.
   subnet_ids          = concat(aws_subnet.app[*].id, aws_subnet.data[*].id)
   security_group_ids  = [aws_security_group.endpoints.id]
   private_dns_enabled = true
+
+  # Endpoint policy gates the API calls allowed through this endpoint
+  # regardless of the caller's IAM. Defaulting to null (AWS's auto-
+  # attached full-access policy) preserves today's behavior. Tight envs
+  # pass a JSON policy here pinning the Principal to specific role ARNs.
+  policy = try(var.endpoint_policies[each.value], null)
 
   tags = {
     Name = "${local.name}-vpce-${each.value}"
@@ -261,9 +267,9 @@ resource "aws_iam_role" "flow_logs" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "vpc-flow-logs.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -289,10 +295,10 @@ resource "aws_iam_role_policy" "flow_logs" {
 }
 
 resource "aws_flow_log" "this" {
-  count                = var.enable_flow_logs ? 1 : 0
-  iam_role_arn         = aws_iam_role.flow_logs[0].arn
-  log_destination      = aws_cloudwatch_log_group.flow_logs[0].arn
-  traffic_type         = "REJECT" # Only rejects — accept logs at scale add noise without value here
-  vpc_id               = aws_vpc.this.id
+  count                    = var.enable_flow_logs ? 1 : 0
+  iam_role_arn             = aws_iam_role.flow_logs[0].arn
+  log_destination          = aws_cloudwatch_log_group.flow_logs[0].arn
+  traffic_type             = "REJECT" # Only rejects — accept logs at scale add noise without value here
+  vpc_id                   = aws_vpc.this.id
   max_aggregation_interval = 60
 }

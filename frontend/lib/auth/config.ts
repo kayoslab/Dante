@@ -2,6 +2,7 @@ import type { NextAuthConfig } from "next-auth";
 import Cognito from "next-auth/providers/cognito";
 import Credentials from "next-auth/providers/credentials";
 
+import { verifyMfaProof } from "./mfa-proof";
 import { findOrCreateAppUser } from "./users";
 
 /** App-level role derived from Cognito groups (or the dev override list).
@@ -43,6 +44,19 @@ declare module "@auth/core/jwt" {
 }
 
 const isDevMode = process.env.AUTH_DEV_MODE === "true";
+
+// Hard guard: dev mode + prod is total auth bypass. Fail at module init
+// rather than serve a single request with credential auth open. A typo
+// in the ECS task definition env vars is the realistic threat model
+// here — the assertion catches it before the LB ever marks the task
+// healthy.
+if (isDevMode && process.env.NODE_ENV === "production") {
+  throw new Error(
+    "AUTH_DEV_MODE=true is incompatible with NODE_ENV=production. " +
+      "Dev mode accepts any password and must never reach prod. " +
+      "Unset AUTH_DEV_MODE on the prod task definition.",
+  );
+}
 
 /** Parse a comma-separated env var into a lowercased set. */
 function envEmailSet(name: string): Set<string> {
@@ -170,13 +184,26 @@ export const authConfig = {
           token.mfa_verified = false;
         }
       }
-      // Trusted self-update from the verify Server Action. We only honor
-      // `mfa_verified: true` and `mfa_enrolled: true` here — the user can't
-      // mint a fresh role via the update path.
+      // Trusted self-update from the verify Server Action. Auth.js v5's
+      // `useSession().update(data)` is CLIENT-CALLABLE — a malicious
+      // browser script could call it with `{ mfa_verified: true }` and
+      // bypass MFA. To distinguish a legitimate server-side update from
+      // a client-fabricated one, the verify action mints an HMAC proof
+      // (keyed with AUTH_SECRET) over `${user_id}:${time_window}`. The
+      // client can't compute the HMAC; the update silently fails for
+      // any payload without a valid proof.
       if (trigger === "update" && session && typeof session === "object") {
-        const s = session as { mfa_verified?: boolean; mfa_enrolled?: boolean };
-        if (s.mfa_verified === true) token.mfa_verified = true;
-        if (s.mfa_enrolled === true) token.mfa_enrolled = true;
+        const s = session as {
+          mfa_verified?: boolean;
+          mfa_enrolled?: boolean;
+          mfa_proof?: string;
+        };
+        const proofValid =
+          token.user_id != null && verifyMfaProof(token.user_id, s.mfa_proof);
+        if (proofValid) {
+          if (s.mfa_verified === true) token.mfa_verified = true;
+          if (s.mfa_enrolled === true) token.mfa_enrolled = true;
+        }
       }
       return token;
     },

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { safeCallback } from "@/lib/auth/redirects";
 import { getSession } from "@/lib/auth/session";
 
 import { LoginForm } from "./login-form";
@@ -17,7 +18,9 @@ export default async function LoginPage({
 }) {
   const session = await getSession();
   const { callbackUrl, error } = await searchParams;
-  if (session) redirect(callbackUrl ?? "/");
+  // Reject absolute / protocol-relative URLs — open-redirect prevention.
+  const callback = safeCallback(callbackUrl);
+  if (session) redirect(callback);
 
   return (
     <div className="mx-auto flex min-h-[70vh] w-full max-w-sm flex-col justify-center gap-6">
@@ -54,7 +57,7 @@ export default async function LoginPage({
       )}
 
       <LoginForm
-        callbackUrl={callbackUrl ?? "/"}
+        callbackUrl={callback}
         devMode={DEV_MODE}
         cognitoEnabled={COGNITO_ENABLED}
       />

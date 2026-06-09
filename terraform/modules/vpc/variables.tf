@@ -53,3 +53,9 @@ variable "interface_endpoint_services" {
     "sts",
   ]
 }
+
+variable "endpoint_policies" {
+  description = "Per-service VPC endpoint policy JSON. Default empty map: AWS's auto-attached \"full access\" policy applies — anyone in the VPC who has IAM permission can hit the endpoint (was M-002 in the pre-launch pen test: an RCE'd workload could call any Secrets Manager API). Tight envs should pass a per-service policy here that pins the Principal to specific role ARNs."
+  type        = map(string)
+  default     = {}
+}

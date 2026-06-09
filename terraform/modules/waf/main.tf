@@ -200,6 +200,15 @@ resource "aws_wafv2_web_acl" "this" {
           # SizeRestrictions_BODY ships with an 8KB body cap; Next.js
           # Server Action payloads (esp. with form data) can exceed
           # that, so override to count-only and let the rest enforce.
+          #
+          # The trade-off (was M-004 in the pre-launch pen test): an
+          # attacker can hide an exfil payload in a large POST body
+          # without triggering the block. Mitigation: a CloudWatch
+          # alarm on the `size-restrictions-body` count metric below
+          # fires when the rate of these "would have blocked" events
+          # spikes — Server Action volume is steady, so a 5× burst is
+          # signal. The rest of CommonRuleSet (XSS / SQLi / etc.) still
+          # enforces on the same requests.
           rule_action_override {
             name = "SizeRestrictions_BODY"
             action_to_use {
@@ -355,4 +364,32 @@ resource "aws_cloudwatch_metric_alarm" "blocked_spike" {
 
   alarm_actions = [aws_sns_topic.alarms[0].arn]
   ok_actions    = [aws_sns_topic.alarms[0].arn]
+}
+
+# Large-body anomaly — the SizeRestrictions_BODY rule from CommonRuleSet
+# is in count-only mode (see comment in the rule definition). This alarm
+# fires when its counted match rate spikes ≥10× the typical baseline of
+# a few per hour. A sustained spike is the signal-shaped pattern for a
+# data exfil attempt hidden inside large POST bodies — was M-004 in the
+# pre-launch pen test.
+resource "aws_cloudwatch_metric_alarm" "large_body_spike" {
+  count               = length(var.alarm_email_addresses) == 0 || !var.enable_common_rules ? 0 : 1
+  alarm_name          = "${local.name}-large-body-spike"
+  alarm_description   = "WAF SizeRestrictions_BODY matched more than 50 requests in 5 minutes — Server Action volume is steady, so this is anomalous. Likely a benign release rollout but worth a glance. Check ${try(aws_cloudwatch_log_group.waf[0].name, "(logging disabled)")} for source IPs and matched URIs."
+  namespace           = "AWS/WAFV2"
+  metric_name         = "CountedRequests"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 50
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    WebACL = aws_wafv2_web_acl.this.name
+    Region = data.aws_region.current.name
+    Rule   = "SizeRestrictions_BODY"
+  }
+
+  alarm_actions = [aws_sns_topic.alarms[0].arn]
 }

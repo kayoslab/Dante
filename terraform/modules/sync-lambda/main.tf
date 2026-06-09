@@ -23,9 +23,9 @@ resource "aws_iam_role" "lambda" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "lambda.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -50,7 +50,7 @@ resource "aws_iam_role_policy_attachment" "vpc" {
 # combines them so additions/removals are visible together.
 data "aws_iam_policy_document" "secrets" {
   statement {
-    effect = "Allow"
+    effect  = "Allow"
     actions = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
     resources = concat(
       var.secret_arns,
@@ -191,8 +191,8 @@ resource "aws_lambda_permission" "schedule" {
 # operator when the queue is non-empty.
 
 resource "aws_sqs_queue" "dlq" {
-  name                       = "${local.function_name}-dlq"
-  message_retention_seconds  = var.dlq_message_retention_seconds
+  name                      = "${local.function_name}-dlq"
+  message_retention_seconds = var.dlq_message_retention_seconds
   # No KMS encryption: the queued payload is the EventBridge input JSON,
   # which contains only sync flags, not credentials. Add server-side
   # encryption with a CMK if that changes.

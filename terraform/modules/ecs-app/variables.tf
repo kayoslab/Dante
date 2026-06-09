@@ -103,7 +103,7 @@ variable "environment_variables" {
 
 variable "secrets" {
   description = "Secrets to inject from Secrets Manager / SSM Parameter Store. Each `value_from` is either a secret ARN (entire JSON) or `<arn>:<key>::` for a single key from a JSON secret."
-  type        = list(object({
+  type = list(object({
     name       = string
     value_from = string
   }))
@@ -112,6 +112,12 @@ variable "secrets" {
 
 variable "additional_secret_arns_readable" {
   description = "Extra Secrets Manager ARNs the task role should be able to read (e.g. tokens fetched lazily by app code, not declared in `secrets`)."
+  type        = list(string)
+  default     = []
+}
+
+variable "additional_secret_arns_writable" {
+  description = "Secrets Manager ARNs the task role can WRITE but not READ. Use for rotating tokens the app updates but doesn't need to load back from Secrets Manager (e.g. awork OAuth tokens stored after the interactive callback). An RCE'd app can overwrite these but cannot exfiltrate them."
   type        = list(string)
   default     = []
 }

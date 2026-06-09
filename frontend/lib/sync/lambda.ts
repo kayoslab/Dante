@@ -67,7 +67,12 @@ export async function handler(
   try {
     await runSync(opts, (line) => {
       log_lines += 1;
-      logger.info("sync_line", { request_id, line });
+      // Per-line logs at debug level — CloudWatch only ingests them
+      // when DANTE_LOG_LEVEL=debug. Default prod level is info, so the
+      // sync produces ~3 CloudWatch events per run (start, complete,
+      // any error), not thousands. Was M-010 in the pre-launch pen
+      // test (CloudWatch cost amplification at scale).
+      logger.debug("sync_line", { request_id, line });
     });
     const duration_ms = Date.now() - started_at;
     logger.info("sync_complete", { request_id, duration_ms, log_lines });

@@ -1,0 +1,90 @@
+name: check
+
+# Runs on every PR and every push outside main. Read-only — no AWS
+# mutations. The deploy workflow takes over on main.
+on:
+  pull_request:
+  push:
+    branches-ignore: ["main"]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref — saves CI minutes on
+# fast-follow pushes.
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write # AWS OIDC role assumption
+
+jobs:
+  frontend:
+    name: frontend (type-check + awork guard)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Type check + awork read-only guard
+        run: npm run check
+
+      # Build the migration runner + Lambda bundle so a structural break
+      # in the build pipeline shows up here, not at deploy time.
+      - name: Build migration runner
+        run: npm run build:migrate
+
+      - name: Build sync Lambda bundle
+        run: npm run build:sync-lambda
+
+  terraform:
+    name: terraform (fmt + validate)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - terraform/envs/prod
+          - terraform/envs/dev
+          - terraform/envs/local
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.x
+          terraform_wrapper: false
+
+      - name: terraform fmt -check (recursive, full repo)
+        # Run once across the repo on the prod matrix slot only.
+        if: matrix.target == 'terraform/envs/prod'
+        run: terraform -chdir=terraform fmt -recursive -check -diff
+
+      - name: terraform init (backend disabled)
+        run: terraform -chdir=${{ matrix.target }} init -backend=false
+
+      - name: terraform validate
+        run: terraform -chdir=${{ matrix.target }} validate
+
+  docker-lint:
+    name: dockerfile lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: frontend/Dockerfile
+          # Treat warnings as warnings, not errors — too many style nits
+          # would block PRs without adding security value.
+          failure-threshold: error

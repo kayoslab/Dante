@@ -16,6 +16,7 @@ import {
   resolveRateForDay,
   workingDaysInRange,
 } from "@/lib/db/_monthly-helpers";
+import { audit } from "@/lib/auth/audit";
 import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 
 export async function GET(
@@ -23,7 +24,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   return handle(async () => {
-    await requireApiSession({ minRole: "manager" });
+    const ctx = await requireApiSession({ minRole: "manager" });
     const { id: rawId } = await params;
     const employee_id = Number(rawId);
     if (!Number.isInteger(employee_id)) {
@@ -73,6 +74,11 @@ export async function GET(
             (end_date !== null ? `, left ${end_date}` : "") +
             ")"
           : "not under contract";
+      await audit(ctx, {
+        action: "view_employee_monthly",
+        target_type: "employee",
+        target_id: employee_id,
+      });
       return {
         entity_kind: "employee",
         entity_id: employee_id,
@@ -275,6 +281,12 @@ export async function GET(
       0,
     );
 
+    await audit(ctx, {
+      action: "view_employee_monthly",
+      target_type: "employee",
+      target_id: employee_id,
+    });
+
     return {
       entity_kind: "employee",
       entity_id: employee_id,
@@ -299,7 +311,5 @@ export async function GET(
       hire_date,
       employment_end_date: end_date,
     };
-
-    void req; // silence unused-var lint
   });
 }

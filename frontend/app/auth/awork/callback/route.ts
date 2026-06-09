@@ -12,6 +12,7 @@
  * redirect back to the settings page with `?error=<slug>` so the UI can
  * surface a useful message instead of a blank screen.
  */
+import { timingSafeEqual } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
 
 import { audit } from "@/lib/auth/audit";
@@ -60,13 +61,27 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!cookie) {
     return fail(req, "missing_cookie");
   }
+  // Bound the cookie size before parsing — the legitimate payload is
+  // ~250 bytes (PKCE verifier ~64 chars + state ~32 chars + a redirect
+  // URI). 2 KB is generous; anything bigger is malformed or an attempt
+  // to DoS the parser. Was M-006 in the pre-launch pen test.
+  if (cookie.value.length > 2048) {
+    return fail(req, "bad_cookie");
+  }
   let payload: { verifier: string; state: string; redirect_uri: string };
   try {
     payload = JSON.parse(cookie.value);
   } catch {
     return fail(req, "bad_cookie");
   }
-  if (payload.state !== state) {
+  // Constant-time compare on the state to avoid leaking length / prefix
+  // information via timing differences. State is not a secret per se,
+  // but consistency with crypto hygiene.
+  if (
+    typeof payload.state !== "string" ||
+    payload.state.length !== state.length ||
+    !timingSafeEqual(Buffer.from(payload.state), Buffer.from(state))
+  ) {
     return fail(req, "state_mismatch");
   }
 

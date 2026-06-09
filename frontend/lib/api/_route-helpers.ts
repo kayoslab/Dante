@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 
 import { auth, type Role } from "@/lib/auth";
-import { ROLE_RANK, type SessionContext } from "@/lib/auth/session";
+import { ROLE_RANK, isUserDisabled, type SessionContext } from "@/lib/auth/session";
 import { log } from "@/lib/logger";
 
 export type ErrorCode =
@@ -12,7 +12,8 @@ export type ErrorCode =
   | "has_children"
   | "validation_error"
   | "unauthorized"
-  | "forbidden";
+  | "forbidden"
+  | "rate_limited";
 
 export class HTTPError extends Error {
   status: number;
@@ -60,6 +61,12 @@ export async function requireApiSession(opts: {
   if (!session?.user) {
     throw Unauthorized();
   }
+  // Active-revocation check: disabled users keep a valid JWT for up to
+  // 7 days. The cached DB lookup catches them at the API boundary (was
+  // H-008 in the pre-launch pen test).
+  if (await isUserDisabled(session.user.user_id)) {
+    throw Unauthorized("Account disabled");
+  }
   const ctx: SessionContext = {
     user_id: session.user.user_id,
     email: session.user.email,
@@ -95,10 +102,15 @@ export async function handle(
         { status: err.status },
       );
     }
+    // Log the real error server-side so operators can debug; return a
+    // generic message to the client. Raw `err.message` would leak
+    // Postgres constraint names ("duplicate key value violates unique
+    // constraint app_user_email_idx"), table names, and other internal
+    // schema details. Was M-005 in the pre-launch pen test.
     log.error("route_unhandled", { err });
     return NextResponse.json(
       {
-        detail: err instanceof Error ? err.message : "internal_error",
+        detail: "Internal server error.",
         code: "internal_error" as ErrorCode,
       },
       { status: 500 },

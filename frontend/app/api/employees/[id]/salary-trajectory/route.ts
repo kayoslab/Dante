@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
 import { db } from "@/lib/db/client";
+import { audit } from "@/lib/auth/audit";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 
 export async function GET(
@@ -9,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   return handle(async () => {
-    await requireApiSession({ minRole: "manager" });
+    const ctx = await requireApiSession({ minRole: "manager" });
     const { id: rawId } = await params;
     const employee_id = Number(rawId);
     if (!Number.isInteger(employee_id)) {
@@ -46,5 +47,11 @@ export async function GET(
         source: r.source,
       };
     });
+    await audit(ctx, {
+      action: "view_salary_trajectory",
+      target_type: "employee",
+      target_id: employee_id,
+    });
+
   });
 }

@@ -131,3 +131,10 @@ variable "waf_alarm_emails" {
   type        = list(string)
   default     = ["admin@example.com"]
 }
+
+# --- GitHub Actions ----------------------------------------------------
+
+variable "github_repository" {
+  description = "GitHub repo in `owner/repo` form (e.g. `cr0ss/dante`). Drives the OIDC trust policies — only workflows from this repo can assume the check / deploy roles."
+  type        = string
+}

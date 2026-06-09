@@ -98,9 +98,9 @@ resource "aws_lb" "this" {
   subnets            = var.public_subnet_ids
   security_groups    = [aws_security_group.alb.id]
 
-  idle_timeout                = var.idle_timeout_seconds
-  enable_deletion_protection  = var.deletion_protection
-  drop_invalid_header_fields  = true # Reject smuggled headers — best-practice against request-smuggling
+  idle_timeout               = var.idle_timeout_seconds
+  enable_deletion_protection = var.deletion_protection
+  drop_invalid_header_fields = true # Reject smuggled headers — best-practice against request-smuggling
 
   dynamic "access_logs" {
     for_each = var.access_logs_bucket == null ? [] : [1]

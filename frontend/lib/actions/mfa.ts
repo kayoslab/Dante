@@ -6,6 +6,7 @@ import { z } from "zod";
 import { unstable_update as updateSession } from "@/lib/auth";
 import { audit } from "@/lib/auth/audit";
 import { generateEnrollment, verifyCode } from "@/lib/auth/mfa";
+import { mintMfaProof } from "@/lib/auth/mfa-proof";
 import { requireSession } from "@/lib/auth/session";
 import { db } from "@/lib/db/client";
 import { appUser } from "@/lib/db/schema";
@@ -59,12 +60,14 @@ export async function completeMfaEnrollmentAction(
     })
     .where(eq(appUser.user_id, ctx.user_id));
 
+  // HMAC proof — keyed with AUTH_SECRET — gates the JWT callback's
+  // `trigger === "update"` path. Without it the update is silently
+  // dropped (defense against client-side MFA bypass via useSession().update).
   await updateSession({
     user: {
-      // Auth.js v5 ignores fields it doesn't know — we use this as a
-      // typed message to the jwt callback's `trigger === "update"` path.
       mfa_enrolled: true,
       mfa_verified: true,
+      mfa_proof: mintMfaProof(ctx.user_id),
     } as never,
   } as never);
 
@@ -109,7 +112,10 @@ export async function verifyMfaAction(
   }
 
   await updateSession({
-    user: { mfa_verified: true } as never,
+    user: {
+      mfa_verified: true,
+      mfa_proof: mintMfaProof(ctx.user_id),
+    } as never,
   } as never);
 
   await audit(ctx, {

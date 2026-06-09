@@ -50,6 +50,37 @@ module "vpc" {
   # Flow logs off by default; flip after onboarding traffic for incident
   # response baselines.
   enable_flow_logs = false
+
+  # Endpoint policies pin every interface endpoint to the current AWS
+  # account at minimum — an RCE'd workload can't reach Secrets Manager
+  # / KMS / Logs / STS in another account through these endpoints (was
+  # M-002 in the pre-launch pen test). Tighter per-role scoping is a
+  # follow-up; needs the role ARNs from the app + sync_lambda modules
+  # and is best applied via a second pass using `aws_vpc_endpoint_policy`
+  # to break the module dependency cycle.
+  endpoint_policies = {
+    secretsmanager = local.account_scoped_endpoint_policy
+    kms            = local.account_scoped_endpoint_policy
+    logs           = local.account_scoped_endpoint_policy
+    sts            = local.account_scoped_endpoint_policy
+  }
+}
+
+locals {
+  account_scoped_endpoint_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = "*"
+      Resource  = "*"
+      Condition = {
+        StringEquals = {
+          "aws:PrincipalAccount" = data.aws_caller_identity.current.account_id
+        }
+      }
+    }]
+  })
 }
 
 module "cognito" {
@@ -271,12 +302,18 @@ module "app" {
     },
   ]
 
-  # The task role needs Secrets Manager read for credentials the app
-  # resolves lazily at runtime — awork tokens (rotated mid-flow) +
-  # the Cognito client secret.
+  # awork client credentials (READ): needed for the OAuth callback to
+  # exchange the authorization code for tokens. Not sensitive on its
+  # own — it's the OAuth client_id + secret, not the access token.
   additional_secret_arns_readable = [
-    module.secrets.awork_tokens_secret_arn,
     module.secrets.awork_client_secret_arn,
+  ]
+
+  # awork OAuth tokens (WRITE only): the callback writes them after
+  # exchanging the code; the sync Lambda is the only thing that reads
+  # them. RCE in the web app can overwrite but not exfiltrate (was H-004).
+  additional_secret_arns_writable = [
+    module.secrets.awork_tokens_secret_arn,
   ]
 }
 
@@ -311,3 +348,31 @@ module "waf" {
   log_retention_days    = 30
   alarm_email_addresses = var.waf_alarm_emails
 }
+
+module "github_oidc" {
+  source = "../../modules/github-oidc"
+
+  environment       = "prod"
+  name_prefix       = "dante"
+  github_repository = var.github_repository
+
+  # The check workflow runs on every PR + push; the deploy workflow only
+  # on the protected branch (`main` by default).
+  deploy_role_branch_filter = "main"
+
+  ecr_repository_arn = module.ecr.repository_arn
+  ecs_cluster_arn    = module.app.cluster_arn
+  ecs_service_arns = [
+    # ECS service ARN isn't exported directly by name; compose from cluster + service name.
+    "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${module.app.cluster_name}/${module.app.service_name}",
+  ]
+  task_role_arns_passable = [
+    module.app.task_role_arn,
+    module.app.execution_role_arn,
+  ]
+  lambda_function_arns = [
+    "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${module.sync_lambda.function_name}",
+  ]
+}
+
+data "aws_caller_identity" "current" {}

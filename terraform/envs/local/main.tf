@@ -40,8 +40,8 @@ provider "aws" {
 module "secrets" {
   source = "../../modules/secrets"
 
-  environment             = "local"
-  name_prefix             = "dante"
+  environment = "local"
+  name_prefix = "dante"
   # LocalStack 3.x doesn't simulate the soft-delete recovery window —
   # passing >0 means destroys fail. Zero it out for clean teardowns.
   recovery_window_in_days = 0

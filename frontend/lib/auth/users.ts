@@ -72,17 +72,49 @@ export async function findOrCreateAppUser(input: {
     };
   }
 
-  // Email match — typical "row was created with a stub cognito_sub in dev
-  // mode, real Cognito sub is arriving now" case. Upgrade the row.
+  // Email match — typical "row was created with a stub cognito_sub in
+  // dev mode, real Cognito sub is arriving now" case. Upgrade the row.
+  //
+  // Guard against the identity-merge attack (M-001 in the pre-launch
+  // pen test): if the existing row has a real Cognito sub already, an
+  // upgrade would silently transfer one user's identity to another.
+  // Only allow the upgrade when the existing sub is a dev-mode stub
+  // (`dev:...`). Anything else is either a case-collision attack or a
+  // genuine duplicate that needs admin attention.
+  //
+  // Also wipe MFA fields on upgrade — otherwise a malicious dev-mode
+  // user could pre-enroll TOTP and have the real Cognito sign-in
+  // inherit their secret.
   const byEmail = await db
-    .select(USER_SELECT)
+    .select({
+      user_id: appUser.user_id,
+      email: appUser.email,
+      employee_id: appUser.employee_id,
+      role: appUser.role,
+      is_disabled: appUser.is_disabled,
+      mfa_required: appUser.mfa_required,
+      mfa_enrolled: sql<boolean>`${appUser.mfa_enrolled_at} IS NOT NULL`,
+      cognito_sub: appUser.cognito_sub,
+    })
     .from(appUser)
     .where(sql`LOWER(${appUser.email}) = ${lowerEmail}`)
     .limit(1);
   if (byEmail[0]) {
+    const existingSub = byEmail[0].cognito_sub;
+    if (!existingSub.startsWith("dev:")) {
+      throw new Error(
+        `Refusing to upgrade app_user ${byEmail[0].user_id}: existing ` +
+          `cognito_sub is not a dev stub. This typically means two ` +
+          `accounts collided on the same email — investigate via psql ` +
+          `before allowing sign-in.`,
+      );
+    }
     const update: Record<string, unknown> = {
       cognito_sub: input.cognito_sub,
       last_login_at: new Date(),
+      // Reset MFA on identity transfer — the new owner must re-enroll.
+      mfa_secret: null,
+      mfa_enrolled_at: null,
     };
     if (input.expected_role && byEmail[0].role !== input.expected_role) {
       update.role = input.expected_role;
@@ -92,8 +124,13 @@ export async function findOrCreateAppUser(input: {
       .set(update)
       .where(eq(appUser.user_id, byEmail[0].user_id));
     return {
-      ...byEmail[0],
+      user_id: byEmail[0].user_id,
+      email: byEmail[0].email,
+      employee_id: byEmail[0].employee_id,
       role: (update.role as Role | undefined) ?? byEmail[0].role,
+      is_disabled: byEmail[0].is_disabled,
+      mfa_required: byEmail[0].mfa_required,
+      mfa_enrolled: false, // we just wiped it
     };
   }
 

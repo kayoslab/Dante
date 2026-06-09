@@ -40,7 +40,10 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-RUN npm run build
+# Next.js standalone output + the bundled migration runner. Both end up
+# under dist/ — `next build` writes .next/standalone, the migrate script
+# writes dist/migrate/migrate.js.
+RUN npm run build && npm run build:migrate
 
 # --- runner -------------------------------------------------------------
 
@@ -66,8 +69,13 @@ COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
 
-# Migrations bundled so an entrypoint can run them at boot if desired.
+# Migration runner: single-file CJS bundle + raw migration SQL files.
+# The entrypoint runs the bundle before exec'ing the Next.js server,
+# so the DB schema is current before the first request lands.
+COPY --from=build --chown=nextjs:nodejs /app/dist/migrate/migrate.js ./migrate.js
 COPY --from=build --chown=nextjs:nodejs /app/lib/db/migrations ./lib/db/migrations
+COPY --chown=nextjs:nodejs entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
 
 USER nextjs
 EXPOSE 3000
@@ -77,4 +85,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -q -O- http://localhost:3000/api/auth/csrf || exit 1
 
+ENTRYPOINT ["./entrypoint.sh"]
 CMD ["node", "server.js"]

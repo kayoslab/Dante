@@ -24,10 +24,30 @@ These were extracted from TECH_DEBT.md when it was closed out. They're the durab
 
 - **`requireSession({ minRole })`** at the top of every Server Component page / Server Action.
 - **`requireApiSession({ minRole })`** inside `handle()` on every `/api/*` route. The proxy enforces "signed in or not"; per-route role enforcement is on you.
-- Role split (the one the user spec'd):
-  - **employee** sees: `/calendar`, `/profile`, `/employees` (list only), `/api/calendar`, `/api/employees`, `/api/employees/teams`.
-  - **manager** adds: everything financial — `/api/portfolio/*`, `/api/salary/*`, `/api/projects/*`, `/api/employees/[id]` (detail), `/api/freelancers/*`, etc.
-  - **admin** adds: `/settings`, `/api/config`, `/auth/awork/*`.
+
+### Who's who
+
+- **employee** — every regular member of the company, including **team leads**. Team-lead is a project-contribution attribute (`employee_annotation.is_project_contributing`), not a role tier. Team leads use the same UI as anyone else: their own profile, the allocation calendar, the employee list (no detail).
+- **manager** — **C-level** (CEO, CFO, COO). Full-org visibility on everything financial: portfolio economics, salary bands, gender-gap analysis, per-employee economics. Required MFA. Three to five people in a 40-person org.
+- **admin** — usually one person; manages users + audit log + integrations. Required MFA. Disjoint from "manager" in practice but admins automatically inherit manager-level data access via `ROLE_RANK`.
+
+### Per-role endpoint matrix
+
+- **employee**: `/calendar`, `/profile`, `/employees` (list only), `/api/calendar`, `/api/employees`, `/api/employees/teams`.
+- **manager** adds: `/api/portfolio/*`, `/api/salary/*`, `/api/projects/*`, `/api/employees/[id]` (detail), `/api/employees/[id]/salary-history`, `/api/employees/[id]/monthly*`, `/api/employees/[id]/allocations`, `/api/inspect/[employee_id]`, `/api/freelancers/*`, `/api/awork-*`, `/api/tracked-hours`.
+- **admin** adds: `/settings/*`, `/api/config`, `/auth/awork/*`.
+
+### Accepted risk: manager has full-org per-employee access
+
+A C-level manager can read **any** employee's salary history, monthly economics, and (post-redaction) Personio attributes. There is **no team scoping** because there are no team-tier managers in this org — the manager role is by definition org-wide. This was flagged as H-001 in the pre-launch pen test and is **accepted as design**.
+
+Compensating controls:
+- **MFA required** on every manager account, in-app gated by `requireSession` / `requireApiSession`.
+- **Audit log** on every sensitive read: `view_employee_detail`, `view_inspect_payload`, `view_salary_bands`, `view_gender_gap`, `view_salary`. Forensic queries: `SELECT actor_email, COUNT(*) FROM app_audit_log WHERE action IN ('view_inspect_payload','view_employee_detail') AND occurred_at > NOW() - INTERVAL '7 days' GROUP BY actor_email ORDER BY 2 DESC` highlights outliers.
+- **Personio payload redaction** in `/api/inspect/*` — IBAN / BIC / bank / tax_id / SSN / passport / national_id / health_insurance / religion / ethnicity attributes return `"[redacted]"`.
+- **CloudWatch alarm candidate**: spike in `view_inspect_payload` per actor over a 5-minute window. Not yet wired; would require shipping audit rows to CloudWatch via a sync-time export or a stream.
+
+If the org structure changes (e.g. adding a "team-tier manager" role between manager and employee), revisit this and add team-scoped variants of the per-employee endpoints. Until then, the audit log is the primary control and must stay queryable.
 
 ## MFA (TOTP)
 
@@ -108,6 +128,44 @@ Order matters — Terraform creates empty secret containers, but the operator wr
 
 For ongoing redeploys (image rebuild + new SHA), step 3 + step 4 are enough — the rest is one-time.
 
+## CI / CD (GitHub Actions)
+
+Two workflows + two OIDC roles. No long-lived AWS keys.
+
+**`.github/workflows/check.yml`** — runs on every PR + push outside `main`:
+- Type-check (`npm run check`) + awork read-only guard + builds the migrate runner and sync Lambda bundle (catches build-pipeline drift).
+- `terraform fmt -check -recursive` over the whole tree + `terraform init -backend=false && validate` against each env.
+- `hadolint` against `frontend/Dockerfile` (errors only — style warnings don't block).
+
+**`.github/workflows/deploy.yml`** — runs on push to `main`:
+1. **build**: assume the deploy role via OIDC, ECR login, `docker buildx` arm64 build + push tagged with the first 12 chars of the commit SHA. Then rebuild the sync Lambda zip and upload as a workflow artifact.
+2. **terraform**: download the Lambda artifact, `terraform plan` (passing `app_image_uri` + `github_repository` + `hosted_zone_id`), `terraform apply` the plan.
+3. **rollout**: `aws ecs update-service --force-new-deployment` + `aws ecs wait services-stable`. The task definition already moved during the Terraform step; this triggers the service to roll.
+
+**Repository configuration (one-time after first `terraform apply`)** — set as repository **variables** (ARNs aren't secrets):
+- `AWS_DEPLOY_ROLE_ARN` ← `terraform output -raw github_deploy_role_arn`
+- `AWS_CHECK_ROLE_ARN`  ← `terraform output -raw github_check_role_arn`
+- `ECS_CLUSTER_NAME`    ← `terraform output -raw app_cluster_name`
+- `ECS_SERVICE_NAME`    ← `terraform output -raw app_service_name`
+- `HOSTED_ZONE_ID`      ← the Route 53 zone ID for the parent domain
+
+**The chicken-and-egg**: the deploy workflow assumes the deploy role, but Terraform created it. First apply runs from a developer's laptop with admin credentials. After that, GitHub takes over.
+
+**Branch protection**: the deploy role's trust policy is scoped to `ref:refs/heads/main`. A feature branch attempting to assume the deploy ARN is denied at STS — no risk of feature-branch deploys to prod.
+
+## Boot-time migrations
+
+The container's `entrypoint.sh` runs `node /app/migrate.js` before `exec`ing the Next.js server. Migrations are idempotent (advisory-locked by Drizzle); multiple ECS tasks starting concurrently serialize automatically.
+
+A migration failure exits the container, fails the ECS health check, triggers the deployment circuit-breaker's auto-rollback. This is intentional — better a failed deploy than serving traffic against a partly-migrated schema.
+
+**Emergency override**: `DANTE_SKIP_MIGRATIONS=1` on the task definition boots without running migrations. Use only when a migration is the suspect.
+
+**Adding a migration**:
+1. Edit `frontend/lib/db/schema/*.ts`.
+2. `cd frontend && npx drizzle-kit generate` produces a new SQL file under `lib/db/migrations/` + updates `meta/_journal.json`.
+3. Commit. The next deploy applies it on boot.
+
 ## Credential rotation
 
 Rotate quarterly, plus immediately on any suspected exposure. Order matters — the sync needs both old and new credentials to roll over without downtime.
@@ -131,6 +189,29 @@ Rotate quarterly, plus immediately on any suspected exposure. Order matters — 
 2. Update Secrets Manager `dante/<env>/auth_secret`.
 3. Update local `.env`.
 4. Restart the app — this invalidates every active session, so all users sign in again. Coordinate with active users or do it after-hours.
+
+**RDS master credential (`DB_USERNAME` / `DB_PASSWORD`)**
+RDS-managed rotation writes the new credential into Secrets Manager but does NOT signal running ECS tasks. Env vars in a running task are frozen at boot — they keep using the old password until the task is replaced. An attacker with RCE who captured the old password before rotation can still connect to RDS for the lifetime of the task (was H-007 in the pre-launch pen test).
+
+Order matters:
+1. `aws secretsmanager rotate-secret --secret-id <rds master secret arn>` (or wait for AWS-scheduled rotation if you wire that in).
+2. RDS commits the new password in the DB and pushes it to Secrets Manager.
+3. **Immediately roll the ECS service**: `aws ecs update-service --cluster $CLUSTER --service $SERVICE --force-new-deployment` — new tasks pick up the rotated credential from Secrets Manager at boot via the task definition's `secrets:` block.
+4. `aws ecs wait services-stable ...` to confirm.
+
+Long-term fix: switch to **RDS IAM database authentication** (the task role generates a 15-minute auth token per connection; nothing to rotate, nothing to leak). Documented as a follow-up — not implemented yet because it requires a small `pg.Pool` wrapper that requests a fresh token before opening a connection.
+
+## npm audit advisories (M-011)
+
+Two open transitive moderate advisories in the prod dependency tree (`npm audit --omit=dev`):
+- **next** — sources its own advisory via a Next.js-internal package. `npm audit fix --force` "fixes" this by downgrading to Next.js 9.3.3, which is a regression to a 5-year-old major version. Ignore that suggestion; track upstream patches.
+- **postcss** — transitive through `next`. Fixes whenever Next bumps its postcss pin.
+
+Both are dev-tooling exposure (PostCSS at build time, Next CLI). Neither affects the running container — `npm ci --production` in CI doesn't install them. Re-check after every Next.js minor bump.
+
+For dev-only advisories (devDependencies — drizzle-kit's `@esbuild-kit/esm-loader`, etc.), the rule is the same: don't downgrade, wait for the upstream fix. Build artifacts run in CI sandboxes, not in production.
+
+**CI policy**: the deploy workflow runs the ECR scan-on-push gate (M-008) which is the actual production CVE check. That gate operates on the built container, not on `package-lock.json`, so it catches real risks regardless of `npm audit` noise.
 
 ## Things deliberately deferred
 

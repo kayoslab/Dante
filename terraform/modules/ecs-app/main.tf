@@ -121,22 +121,38 @@ resource "aws_iam_role" "task" {
 
 # Container-side secrets access. The Next.js process resolves additional
 # secrets at runtime (e.g. rotated tokens it doesn't have at boot).
+#
+# Two distinct grants:
+#   - readable: classic GetSecretValue. Use only for secrets the app
+#     actually needs to read at runtime.
+#   - writable: PutSecretValue only. Use for rotating tokens the app
+#     writes but doesn't need to load back (the OAuth tokens flow). An
+#     RCE'd app can overwrite the secret but not read it — the blast
+#     radius is "the next sync can't find the right token" instead of
+#     "the attacker walked away with valid tokens". Was H-004 in the
+#     pre-launch pen test.
 resource "aws_iam_role_policy" "task_secrets" {
-  count = length(var.additional_secret_arns_readable) == 0 ? 0 : 1
-  name  = "${local.name}-task-secrets"
-  role  = aws_iam_role.task.id
+  count = (length(var.additional_secret_arns_readable) == 0 &&
+    length(var.additional_secret_arns_writable) == 0) ? 0 : 1
+  name = "${local.name}-task-secrets"
+  role = aws_iam_role.task.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = concat(
-      [{
-        Effect = "Allow"
-        Action = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+      length(var.additional_secret_arns_readable) == 0 ? [] : [{
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
         Resource = var.additional_secret_arns_readable
       }],
+      length(var.additional_secret_arns_writable) == 0 ? [] : [{
+        Effect   = "Allow"
+        Action   = ["secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret"]
+        Resource = var.additional_secret_arns_writable
+      }],
       length(var.additional_kms_key_arns_decryptable) == 0 ? [] : [{
-        Effect = "Allow"
-        Action = ["kms:Decrypt", "kms:DescribeKey"]
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"]
         Resource = var.additional_kms_key_arns_decryptable
       }],
     )
@@ -169,6 +185,17 @@ resource "aws_ecs_task_definition" "this" {
     cpu_architecture        = "ARM64"
   }
 
+  # Two task-level volumes back the writable mountpoints in the container
+  # below. No `host_path` — Fargate provides ephemeral scratch storage
+  # that's destroyed with the task. An attacker who writes to /tmp can't
+  # persist beyond the task lifetime, and a fresh task starts clean.
+  volume {
+    name = "tmp"
+  }
+  volume {
+    name = "next-cache"
+  }
+
   container_definitions = jsonencode([{
     name      = "app"
     image     = var.image_uri
@@ -191,10 +218,18 @@ resource "aws_ecs_task_definition" "this" {
       }
     }
 
-    readonlyRootFilesystem = false
-    # Next.js writes .next/cache at runtime if not pre-built; keeping
-    # the FS writable is the simplest path. Lock down later by
-    # mounting an ephemeral volume on /tmp + /app/.next/cache only.
+    # Read-only root filesystem prevents an RCE from dropping a
+    # persistence script anywhere on disk (was M-003 in the pre-launch
+    # pen test). Writable mountpoints are scoped to /tmp and
+    # /app/.next/cache via mountPoints below — Fargate provides ephemeral
+    # tmpfs-style scratch space and we layer it where Next.js needs to
+    # write.
+    readonlyRootFilesystem = true
+
+    mountPoints = [
+      { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false },
+      { sourceVolume = "next-cache", containerPath = "/app/.next/cache", readOnly = false },
+    ]
 
     healthCheck = {
       command     = ["CMD-SHELL", "wget -q -O- http://localhost:${var.container_port}/api/auth/csrf || exit 1"]

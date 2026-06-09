@@ -93,7 +93,7 @@ resource "aws_cognito_user_pool" "this" {
       # Cognito requires both {username} and {####} placeholders in the
       # SMS body even though we don't use SMS — the provider validates
       # the template against the spec regardless.
-      sms_message   = "Dante temp password for {username}: {####}"
+      sms_message = "Dante temp password for {username}: {####}"
     }
   }
 
@@ -200,22 +200,31 @@ resource "aws_cognito_user_pool_client" "app" {
 
   # Token lifetimes:
   #   - access/id: 1 hour (short, frequent refresh)
-  #   - refresh:   30 days (matches awork's refresh window so the user
-  #                experience is consistent)
+  #   - refresh:   7 days. Was 30; tightened after the pre-launch pen
+  #                test (M-007). A 30-day refresh token means a phished
+  #                token gives 30 days of access; 7 days bounds the
+  #                blast radius to a working week without forcing daily
+  #                re-sign-in for the actual user. Auth.js's session
+  #                JWT runs for 7 days anyway, so the two are aligned.
   access_token_validity  = 1
   id_token_validity      = 1
-  refresh_token_validity = 30
+  refresh_token_validity = 7
   token_validity_units {
     access_token  = "hours"
     id_token      = "hours"
     refresh_token = "days"
   }
 
+  # Honor RevokeToken when the user signs out so a stolen access token
+  # can't outlive the session. Defaults on for new app clients but
+  # we declare it explicitly to lock the behavior.
+  enable_token_revocation = true
+
   # Auth flow restrictions: disable username/password from the app client.
   # All sign-ins go through the OIDC code flow (Auth.js handles it).
   explicit_auth_flows = [
-    "ALLOW_USER_SRP_AUTH",        # used by Cognito's own UI / SRP-aware clients
-    "ALLOW_REFRESH_TOKEN_AUTH",   # required for refresh
+    "ALLOW_USER_SRP_AUTH",      # used by Cognito's own UI / SRP-aware clients
+    "ALLOW_REFRESH_TOKEN_AUTH", # required for refresh
   ]
 
   prevent_user_existence_errors = "ENABLED" # don't leak whether an email exists

@@ -547,18 +547,14 @@ export type EmployeeFlagsUpdate = {
     };
 
 export type EmployeeInspectPayload = {
-        /** Employee Id */
         employee_id: number;
-        /** Sync Run Id */
         sync_run_id?: number | null;
-        /** Sync Started At */
         sync_started_at?: string | null;
-        /** Attributes */
+        // Flattened + redacted attributes. Bank/tax/government-ID fields
+        // are returned as the literal "[redacted]" — see the SENSITIVE_ATTR_PATTERNS
+        // block-list in app/api/inspect/[employee_id]/route.ts. The raw
+        // Personio payload is intentionally NOT exposed via this route.
         attributes: {
-            [key: string]: unknown;
-        };
-        /** Full Payload */
-        full_payload: {
             [key: string]: unknown;
         };
     };

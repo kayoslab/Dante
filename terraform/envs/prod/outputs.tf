@@ -146,3 +146,15 @@ output "waf_alarm_topic_arn" {
   description = "SNS topic for WAF alarms. Add PagerDuty / Slack subs out-of-band."
   value       = module.waf.alarm_topic_arn
 }
+
+# --- GitHub Actions ----------------------------------------------------
+
+output "github_check_role_arn" {
+  description = "Set as GitHub repo variable `AWS_CHECK_ROLE_ARN`. The check workflow assumes this role for read-only AWS access."
+  value       = module.github_oidc.check_role_arn
+}
+
+output "github_deploy_role_arn" {
+  description = "Set as GitHub repo variable `AWS_DEPLOY_ROLE_ARN`. The deploy workflow assumes this role; trust policy scopes it to `main` only."
+  value       = module.github_oidc.deploy_role_arn
+}

@@ -1,0 +1,271 @@
+name: deploy
+
+# Pushes to main: build the container image + sync Lambda bundle, push
+# to ECR, apply Terraform with the new image tag. The deploy role's
+# trust policy enforces that ONLY `main` workflows can assume it — a
+# malicious feature branch can't deploy.
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      skip_terraform_apply:
+        description: "Only build + push the image. Skip the Terraform step."
+        required: false
+        default: "false"
+      skip_scan_gate:
+        description: "Bypass the ECR HIGH/CRITICAL CVE gate. Use only when a fix is in progress and the finding is known-false-positive."
+        required: false
+        default: "false"
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false # never cancel a deploy mid-flight
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: eu-central-1
+  TF_VERSION: 1.9.x
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Build the app container + the sync Lambda zip. Both artifacts get
+  # uploaded so the deploy job can use the same blob the build step
+  # produced (no rebuild = no drift between hash-and-deploy).
+  # ---------------------------------------------------------------------
+  build:
+    name: build (container + lambda)
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.push.outputs.image_uri }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: ECR login
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          short_sha=$(echo "${GITHUB_SHA}" | cut -c1-12)
+          ecr_url="${{ steps.ecr.outputs.registry }}/dante-prod-app"
+          echo "tag=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "image_uri=${ecr_url}:${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/arm64
+
+      - name: Build + push container
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.tag.outputs.image_uri }}
+          # GHA cache speeds repeat builds from ~5 min to <1 min by
+          # reusing the npm + Next.js build cache between commits.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Set image_uri output
+        run: echo "image_uri=${{ steps.tag.outputs.image_uri }}" >> "$GITHUB_OUTPUT"
+        id: image_uri_out
+
+      # --- ECR vulnerability scan gate ------------------------------
+      #
+      # `scan_on_push` runs an Inspector v2 scan in the background. Poll
+      # until it finishes, then hard-fail the deploy if it finds any
+      # CRITICAL or HIGH CVEs. Was M-008 in the pre-launch pen test —
+      # the scan was enabled but had no enforcement. To deploy despite
+      # a finding (e.g. a known-false-positive while a fix is in
+      # progress), re-run the workflow with `inputs.skip_scan_gate`.
+      - name: Wait for ECR scan + enforce severity gate
+        if: github.event.inputs.skip_scan_gate != 'true'
+        env:
+          REPO_NAME: dante-prod-app
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for ECR scan on ${REPO_NAME}:${IMAGE_TAG}..."
+          aws ecr wait image-scan-complete \
+            --repository-name "$REPO_NAME" \
+            --image-id imageTag="$IMAGE_TAG"
+          findings=$(aws ecr describe-image-scan-findings \
+            --repository-name "$REPO_NAME" \
+            --image-id imageTag="$IMAGE_TAG" \
+            --query 'imageScanFindings.findingSeverityCounts' \
+            --output json)
+          echo "Scan findings: $findings"
+          critical=$(echo "$findings" | jq -r '.CRITICAL // 0')
+          high=$(echo "$findings" | jq -r '.HIGH // 0')
+          if [ "$critical" -gt 0 ] || [ "$high" -gt 0 ]; then
+            echo "::error::ECR scan found $critical CRITICAL + $high HIGH severity findings — refusing to deploy. Inspect with: aws ecr describe-image-scan-findings --repository-name $REPO_NAME --image-id imageTag=$IMAGE_TAG"
+            exit 1
+          fi
+
+      # --- Sync Lambda bundle ----------------------------------------
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install + build Lambda bundle
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build:sync-lambda
+
+      - name: Upload Lambda bundle for the apply job
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-lambda
+          path: frontend/dist/lambda/dante-sync-lambda.zip
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # Plan (auto). No mutation — generates a plan file and uploads it as
+  # an artifact for the apply job to consume. The plan output is also
+  # posted to the GitHub Actions step summary so the reviewer can read
+  # it before clicking apply.
+  # ---------------------------------------------------------------------
+  terraform_plan:
+    name: terraform plan (prod)
+    needs: build
+    if: github.event.inputs.skip_terraform_apply != 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/envs/prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Download Lambda bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: sync-lambda
+          path: ../../../frontend/dist/lambda
+
+      - name: terraform init
+        run: terraform init
+
+      - name: terraform plan
+        run: |
+          terraform plan \
+            -var "github_repository=${{ github.repository }}" \
+            -var "hosted_zone_id=${{ vars.HOSTED_ZONE_ID }}" \
+            -var "app_image_uri=${{ needs.build.outputs.image_uri }}" \
+            -out=prod.tfplan \
+            -no-color > plan.txt 2>&1
+          tail -200 plan.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          # The plan binary references the .terraform provider plugins;
+          # include the whole .terraform directory so the apply step can
+          # `terraform apply prod.tfplan` without re-running init.
+          path: |
+            terraform/envs/prod/prod.tfplan
+            terraform/envs/prod/.terraform
+            terraform/envs/prod/.terraform.lock.hcl
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # Apply (MANUAL). Gated by a GitHub Environment named `production`
+  # whose Environment Protection Rule requires reviewer approval. The
+  # job pauses in the GitHub UI until an authorized reviewer reads the
+  # plan (in the previous job's step summary) and clicks Approve.
+  #
+  # Configure once in repo Settings → Environments → New Environment
+  # "production" → Required reviewers: <admin team>. Without this gate,
+  # a malicious commit on `main` reaches prod without human review
+  # (was H-005 in the pre-launch pen test).
+  # ---------------------------------------------------------------------
+  terraform_apply:
+    name: terraform apply (prod)
+    needs: [build, terraform_plan]
+    if: github.event.inputs.skip_terraform_apply != 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://dante.example.com
+    defaults:
+      run:
+        working-directory: terraform/envs/prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Download Lambda bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: sync-lambda
+          path: ../../../frontend/dist/lambda
+
+      - name: Download terraform plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/envs/prod
+
+      - name: terraform apply
+        run: terraform apply -auto-approve prod.tfplan
+
+  # ---------------------------------------------------------------------
+  # Force a new deployment so the ECS service picks up the just-updated
+  # task definition revision. Terraform updates the task def + service
+  # arn, but `lifecycle.ignore_changes = [task_definition]` on the
+  # service means the apply doesn't roll the service itself.
+  # ---------------------------------------------------------------------
+  rollout:
+    name: ECS rollout
+    needs: [build, terraform_apply]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force-new-deployment + wait
+        run: |
+          aws ecs update-service \
+            --cluster "${{ vars.ECS_CLUSTER_NAME }}" \
+            --service "${{ vars.ECS_SERVICE_NAME }}" \
+            --force-new-deployment >/dev/null
+          aws ecs wait services-stable \
+            --cluster "${{ vars.ECS_CLUSTER_NAME }}" \
+            --services "${{ vars.ECS_SERVICE_NAME }}"

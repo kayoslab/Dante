@@ -43,10 +43,10 @@ resource "aws_ecr_lifecycle_policy" "this" {
         rulePriority = 1
         description  = "Keep last ${var.max_image_count} tagged images"
         selection = {
-          tagStatus     = "tagged"
+          tagStatus      = "tagged"
           tagPatternList = ["*"]
-          countType     = "imageCountMoreThan"
-          countNumber   = var.max_image_count
+          countType      = "imageCountMoreThan"
+          countNumber    = var.max_image_count
         }
         action = { type = "expire" }
       },

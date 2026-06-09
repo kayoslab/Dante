@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 
+import { audit } from "@/lib/auth/audit";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 import { addMonths } from "@/lib/db/_monthly-helpers";
 
@@ -8,7 +9,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   return handle(async () => {
-    await requireApiSession({ minRole: "manager" });
+    const ctx = await requireApiSession({ minRole: "manager" });
     const { id: rawId } = await params;
     const employee_id = Number(rawId);
     if (!Number.isInteger(employee_id)) {
@@ -51,6 +52,12 @@ export async function GET(
       });
       cur = addMonths(cur, 1);
     }
+
+    await audit(ctx, {
+      action: "view_employee_monthly_series",
+      target_type: "employee",
+      target_id: employee_id,
+    });
 
     return {
       entity_kind: "employee",

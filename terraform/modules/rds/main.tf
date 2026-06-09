@@ -96,13 +96,13 @@ resource "aws_vpc_security_group_ingress_rule" "from_app" {
 resource "aws_db_instance" "this" {
   identifier = local.identifier
 
-  engine                 = "postgres"
-  engine_version         = var.engine_version
-  instance_class         = var.instance_class
-  allocated_storage      = var.allocated_storage_gb
-  max_allocated_storage  = var.max_allocated_storage_gb
-  storage_type           = "gp3"
-  storage_encrypted      = true # No KMS key id → uses the AWS-managed `aws/rds` key
+  engine                = "postgres"
+  engine_version        = var.engine_version
+  instance_class        = var.instance_class
+  allocated_storage     = var.allocated_storage_gb
+  max_allocated_storage = var.max_allocated_storage_gb
+  storage_type          = "gp3"
+  storage_encrypted     = true # No KMS key id → uses the AWS-managed `aws/rds` key
 
   db_name  = var.database_name
   username = var.master_username
@@ -122,13 +122,13 @@ resource "aws_db_instance" "this" {
   maintenance_window      = var.maintenance_window
   copy_tags_to_snapshot   = true
 
-  performance_insights_enabled    = var.performance_insights_enabled
+  performance_insights_enabled          = var.performance_insights_enabled
   performance_insights_retention_period = var.performance_insights_enabled ? 7 : null
-  monitoring_interval             = var.monitoring_interval_seconds
-  enabled_cloudwatch_logs_exports = ["postgresql"] # ships pg log_* output to CloudWatch
+  monitoring_interval                   = var.monitoring_interval_seconds
+  enabled_cloudwatch_logs_exports       = ["postgresql"] # ships pg log_* output to CloudWatch
 
-  deletion_protection      = var.deletion_protection
-  skip_final_snapshot      = var.skip_final_snapshot
+  deletion_protection       = var.deletion_protection
+  skip_final_snapshot       = var.skip_final_snapshot
   final_snapshot_identifier = var.skip_final_snapshot ? null : "${local.identifier}-final-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
 
   apply_immediately = false # Defer destructive changes to the maintenance window

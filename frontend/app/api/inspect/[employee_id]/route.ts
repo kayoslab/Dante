@@ -4,8 +4,41 @@ import type { NextRequest } from "next/server";
 import { db } from "@/lib/db/client";
 import { audit } from "@/lib/auth/audit";
 import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { checkRateLimit } from "@/lib/api/rate-limit";
 
 type Json = unknown;
+
+/** Keys we explicitly do NOT return to the FE — bank, tax, government-ID,
+ * and any free-text "custom" fields whose contents the operator hasn't
+ * vetted. Block-list rather than allow-list because the Personio
+ * attribute set drifts with new field types; a new sensitive field
+ * defaults to NOT shown until added here AND moved to an allowed bucket.
+ *
+ * Lowercased, substring-matched against the attribute key (Personio
+ * uses snake_case `iban`, `tax_id`, `social_security_number`, etc.). */
+const SENSITIVE_ATTR_PATTERNS = [
+  "iban",
+  "bic",
+  "swift",
+  "bank",
+  "account_number",
+  "tax_id",
+  "tax_number",
+  "social_security",
+  "ssn",
+  "passport",
+  "national_id",
+  "id_number",
+  "health_insurance",
+  "religion",
+  "ethnicity",
+];
+
+function isSensitive(key: string): boolean {
+  const k = key.toLowerCase();
+  return SENSITIVE_ATTR_PATTERNS.some((p) => k.includes(p));
+}
+
 function flattenAttributes(
   full: Record<string, unknown>,
 ): Record<string, Json> {
@@ -13,6 +46,12 @@ function flattenAttributes(
   if (!attrs || typeof attrs !== "object") return {};
   const flat: Record<string, Json> = {};
   for (const [k, v] of Object.entries(attrs as Record<string, unknown>)) {
+    // Redact rather than omit — the operator should see that the field
+    // exists (helps diagnose missing-data issues) without the value.
+    if (isSensitive(k)) {
+      flat[k] = "[redacted]";
+      continue;
+    }
     if (
       v !== null &&
       typeof v === "object" &&
@@ -32,19 +71,17 @@ export async function GET(
 ) {
   return handle(async () => {
     const ctx = await requireApiSession({ minRole: "manager" });
+    // Rate-limit the per-employee inspect surface. 10/min/user is well
+    // above the human review pattern (clicking through 3-4 employees
+    // in a row) and well below the script-iterating-IDs pattern that
+    // an exfil attempt would generate. Was M-009 in the pre-launch pen
+    // test (combined with H-003 audit amplification).
+    checkRateLimit(ctx.user_id, "inspect", { per_minute: 10 });
     const { employee_id: rawId } = await params;
     const employee_id = Number(rawId);
     if (!Number.isInteger(employee_id)) {
       throw Validation(`invalid employee id: ${rawId}`);
     }
-    // Sensitive read: the raw Personio payload includes salary, bank, and
-    // address fields. Audit the lookup before the query so the trail is
-    // captured even if the query itself fails.
-    await audit(ctx, {
-      action: "view_inspect_payload",
-      target_type: "employee",
-      target_id: employee_id,
-    });
 
     const r = await db.execute(sql`
       SELECT s.sync_run_id, sr.started_at, s.payload
@@ -89,12 +126,25 @@ export async function GET(
           ? started_at.toISOString()
           : String(started_at);
 
+    // Audit only after the query succeeds — pre-query auditing let a
+    // manager hammer this endpoint with junk IDs and amplify writes to
+    // `app_audit_log` (was H-003 in the pre-launch pen test). Now the
+    // table only grows on legitimate reads.
+    await audit(ctx, {
+      action: "view_inspect_payload",
+      target_type: "employee",
+      target_id: employee_id,
+    });
+
+    // GDPR data minimization: ship only the flattened, redacted attribute
+    // map — never the raw Personio payload (was C-004 in the pre-launch
+    // pen test). If you need to inspect the raw blob, query
+    // `raw_employee_snapshot` directly via psql with a documented purpose.
     return {
       employee_id,
       sync_run_id: row.sync_run_id,
       sync_started_at,
       attributes: flattenAttributes(full),
-      full_payload: full,
     };
   });
 }

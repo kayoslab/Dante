@@ -7,6 +7,7 @@ import { Loader2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { safeCallback } from "@/lib/auth/redirects";
 
 export function LoginForm({
   callbackUrl,
@@ -21,6 +22,11 @@ export function LoginForm({
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState<"dev" | "cognito" | null>(null);
 
+  // Defense in depth: the page already validates, but re-validating here
+  // means a future caller that wires `callbackUrl` from elsewhere can't
+  // accidentally introduce the open-redirect.
+  const safeRedirect = safeCallback(callbackUrl);
+
   async function onCredentials(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting("dev");
@@ -29,14 +35,14 @@ export function LoginForm({
     await signIn("dev", {
       email,
       password,
-      redirectTo: callbackUrl,
+      redirectTo: safeRedirect,
     });
     setSubmitting(null);
   }
 
   async function onCognito() {
     setSubmitting("cognito");
-    await signIn("cognito", { redirectTo: callbackUrl });
+    await signIn("cognito", { redirectTo: safeRedirect });
     setSubmitting(null);
   }
 

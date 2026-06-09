@@ -7,7 +7,11 @@ import { z } from "zod";
 import { db } from "@/lib/db/client";
 import { appUser, employeeCurrent } from "@/lib/db/schema";
 import { audit } from "@/lib/auth/audit";
-import { ForbiddenError, requireSession } from "@/lib/auth/session";
+import {
+  ForbiddenError,
+  invalidateDisabledCache,
+  requireSession,
+} from "@/lib/auth/session";
 
 import {
   err,
@@ -138,20 +142,6 @@ export async function setUserRoleAction(
   const parsed = SetRoleSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  // Guard against an admin demoting themselves while there's only one admin.
-  if (parsed.data.user_id === ctx.user_id && parsed.data.role !== "admin") {
-    const adminCount = await db
-      .select({ count: sql<number>`COUNT(*)::int` })
-      .from(appUser)
-      .where(eq(appUser.role, "admin"));
-    if ((adminCount[0]?.count ?? 0) <= 1) {
-      return err(
-        "conflict",
-        "Refusing to demote the last remaining admin. Promote another user first.",
-      );
-    }
-  }
-
   // Promoting an employee → manager/admin should force MFA on. Demoting
   // does not auto-clear `mfa_required` — keeping the stronger setting is
   // safer than silently weakening it; admins can flip it off explicitly.
@@ -159,12 +149,57 @@ export async function setUserRoleAction(
   if (parsed.data.role !== "employee") {
     updates.mfa_required = true;
   }
-  const updated = await db
-    .update(appUser)
-    .set(updates)
-    .where(eq(appUser.user_id, parsed.data.user_id))
-    .returning({ user_id: appUser.user_id, role: appUser.role });
-  if (!updated[0]) {
+
+  // Wrap the last-admin check + the role write in a transaction with
+  // `SELECT ... FOR UPDATE` on the admin rows. Two admins demoting each
+  // other concurrently used to both pass the count check and both
+  // succeed, leaving zero admins (was H-002 in the pre-launch pen test).
+  // The row lock serializes the check.
+  const demotingSelf =
+    parsed.data.user_id === ctx.user_id && parsed.data.role !== "admin";
+
+  let result: { user_id: string; role: "admin" | "manager" | "employee" } | null = null;
+  let conflictReason: string | null = null;
+
+  await db.transaction(async (tx) => {
+    if (demotingSelf) {
+      const admins = await tx
+        .select({ user_id: appUser.user_id })
+        .from(appUser)
+        .where(eq(appUser.role, "admin"))
+        .for("update");
+      if (admins.length <= 1) {
+        conflictReason = "last_admin_guard";
+        return;
+      }
+    }
+    const updated = await tx
+      .update(appUser)
+      .set(updates)
+      .where(eq(appUser.user_id, parsed.data.user_id))
+      .returning({ user_id: appUser.user_id, role: appUser.role });
+    result = updated[0] ?? null;
+  });
+
+  if (conflictReason === "last_admin_guard") {
+    // Audit the *attempt* — without this, repeated probing of
+    // privilege-escalation endpoints leaves no trail (was H-006).
+    await audit(ctx, {
+      action: "user_role_change_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
+    return err(
+      "conflict",
+      "Refusing to demote the last remaining admin. Promote another user first.",
+    );
+  }
+  if (!result) {
+    await audit(ctx, {
+      action: "user_role_change_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
     return err("not_found", "User not found.");
   }
 
@@ -175,7 +210,7 @@ export async function setUserRoleAction(
   });
 
   revalidatePath("/settings/users");
-  return ok(updated[0]);
+  return ok(result);
 }
 
 /* ---------- disable / enable ---------- */
@@ -200,6 +235,11 @@ export async function setUserDisabledAction(
   if (!parsed.success) return fromZod(parsed.error);
 
   if (parsed.data.user_id === ctx.user_id && parsed.data.disabled) {
+    await audit(ctx, {
+      action: "user_disable_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
     return err("conflict", "You can't disable your own account.");
   }
 
@@ -212,6 +252,11 @@ export async function setUserDisabledAction(
       is_disabled: appUser.is_disabled,
     });
   if (!updated[0]) {
+    await audit(ctx, {
+      action: "user_disable_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
     return err("not_found", "User not found.");
   }
 
@@ -220,6 +265,10 @@ export async function setUserDisabledAction(
     target_type: "app_user",
     target_id: parsed.data.user_id,
   });
+
+  // Bust the cache so the next protected request sees the new state
+  // immediately, not after the 30s TTL.
+  invalidateDisabledCache(parsed.data.user_id);
 
   revalidatePath("/settings/users");
   return ok(updated[0]);
