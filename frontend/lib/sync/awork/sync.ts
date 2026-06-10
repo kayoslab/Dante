@@ -28,6 +28,7 @@ import { syncDrizzle } from "@/lib/sync/db";
 import { excludedSet } from "@/lib/sync/_upsert";
 
 import type { AworkClient } from "./client";
+import { aworkUserStatus } from "./schemas";
 import type { AworkCustomFieldValue, AworkProject } from "./schemas";
 
 function dateOnly(iso: unknown): string | null {
@@ -134,7 +135,7 @@ export async function syncAworkUsers(
         is_archived: item.isArchived ?? null,
         is_deactivated: item.isDeactivated ?? null,
         is_external: item.isExternal ?? null,
-        status: item.status ?? null,
+        status: aworkUserStatus(item.status),
         created_on: toDate(item.createdOn),
         last_seen_sync_run_id: sync_run_id,
         last_updated_at: now,

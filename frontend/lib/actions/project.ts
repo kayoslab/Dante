@@ -4,11 +4,18 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db/client";
-import { getProjectDetail, type ProjectDetail, type Rate } from "@/lib/db/queries/project";
+import { audit } from "@/lib/auth/audit";
+import {
+  getProjectDetail,
+  type ProjectDetail,
+  type Rate,
+} from "@/lib/db/queries/project";
 import {
   assignment,
+  aworkProjectLink,
   customer,
   frameworkAgreement,
+  personioProjectLink,
   project,
   projectRate,
 } from "@/lib/db/schema";
@@ -286,9 +293,6 @@ export async function deleteProjectAction(
     }
   }
   await db.delete(project).where(eq(project.project_id, project_id));
-  // inArray is referenced only as a guard against unused-import warnings
-  // when force=false; keep the type-narrowing import alive here.
-  void inArray;
   return ok(null);
 }
 
@@ -464,4 +468,140 @@ function isUniqueViolation(e: unknown): boolean {
     "code" in e &&
     (e as { code?: string }).code === "23505"
   );
+}
+
+// ----------------------------------------------------------------------------
+// Merge — fold one project's references into another and delete the source.
+//
+// Common case: the awork bulk import and a manual project creation both
+// invent an internal project for the same engagement, so the same customer
+// engagement ends up split across two `project` rows. Rather than asking
+// the operator to fix this in psql every time, merge moves assignments,
+// rates, and Personio/awork link rows over and deletes the source row in
+// one transaction.
+//
+// Conflict resolution on `project_rate`: PK is (project_id, profile,
+// valid_from). When the source has a rate that collides with an existing
+// target rate, the source row is dropped (target wins). Document this
+// in the dialog so the operator picks the target accordingly.
+// ----------------------------------------------------------------------------
+
+const MergeSchema = z.object({
+  source_project_id: z.number().int().positive(),
+  target_project_id: z.number().int().positive(),
+  /** Require the operator to acknowledge that this destroys data. */
+  confirm: z.literal(true),
+});
+
+export type MergeProjectsResult = {
+  target_project_id: number;
+  moved_assignments: number;
+  moved_rates: number;
+  dropped_rates: number; // rates on source that conflicted with target's
+  moved_personio_links: number;
+  moved_awork_links: number;
+};
+
+export async function mergeProjectsAction(
+  input: unknown,
+): Promise<ActionResult<MergeProjectsResult>> {
+  const auth = await requireActionRole("manager");
+  if (!auth.ok) return auth.result;
+
+  const parsed = MergeSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+  const { source_project_id, target_project_id } = parsed.data;
+
+  if (source_project_id === target_project_id) {
+    return err("validation_error", "Source and target must differ.");
+  }
+
+  // Pre-flight outside the transaction so the not-found error path doesn't
+  // have to fight Drizzle's transaction callback typing.
+  const both = await db
+    .select({ id: project.project_id })
+    .from(project)
+    .where(inArray(project.project_id, [source_project_id, target_project_id]));
+  if (both.length !== 2) {
+    return err("not_found", "Source or target project not found.");
+  }
+
+  const result = await db.transaction(async (tx) => {
+    // Drop conflicting rate rows on the source — source loses, target keeps.
+    const conflicting = await tx
+      .select({ profile: projectRate.profile, valid_from: projectRate.valid_from })
+      .from(projectRate)
+      .where(eq(projectRate.project_id, source_project_id));
+    let dropped_rates = 0;
+    if (conflicting.length > 0) {
+      const targetRates = await tx
+        .select({ profile: projectRate.profile, valid_from: projectRate.valid_from })
+        .from(projectRate)
+        .where(eq(projectRate.project_id, target_project_id));
+      const targetKeys = new Set(targetRates.map((r) => `${r.profile}|${r.valid_from}`));
+      const dropKeys = conflicting
+        .filter((r) => targetKeys.has(`${r.profile}|${r.valid_from}`))
+        .map((r) => `${r.profile}|${r.valid_from}`);
+      for (const key of dropKeys) {
+        const [profile, valid_from] = key.split("|");
+        await tx
+          .delete(projectRate)
+          .where(
+            and(
+              eq(projectRate.project_id, source_project_id),
+              eq(projectRate.profile, profile),
+              eq(projectRate.valid_from, valid_from),
+            ),
+          );
+        dropped_rates += 1;
+      }
+    }
+
+    // Move the rest of the rates.
+    const movedRates = await tx
+      .update(projectRate)
+      .set({ project_id: target_project_id })
+      .where(eq(projectRate.project_id, source_project_id))
+      .returning({ profile: projectRate.profile });
+
+    // Move assignments (no UNIQUE on project_id, no conflict possible).
+    const movedAssignments = await tx
+      .update(assignment)
+      .set({ project_id: target_project_id })
+      .where(eq(assignment.project_id, source_project_id))
+      .returning({ id: assignment.assignment_id });
+
+    // Move Personio + awork link rows (PK is the upstream id, not project_id).
+    const movedPersonio = await tx
+      .update(personioProjectLink)
+      .set({ project_id: target_project_id })
+      .where(eq(personioProjectLink.project_id, source_project_id))
+      .returning({ id: personioProjectLink.personio_project_id });
+
+    const movedAwork = await tx
+      .update(aworkProjectLink)
+      .set({ project_id: target_project_id })
+      .where(eq(aworkProjectLink.project_id, source_project_id))
+      .returning({ id: aworkProjectLink.awork_project_id });
+
+    // Drop the now-orphaned source project.
+    await tx.delete(project).where(eq(project.project_id, source_project_id));
+
+    return {
+      target_project_id,
+      moved_assignments: movedAssignments.length,
+      moved_rates: movedRates.length,
+      dropped_rates,
+      moved_personio_links: movedPersonio.length,
+      moved_awork_links: movedAwork.length,
+    } satisfies MergeProjectsResult;
+  });
+
+  await audit(auth.ctx, {
+    action: "project_merged",
+    target_type: "project",
+    target_id: `${source_project_id}->${target_project_id}`,
+  });
+
+  return ok(result);
 }

@@ -43,6 +43,19 @@ const ContactInfoSchema = z
   })
   .passthrough();
 
+// awork's `/users` endpoint returns `status` as either a plain string
+// (legacy) or a `{ id, name }` enum-reference object. Accept both at
+// the boundary; the consumer flattens it via `aworkUserStatus()`.
+const AworkUserStatusSchema = z.union([
+  z.string(),
+  z
+    .object({
+      id: z.string().nullish(),
+      name: z.string().nullish(),
+    })
+    .passthrough(),
+]);
+
 export const AworkUserSchema = z
   .object({
     id: z.string(),
@@ -54,12 +67,22 @@ export const AworkUserSchema = z
     isArchived: z.boolean().nullish(),
     isDeactivated: z.boolean().nullish(),
     isExternal: z.boolean().nullish(),
-    status: z.string().nullish(),
+    status: AworkUserStatusSchema.nullish(),
     createdOn: dateStringOrNull,
     userContactInfos: z.array(ContactInfoSchema).nullish(),
   })
   .passthrough();
 export type AworkUser = z.infer<typeof AworkUserSchema>;
+
+/** Pull a writable string out of the polymorphic `status` field — the
+ * `name` of the enum object if present, the raw string otherwise. */
+export function aworkUserStatus(
+  raw: AworkUser["status"] | null | undefined,
+): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "string") return raw;
+  return raw.name ?? raw.id ?? null;
+}
 
 const ProjectStatusSchema = z
   .object({

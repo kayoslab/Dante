@@ -14,6 +14,7 @@ import { AddRateDialog } from "@/components/framework/add-rate-dialog";
 import { EditRateDialog } from "@/components/framework/edit-rate-dialog";
 import { DeleteProjectDialog } from "@/components/project/delete-project-dialog";
 import { EditProjectDialog } from "@/components/project/edit-project-dialog";
+import { MergeProjectDialog } from "@/components/project/merge-project-dialog";
 import { ProjectEconomicsCard } from "@/components/project/project-economics";
 import { AworkLinkCard } from "@/components/project/awork-link-card";
 import { PersonioLinkCard } from "@/components/project/personio-link-card";
@@ -101,6 +102,11 @@ function ProjectBody({ data }: { data: ProjectDetail }) {
               notes: data.notes,
             }}
             frameworks={customer?.frameworks ?? []}
+          />
+          <MergeProjectDialog
+            targetProjectId={data.project_id}
+            customerId={data.customer_id}
+            targetName={data.name}
           />
           <DeleteProjectDialog
             projectId={data.project_id}

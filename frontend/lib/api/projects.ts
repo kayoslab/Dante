@@ -10,9 +10,13 @@ import {
   createProjectAction,
   deleteProjectAction,
   deleteProjectRateAction,
+  mergeProjectsAction,
   updateProjectAction,
   updateProjectRateAction,
+  type MergeProjectsResult,
 } from "@/lib/actions/project";
+
+export type { MergeProjectsResult };
 
 export type { ProjectDetail };
 export type { ProjectCreate };
@@ -136,6 +140,27 @@ export function useAddProjectRate(project_id: number) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: projectKeys.detail(project_id) });
+    },
+  });
+}
+
+export function useMergeProjects(target_project_id: number, customer_id: number) {
+  const qc = useQueryClient();
+  return useMutation<MergeProjectsResult, Error, number>({
+    mutationFn: async (source_project_id) => {
+      const r = await mergeProjectsAction({
+        source_project_id,
+        target_project_id,
+        confirm: true,
+      });
+      if (!r.ok) throw new APIError(r.error.detail, r.error.code);
+      return r.data;
+    },
+    onSuccess: (_data, source_project_id) => {
+      qc.invalidateQueries({ queryKey: projectKeys.detail(target_project_id) });
+      qc.invalidateQueries({ queryKey: projectKeys.detail(source_project_id) });
+      qc.invalidateQueries({ queryKey: customerKeys.detail(customer_id) });
+      qc.invalidateQueries({ queryKey: ["projects-list"] });
     },
   });
 }

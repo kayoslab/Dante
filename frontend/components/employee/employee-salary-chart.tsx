@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import {
   CartesianGrid,
   ComposedChart,
@@ -162,7 +162,15 @@ export function EmployeeSalaryChart({ employeeId }: { employeeId: number }) {
                             </div>,
                           );
                         }
-                        return [<>{lines}</>, ""];
+                        // Recharts' formatter returns a [value, name] tuple
+                        // that the chart renders as siblings in a flex row.
+                        // Shortcut Fragment `<>...</>` can't take a key, and
+                        // React warns when array siblings are unkeyed — use
+                        // the explicit Fragment form instead.
+                        return [
+                          <Fragment key="lines">{lines}</Fragment>,
+                          "",
+                        ];
                       }}
                     />
                   }
