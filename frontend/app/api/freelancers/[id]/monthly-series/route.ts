@@ -1,7 +1,8 @@
 import type { NextRequest } from "next/server";
 
-import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 import { addMonths } from "@/lib/db/_monthly-helpers";
+import { computeFreelancerMonthly } from "@/lib/db/queries/freelancer-monthly";
 
 export async function GET(
   req: NextRequest,
@@ -34,10 +35,12 @@ export async function GET(
     let cur = from_month;
     while (cur <= to_month) {
       const monthYm = cur.slice(0, 7);
-      const b = await fetchJson(
-        req,
-        `/api/freelancers/${freelancer_id}/monthly?month=${monthYm}`,
-      );
+      // Direct in-process call — replaced an internal `fetchJson` of
+      // `/api/freelancers/[id]/monthly` that re-authed per month.
+      const b = await computeFreelancerMonthly(freelancer_id, monthYm);
+      if (b === null) {
+        throw NotFound(`freelancer not found: ${freelancer_id}`);
+      }
       points.push({
         month: b.month,
         cost: b.cost,
@@ -76,19 +79,4 @@ function firstOfThisMonthLocal(): string {
   return `${y.toString().padStart(4, "0")}-${m
     .toString()
     .padStart(2, "0")}-01`;
-}
-
-/** Resolve a Next-internal URL using the incoming request's origin. Used to
- * delegate to our own `/monthly` handler instead of duplicating the body —
- * cleanest way to keep the series in sync with the per-month port. */
-async function fetchJson(req: NextRequest, path: string): Promise<Record<string, unknown>> {
-  const origin = new URL(req.url).origin;
-  // Forward the session cookie so the Proxy doesn't gate internal aggregation
-  // fetches back to /login. Server-to-server fetch has no cookie by default.
-  const cookie = req.headers.get("cookie") ?? "";
-  const res = await fetch(origin + path, { headers: { cookie } });
-  if (!res.ok) {
-    throw new Error(`${path} → ${res.status}`);
-  }
-  return (await res.json()) as Record<string, unknown>;
 }

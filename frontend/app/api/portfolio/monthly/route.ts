@@ -13,6 +13,7 @@ import {
   lastOfMonth,
   workingDaysInRange,
 } from "@/lib/db/_monthly-helpers";
+import { computeProjectMonthly } from "@/lib/db/queries/project-monthly";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 
 export async function GET(req: NextRequest) {
@@ -60,10 +61,11 @@ export async function GET(req: NextRequest) {
       const billing_model = raw.billing_model as string;
       const customer_name = raw.customer_name as string;
 
-      const breakdown = await fetchSelf(
-        req,
-        `/api/projects/${project_id}/monthly?month=${monthRaw}`,
-      );
+      // Direct in-process call — replaced an internal `fetchSelf` of
+      // `/api/projects/[id]/monthly` that re-authed and re-queried per
+      // project. Same DB pool, no route-handler re-entry.
+      const breakdown = await computeProjectMonthly(project_id, monthRaw);
+      if (breakdown === null) continue;
       const assignments = breakdown.assignments as unknown[];
       const n_assignments = assignments.length;
       if (n_assignments === 0) continue;
@@ -248,19 +250,6 @@ export async function GET(req: NextRequest) {
       projects: project_rows,
     };
   });
-}
-
-async function fetchSelf(
-  req: NextRequest,
-  path: string,
-): Promise<Record<string, unknown>> {
-  const origin = new URL(req.url).origin;
-  // Forward the session cookie so the Proxy doesn't gate internal aggregation
-  // fetches back to /login. Server-to-server fetch has no cookie by default.
-  const cookie = req.headers.get("cookie") ?? "";
-  const res = await fetch(origin + path, { headers: { cookie } });
-  if (!res.ok) throw new Error(`${path} → ${res.status}`);
-  return (await res.json()) as Record<string, unknown>;
 }
 
 async function buildUnallocatedPayroll(

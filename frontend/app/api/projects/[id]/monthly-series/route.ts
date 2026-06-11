@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 
 import { db } from "@/lib/db/client";
 import { addMonths, firstOfMonth } from "@/lib/db/_monthly-helpers";
+import { computeProjectMonthly } from "@/lib/db/queries/project-monthly";
 import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
 import { requireApiProjectAccess } from "@/lib/auth/project-capability";
 
@@ -45,10 +46,13 @@ export async function GET(
     let cur = from_month;
     while (cur <= to_month) {
       const monthYm = cur.slice(0, 7);
-      const b = await fetchSelf(
-        req,
-        `/api/projects/${project_id}/monthly?month=${monthYm}`,
-      );
+      // Direct in-process call — replaced an internal `fetchSelf` that
+      // re-authed and re-routed per month.
+      const b = await computeProjectMonthly(project_id, monthYm);
+      if (b === null) {
+        // Mid-series the project disappeared — bail to avoid undefined access.
+        throw NotFound(`project not found mid-series: ${project_id}`);
+      }
       points.push({
         month: b.month,
         working_days_in_month: b.working_days_in_month,
@@ -87,17 +91,4 @@ export async function GET(
       points,
     };
   });
-}
-
-async function fetchSelf(
-  req: NextRequest,
-  path: string,
-): Promise<Record<string, unknown>> {
-  const origin = new URL(req.url).origin;
-  // Forward the session cookie so the Proxy doesn't gate internal aggregation
-  // fetches back to /login. Server-to-server fetch has no cookie by default.
-  const cookie = req.headers.get("cookie") ?? "";
-  const res = await fetch(origin + path, { headers: { cookie } });
-  if (!res.ok) throw new Error(`${path} → ${res.status}`);
-  return (await res.json()) as Record<string, unknown>;
 }

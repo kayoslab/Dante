@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 
 import { audit } from "@/lib/auth/audit";
-import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 import { addMonths } from "@/lib/db/_monthly-helpers";
+import { computeEmployeeMonthly } from "@/lib/db/queries/employee-monthly";
 
 export async function GET(
   req: NextRequest,
@@ -35,10 +36,14 @@ export async function GET(
     let cur = from_month;
     while (cur <= to_month) {
       const monthYm = cur.slice(0, 7);
-      const b = await fetchSelf(
-        req,
-        `/api/employees/${employee_id}/monthly?month=${monthYm}`,
-      );
+      // Direct in-process call — replaced an internal `fetchSelf` of
+      // `/api/employees/[id]/monthly` that re-authed per month. The
+      // series-level audit below covers the access; we deliberately
+      // don't audit per-month so a 10-month view doesn't write 10 rows.
+      const b = await computeEmployeeMonthly(employee_id, monthYm);
+      if (b === null) {
+        throw NotFound(`employee not found: ${employee_id}`);
+      }
       points.push({
         month: b.month,
         under_contract: (b.under_contract as boolean | undefined) ?? true,
@@ -85,17 +90,4 @@ function firstOfThisMonth(): string {
   return `${y.toString().padStart(4, "0")}-${m
     .toString()
     .padStart(2, "0")}-01`;
-}
-
-async function fetchSelf(
-  req: NextRequest,
-  path: string,
-): Promise<Record<string, unknown>> {
-  const origin = new URL(req.url).origin;
-  // Forward the session cookie so the Proxy doesn't gate internal aggregation
-  // fetches back to /login. Server-to-server fetch has no cookie by default.
-  const cookie = req.headers.get("cookie") ?? "";
-  const res = await fetch(origin + path, { headers: { cookie } });
-  if (!res.ok) throw new Error(`${path} → ${res.status}`);
-  return (await res.json()) as Record<string, unknown>;
 }
