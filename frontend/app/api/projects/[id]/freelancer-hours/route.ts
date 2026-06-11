@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 
-import { getProjectDetail } from "@/lib/db/queries/project";
-import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
+import { Validation, handle } from "@/lib/api/_route-helpers";
 import { requireApiProjectAccess } from "@/lib/auth/project-capability";
+import { getFreelancerHoursForProject } from "@/lib/db/queries/freelancer-hours";
 
 export async function GET(
   _req: NextRequest,
@@ -15,8 +15,6 @@ export async function GET(
       throw Validation(`invalid project id: ${rawId}`);
     }
     await requireApiProjectAccess(project_id);
-    const detail = await getProjectDetail(project_id);
-    if (!detail) throw NotFound(`project not found: ${project_id}`);
-    return detail;
+    return getFreelancerHoursForProject(project_id);
   });
 }

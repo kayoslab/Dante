@@ -12,12 +12,14 @@ import {
 } from "@/lib/db/queries/project";
 import {
   assignment,
+  appUser,
   aworkProjectLink,
   customer,
   frameworkAgreement,
   personioProjectLink,
   project,
   projectRate,
+  projectSdm,
 } from "@/lib/db/schema";
 
 import {
@@ -27,6 +29,7 @@ import {
   requireActionRole,
   type ActionResult,
 } from "./_action-helpers";
+import { requireProjectAccess } from "@/lib/auth/project-capability";
 
 const IsoDate = z
   .string()
@@ -176,12 +179,12 @@ export async function updateProjectAction(
   project_id: number,
   input: unknown,
 ): Promise<ActionResult<ProjectDetail>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(project_id)) {
     return err("validation_error", `invalid project id: ${project_id}`);
   }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
+
   const parsed = UpdateProjectSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
@@ -313,12 +316,12 @@ export async function addProjectRateAction(
   project_id: number,
   input: unknown,
 ): Promise<ActionResult<Rate>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(project_id)) {
     return err("validation_error", `invalid project id: ${project_id}`);
   }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
+
   const parsed = RateCreateSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
@@ -372,15 +375,15 @@ export async function updateProjectRateAction(
   valid_from: string,
   input: unknown,
 ): Promise<ActionResult<Rate>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(project_id)) {
     return err("validation_error", `invalid project id: ${project_id}`);
   }
   if (!IsoDate.safeParse(valid_from).success) {
     return err("validation_error", "valid_from must be YYYY-MM-DD");
   }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
+
   const parsed = RateUpdateSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
@@ -424,15 +427,15 @@ export async function deleteProjectRateAction(
   profile: string,
   valid_from: string,
 ): Promise<ActionResult<null>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(project_id)) {
     return err("validation_error", `invalid project id: ${project_id}`);
   }
   if (!IsoDate.safeParse(valid_from).success) {
     return err("validation_error", "valid_from must be YYYY-MM-DD");
   }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
+
   const existing = await db
     .select({ existing: projectRate.daily_rate_eur })
     .from(projectRate)
@@ -604,4 +607,96 @@ export async function mergeProjectsAction(
   });
 
   return ok(result);
+}
+
+// ----------------------------------------------------------------------------
+// Service Delivery Manager grants — admin-only mutations.
+//
+// SDM grants are intentionally bypassed by the project capability check
+// for admin/manager roles. The two actions below are the ONLY way the
+// `project_sdm` table is written from app code.
+// ----------------------------------------------------------------------------
+
+const GrantSdmSchema = z.object({
+  project_id: z.number().int().positive(),
+  user_id: z.string().uuid(),
+});
+
+const RevokeSdmSchema = GrantSdmSchema;
+
+export async function grantProjectSdmAction(
+  input: unknown,
+): Promise<ActionResult<null>> {
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+
+  const parsed = GrantSdmSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+  const { project_id, user_id } = parsed.data;
+
+  // Sanity: both must exist. Granting on a deleted/missing target is a
+  // foot-gun even though the FK would catch it — the error message is
+  // friendlier here.
+  const [proj] = await db
+    .select({ id: project.project_id })
+    .from(project)
+    .where(eq(project.project_id, project_id));
+  if (!proj) return err("not_found", `project not found: ${project_id}`);
+
+  const [user] = await db
+    .select({ id: appUser.user_id, role: appUser.role })
+    .from(appUser)
+    .where(eq(appUser.user_id, user_id));
+  if (!user) return err("not_found", `user not found: ${user_id}`);
+  if (user.role !== "employee") {
+    return err(
+      "validation_error",
+      "Only employee-role users need SDM grants — admin/manager already have project access.",
+    );
+  }
+
+  await db
+    .insert(projectSdm)
+    .values({
+      project_id,
+      user_id,
+      granted_by: auth.ctx.user_id,
+    })
+    .onConflictDoNothing();
+
+  await audit(auth.ctx, {
+    action: "project_sdm_granted",
+    target_type: "project",
+    target_id: `${project_id}/${user_id}`,
+  });
+
+  return ok(null);
+}
+
+export async function revokeProjectSdmAction(
+  input: unknown,
+): Promise<ActionResult<null>> {
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+
+  const parsed = RevokeSdmSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+  const { project_id, user_id } = parsed.data;
+
+  await db
+    .delete(projectSdm)
+    .where(
+      and(
+        eq(projectSdm.project_id, project_id),
+        eq(projectSdm.user_id, user_id),
+      ),
+    );
+
+  await audit(auth.ctx, {
+    action: "project_sdm_revoked",
+    target_type: "project",
+    target_id: `${project_id}/${user_id}`,
+  });
+
+  return ok(null);
 }

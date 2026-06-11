@@ -14,7 +14,9 @@ import { AddRateDialog } from "@/components/framework/add-rate-dialog";
 import { EditRateDialog } from "@/components/framework/edit-rate-dialog";
 import { DeleteProjectDialog } from "@/components/project/delete-project-dialog";
 import { EditProjectDialog } from "@/components/project/edit-project-dialog";
+import { FreelancerHoursCard } from "@/components/project/freelancer-hours-card";
 import { MergeProjectDialog } from "@/components/project/merge-project-dialog";
+import { ProjectSdmCard } from "@/components/project/project-sdm-card";
 import { ProjectEconomicsCard } from "@/components/project/project-economics";
 import { AworkLinkCard } from "@/components/project/awork-link-card";
 import { PersonioLinkCard } from "@/components/project/personio-link-card";
@@ -25,18 +27,30 @@ import { AddAssignmentDialog } from "@/components/assignment/add-assignment-dial
 import { AssignmentsTable } from "@/components/assignment/assignments-table";
 import { formatEUR, formatRate } from "@/lib/format";
 
-export function ProjectDetailClient({ project_id }: { project_id: number }) {
+export function ProjectDetailClient({
+  project_id,
+  viewer_role,
+}: {
+  project_id: number;
+  viewer_role: "admin" | "manager" | "employee";
+}) {
   return (
     <DetailPageShell
       params={Promise.resolve({ id: String(project_id) })}
       useDetail={useProject}
     >
-      {(data) => <ProjectBody data={data} />}
+      {(data) => <ProjectBody data={data} viewer_role={viewer_role} />}
     </DetailPageShell>
   );
 }
 
-function ProjectBody({ data }: { data: ProjectDetail }) {
+function ProjectBody({
+  data,
+  viewer_role,
+}: {
+  data: ProjectDetail;
+  viewer_role: "admin" | "manager" | "employee";
+}) {
   const delRate = useDeleteProjectRate(data.project_id);
   const { data: customer } = useCustomer(data.customer_id);
 
@@ -199,8 +213,17 @@ function ProjectBody({ data }: { data: ProjectDetail }) {
           <ProjectEconomicsCard economics={data.economics} />
           <PersonioLinkCard projectId={data.project_id} />
           <AworkLinkCard projectId={data.project_id} />
+          <ProjectSdmCard
+            projectId={data.project_id}
+            viewerRole={viewer_role}
+          />
         </div>
       </div>
+
+      <FreelancerHoursCard
+        projectId={data.project_id}
+        assignments={data.assignments}
+      />
 
       <ProjectLoggedTimeCard projectId={data.project_id} />
 

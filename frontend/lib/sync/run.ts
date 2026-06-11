@@ -23,6 +23,8 @@ import {
   syncAworkTimeEntries,
   autoLinkAworkUsersByEmail,
   autoLinkAworkCompaniesByName,
+  autoLinkAworkFreelancersByEmail,
+  rollupAworkHoursToFreelancers,
 } from "./awork/sync";
 import {
   bulkImportFromAwork,
@@ -188,10 +190,28 @@ async function runAworkSync(
   log(
     `  auto-linked ${users.new_links} awork user(s) to employees by email (${users.total} total)`,
   );
+  const freelancers = await autoLinkAworkFreelancersByEmail(conn);
+  log(
+    `  auto-linked ${freelancers.new_links} awork user(s) to freelancers by email (${freelancers.total} total)`,
+  );
   const companies = await autoLinkAworkCompaniesByName(conn);
   log(
     `  auto-linked ${companies.new_links} awork company(ies) to customers by name (${companies.total} total)`,
   );
+
+  // Roll up time entries → freelancer_time_entry (source='awork'). Runs
+  // after both project + freelancer links are in place so the JOIN can
+  // resolve every awork time entry it possibly can.
+  if (!opts.skip_time_entries) {
+    try {
+      const rollup = await rollupAworkHoursToFreelancers(conn);
+      log(
+        `  freelancer hours rollup: ${rollup.rows_upserted} (assignment, month) row(s) written`,
+      );
+    } catch (err) {
+      log(`  freelancer hours rollup: FAILED — ${formatSyncError(err)}`);
+    }
+  }
 
   if (opts.skip_awork_maintenance) {
     log("  (maintenance phase skipped — --skip-awork-maintenance)");

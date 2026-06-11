@@ -26,6 +26,7 @@ import {
   requireActionRole,
   type ActionResult,
 } from "./_action-helpers";
+import { requireProjectAccess } from "@/lib/auth/project-capability";
 
 // ----------------------------------------------------------------------------
 // personioProjectLink
@@ -45,12 +46,12 @@ export async function createPersonioLinkAction(
   project_id: number,
   input: unknown,
 ): Promise<ActionResult<PersonioProjectItem>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(project_id)) {
     return err("validation_error", `invalid project id: ${project_id}`);
   }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
+
   const parsed = PersonioLinkCreateSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
   const personio_project_id = parsed.data.personio_project_id;
@@ -107,12 +108,12 @@ export async function deletePersonioLinkAction(
   project_id: number,
   personio_project_id: number,
 ): Promise<ActionResult<null>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(project_id) || !Number.isInteger(personio_project_id)) {
     return err("validation_error", "invalid id(s)");
   }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
+
   const existing = await db
     .select({ id: personioProjectLink.personio_project_id })
     .from(personioProjectLink)
@@ -157,12 +158,12 @@ export async function createAworkProjectLinkAction(
   project_id: number,
   input: unknown,
 ): Promise<ActionResult<AworkProjectItem>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(project_id)) {
     return err("validation_error", `invalid project id: ${project_id}`);
   }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
+
   const parsed = AworkProjectLinkCreateSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
   const awork_project_id = parsed.data.awork_project_id;
@@ -216,12 +217,12 @@ export async function deleteAworkProjectLinkAction(
   project_id: number,
   awork_project_id: string,
 ): Promise<ActionResult<null>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(project_id)) {
     return err("validation_error", `invalid project id: ${project_id}`);
   }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
+
   const existing = await db
     .select({ id: aworkProjectLink.awork_project_id })
     .from(aworkProjectLink)

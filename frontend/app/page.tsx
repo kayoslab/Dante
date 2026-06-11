@@ -1,9 +1,11 @@
 import Link from "next/link";
 
+import { SdmProjectsSection } from "@/components/home/sdm-projects-section";
 import { PortfolioMonthlyCard } from "@/components/portfolio/portfolio-monthly-card";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { hasRole, requireSession } from "@/lib/auth/session";
+import { getSdmProjectTiles } from "@/lib/db/queries/sdm-home";
 
 export default async function Home() {
   const ctx = await requireSession();
@@ -12,6 +14,9 @@ export default async function Home() {
   // revenue — financial data they can't see. Give them a focused welcome
   // pointing at /profile and /calendar.
   if (!hasRole(ctx, "manager")) {
+    // SDMs (employee-role users with project_sdm grants) get an extra
+    // section above the welcome cards listing their managed projects.
+    const sdmTiles = await getSdmProjectTiles(ctx.user_id);
     return (
       <div className="space-y-6">
         <div>
@@ -22,6 +27,8 @@ export default async function Home() {
             Your home for assignments, time tracking, and team visibility.
           </p>
         </div>
+
+        <SdmProjectsSection tiles={sdmTiles} />
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Card>

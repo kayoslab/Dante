@@ -39,12 +39,26 @@ import {
   err,
   fromZod,
   ok,
-  requireActionRole,
   type ActionResult,
 } from "./_action-helpers";
+import { requireProjectAccess } from "@/lib/auth/project-capability";
 
 const WORKING_DAYS_PER_MONTH = 20;
 const WEEKS_PER_MONTH = 52 / 12;
+
+/** Resolve the project_id behind an assignment so we can run the project
+ * capability check. Returns null when no such assignment exists — caller
+ * surfaces that as a not_found ActionResult. */
+async function projectIdOfAssignment(
+  assignment_id: number,
+): Promise<number | null> {
+  const [row] = await db
+    .select({ project_id: assignment.project_id })
+    .from(assignment)
+    .where(eq(assignment.assignment_id, assignment_id))
+    .limit(1);
+  return row?.project_id ?? null;
+}
 
 const IsoDate = z
   .string()
@@ -185,11 +199,12 @@ export type EstimateResponse = {
 export async function estimateAssignmentAction(
   input: unknown,
 ): Promise<ActionResult<EstimateResponse>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
+  // Parse first so we can derive project_id for the capability check.
   const parsed = EstimateRequestSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
+  const auth = await requireProjectAccess(parsed.data.project_id);
+  if (!auth.ok) return auth.result;
+
   const {
     employee_id = null,
     freelancer_id = null,
@@ -341,11 +356,11 @@ export async function estimateAssignmentAction(
 export async function createAssignmentAction(
   input: unknown,
 ): Promise<ActionResult<AssignmentDetail>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   const parsed = CreateAssignmentSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
+  const auth = await requireProjectAccess(parsed.data.project_id);
+  if (!auth.ok) return auth.result;
+
   const {
     employee_id = null,
     freelancer_id = null,
@@ -437,12 +452,15 @@ export async function updateAssignmentAction(
   assignment_id: number,
   input: unknown,
 ): Promise<ActionResult<AssignmentDetail>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(assignment_id)) {
     return err("validation_error", `invalid assignment id: ${assignment_id}`);
   }
+  const project_id = await projectIdOfAssignment(assignment_id);
+  if (project_id === null) {
+    return err("not_found", `assignment not found: ${assignment_id}`);
+  }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
   const parsed = UpdateAssignmentSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
@@ -507,12 +525,15 @@ export async function endAssignmentAction(
   assignment_id: number,
   input: unknown,
 ): Promise<ActionResult<AssignmentDetail>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(assignment_id)) {
     return err("validation_error", `invalid assignment id: ${assignment_id}`);
   }
+  const project_id = await projectIdOfAssignment(assignment_id);
+  if (project_id === null) {
+    return err("not_found", `assignment not found: ${assignment_id}`);
+  }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
   const parsed = EndAssignmentSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
@@ -544,12 +565,15 @@ export async function endAssignmentAction(
 export async function deleteAssignmentAction(
   assignment_id: number,
 ): Promise<ActionResult<null>> {
-  const auth = await requireActionRole("manager");
-  if (!auth.ok) return auth.result;
-
   if (!Number.isInteger(assignment_id)) {
     return err("validation_error", `invalid assignment id: ${assignment_id}`);
   }
+  const project_id = await projectIdOfAssignment(assignment_id);
+  if (project_id === null) {
+    return err("not_found", `assignment not found: ${assignment_id}`);
+  }
+  const auth = await requireProjectAccess(project_id);
+  if (!auth.ok) return auth.result;
   const existing = await db
     .select({ id: assignment.assignment_id })
     .from(assignment)

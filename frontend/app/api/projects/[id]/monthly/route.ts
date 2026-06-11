@@ -23,19 +23,20 @@ import {
   unassignedTrackedForProject,
   workingDaysInRange,
 } from "@/lib/db/_monthly-helpers";
-import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
+import { requireApiProjectAccess } from "@/lib/auth/project-capability";
 
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   return handle(async () => {
-    await requireApiSession({ minRole: "manager" });
     const { id: rawId } = await params;
     const project_id = Number(rawId);
     if (!Number.isInteger(project_id)) {
       throw Validation(`invalid project id: ${rawId}`);
     }
+    await requireApiProjectAccess(project_id);
     const { searchParams } = new URL(req.url);
     const monthRaw = searchParams.get("month") ?? "";
     if (!/^\d{4}-\d{2}$/.test(monthRaw)) {

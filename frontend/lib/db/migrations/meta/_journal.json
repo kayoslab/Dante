@@ -64,6 +64,20 @@
       "when": 1781107200000,
       "tag": "0008_app_user_mfa",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781568000000,
+      "tag": "0009_freelancer_hours_and_sdm",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781568300000,
+      "tag": "0010_awork_freelancer_link",
+      "breakpoints": true
     }
   ]
 }

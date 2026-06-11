@@ -10,13 +10,19 @@ import {
   createProjectAction,
   deleteProjectAction,
   deleteProjectRateAction,
+  grantProjectSdmAction,
   mergeProjectsAction,
+  revokeProjectSdmAction,
   updateProjectAction,
   updateProjectRateAction,
   type MergeProjectsResult,
 } from "@/lib/actions/project";
+import type {
+  GrantableUser,
+  ProjectSdmRow,
+} from "@/lib/db/queries/project-sdm";
 
-export type { MergeProjectsResult };
+export type { MergeProjectsResult, ProjectSdmRow, GrantableUser };
 
 export type { ProjectDetail };
 export type { ProjectCreate };
@@ -140,6 +146,68 @@ export function useAddProjectRate(project_id: number) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: projectKeys.detail(project_id) });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Service Delivery Managers
+// ---------------------------------------------------------------------------
+
+export function useProjectSdms(project_id: number, enabled: boolean) {
+  return useQuery<ProjectSdmRow[]>({
+    queryKey: [...projectKeys.detail(project_id), "sdms"],
+    queryFn: async () =>
+      apiGet<ProjectSdmRow[]>("/projects/{project_id}/sdms", {
+        path: { project_id },
+      }),
+    enabled,
+  });
+}
+
+export function useGrantableUsers(project_id: number, enabled: boolean) {
+  return useQuery<GrantableUser[]>({
+    queryKey: [...projectKeys.detail(project_id), "grantable-users"],
+    queryFn: async () =>
+      apiGet<GrantableUser[]>("/projects/{project_id}/grantable-users", {
+        path: { project_id },
+      }),
+    enabled,
+  });
+}
+
+export function useGrantProjectSdm(project_id: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (user_id: string) => {
+      const r = await grantProjectSdmAction({ project_id, user_id });
+      if (!r.ok) throw new APIError(r.error.detail, r.error.code);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: [...projectKeys.detail(project_id), "sdms"],
+      });
+      qc.invalidateQueries({
+        queryKey: [...projectKeys.detail(project_id), "grantable-users"],
+      });
+    },
+  });
+}
+
+export function useRevokeProjectSdm(project_id: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (user_id: string) => {
+      const r = await revokeProjectSdmAction({ project_id, user_id });
+      if (!r.ok) throw new APIError(r.error.detail, r.error.code);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: [...projectKeys.detail(project_id), "sdms"],
+      });
+      qc.invalidateQueries({
+        queryKey: [...projectKeys.detail(project_id), "grantable-users"],
+      });
     },
   });
 }

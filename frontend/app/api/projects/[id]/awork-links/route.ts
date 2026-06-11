@@ -2,19 +2,20 @@ import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
 import { db } from "@/lib/db/client";
-import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { Validation, handle } from "@/lib/api/_route-helpers";
+import { requireApiProjectAccess } from "@/lib/auth/project-capability";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   return handle(async () => {
-    await requireApiSession({ minRole: "manager" });
     const { id: rawId } = await params;
     const project_id = Number(rawId);
     if (!Number.isInteger(project_id)) {
       throw Validation(`invalid project id: ${rawId}`);
     }
+    await requireApiProjectAccess(project_id);
     const r = await db.execute(sql`
       SELECT ap.awork_project_id, ap.name, ap.project_key,
              ap.awork_company_id, co.name AS awork_company_name,

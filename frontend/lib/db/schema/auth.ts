@@ -5,6 +5,7 @@ import {
   index,
   integer,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -96,5 +97,33 @@ export const appAuditLog = pgTable(
   (t) => [
     index("app_audit_user_at_idx").on(t.user_id, t.occurred_at),
     index("app_audit_action_at_idx").on(t.action, t.occurred_at),
+  ],
+);
+
+/** Per-project Service Delivery Manager grant.
+ *
+ * SDM is a capability layered on top of the employee role, not a new
+ * tier in the role ladder. An employee-role user with any row here is
+ * treated as a manager for those specific project_ids (see
+ * canManageProject). Admin/manager roles short-circuit this check —
+ * they don't need rows in this table.
+ *
+ * The hot lookup is "what can this SDM access?" on the Home dashboard,
+ * which the user_id index serves directly. */
+export const projectSdm = pgTable(
+  "project_sdm",
+  {
+    project_id: integer().notNull(),
+    user_id: uuid()
+      .notNull()
+      .references(() => appUser.user_id, { onDelete: "cascade" }),
+    granted_at: timestamp({ mode: "date" }).notNull().defaultNow(),
+    granted_by: uuid().references(() => appUser.user_id, {
+      onDelete: "set null",
+    }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.project_id, t.user_id] }),
+    index("project_sdm_user_idx").on(t.user_id),
   ],
 );

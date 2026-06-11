@@ -104,6 +104,16 @@ export const aworkUserLink = pgTable("awork_user_link", {
   mapped_at: timestamp({ mode: "date" }).notNull(),
 });
 
+// awork users → our freelancer table. Separate from awork_user_link
+// because the same awork_user_id belongs to exactly one (employee XOR
+// freelancer) — keeping the two FKs in separate tables avoids the
+// nullable/XOR dance and lets each auto-linker run independently.
+export const aworkFreelancerLink = pgTable("awork_freelancer_link", {
+  awork_user_id: text().primaryKey(),
+  freelancer_id: integer().notNull(),
+  mapped_at: timestamp({ mode: "date" }).notNull(),
+});
+
 // awork companies → our customer.
 export const aworkCompanyLink = pgTable("awork_company_link", {
   awork_company_id: text().primaryKey(),

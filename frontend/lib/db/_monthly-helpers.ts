@@ -880,10 +880,29 @@ export async function cumulativeProjectCost(
 ): Promise<Decimal> {
   const has_time_mapping = await projectHasTimeMapping(project_id);
   const asnRes = await db.execute(sql`
-    SELECT employee_id, freelancer_id, allocation_pct, start_date,
-           end_date, daily_cost_override_eur
+    SELECT assignment_id, employee_id, freelancer_id, allocation_pct,
+           start_date, end_date, daily_cost_override_eur
     FROM assignment WHERE project_id = ${project_id}
   `);
+
+  // Pre-load freelancer monthly hours so the freelancer branch below can
+  // override allocation-based cost with actual hours when an entry exists.
+  // Both manual + awork-sourced rows count — the action layer guarantees
+  // only one row per (assignment, month). Empty map for projects with no
+  // freelancer assignments — that's the common case.
+  const freelancerHoursRes = await db.execute(sql`
+    SELECT fte.assignment_id, fte.year_month, fte.hours_decimal
+    FROM freelancer_time_entry fte
+    JOIN assignment a ON a.assignment_id = fte.assignment_id
+    WHERE a.project_id = ${project_id}
+  `);
+  const freelancerHours = new Map<string, Decimal>();
+  for (const r of freelancerHoursRes.rows as Array<Record<string, unknown>>) {
+    freelancerHours.set(
+      `${r.assignment_id}|${r.year_month}`,
+      new Decimal(r.hours_decimal as string),
+    );
+  }
 
   const holidayCache = new Map<number, Map<string, string>>();
   const wdCache = new Map<string, string[]>();
@@ -907,6 +926,7 @@ export async function cumulativeProjectCost(
 
   let total = new Decimal(0);
   for (const raw of asnRes.rows as Array<Record<string, unknown>>) {
+    const assignment_id = raw.assignment_id as number;
     const emp_id = raw.employee_id as number | null;
     const fl_id = raw.freelancer_id as number | null;
     const alloc = new Decimal(raw.allocation_pct as string);
@@ -944,7 +964,20 @@ export async function cumulativeProjectCost(
         cur_month = firstOfNextMonth(cur_month);
         continue;
       }
-      if (has_time_mapping && emp_id !== null) {
+      // Freelancer with entered hours for this month → use them instead
+      // of the allocation-based estimate. The hours table stores manual
+      // and awork-rollup rows interchangeably; either way it's "actual".
+      const fl_hours_key = `${assignment_id}|${m_start.slice(0, 7)}`;
+      const fl_entered_hours =
+        emp_id === null ? freelancerHours.get(fl_hours_key) : undefined;
+      if (fl_entered_hours !== undefined) {
+        // monthly_cost = daily_cost × 20 (see entityMonthlyCost freelancer
+        // branch). cost-per-hour = monthly_cost / (20 × standard_daily_hours).
+        const cost_per_hour = monthly_cost
+          .div(20)
+          .div(standard_daily_hours);
+        total = total.add(cost_per_hour.mul(fl_entered_hours));
+      } else if (has_time_mapping && emp_id !== null) {
         const tm = await trackedMinutesPerEmployeeInMonth(project_id, m_start, m_end);
         const tracked = tm.get(emp_id) ?? 0;
         if (tracked > 0) {
@@ -989,10 +1022,27 @@ export async function cumulativeProjectBurdenedCost(
   burden: number,
 ): Promise<Decimal> {
   const asnRes = await db.execute(sql`
-    SELECT employee_id, freelancer_id, allocation_pct, start_date,
-           end_date, daily_cost_override_eur
+    SELECT assignment_id, employee_id, freelancer_id, allocation_pct,
+           start_date, end_date, daily_cost_override_eur
     FROM assignment WHERE project_id = ${project_id}
   `);
+
+  // Same freelancer-hours override path as cumulativeProjectCost — see
+  // the comment there. Freelancer cost is unaffected by burden so the
+  // override formula is identical here.
+  const freelancerHoursRes = await db.execute(sql`
+    SELECT fte.assignment_id, fte.year_month, fte.hours_decimal
+    FROM freelancer_time_entry fte
+    JOIN assignment a ON a.assignment_id = fte.assignment_id
+    WHERE a.project_id = ${project_id}
+  `);
+  const freelancerHours = new Map<string, Decimal>();
+  for (const r of freelancerHoursRes.rows as Array<Record<string, unknown>>) {
+    freelancerHours.set(
+      `${r.assignment_id}|${r.year_month}`,
+      new Decimal(r.hours_decimal as string),
+    );
+  }
 
   const holidayCache = new Map<number, Map<string, string>>();
   const wdCache = new Map<string, string[]>();
@@ -1017,6 +1067,7 @@ export async function cumulativeProjectBurdenedCost(
 
   let total = new Decimal(0);
   for (const raw of asnRes.rows as Array<Record<string, unknown>>) {
+    const assignment_id = raw.assignment_id as number;
     const emp_id = raw.employee_id as number | null;
     const fl_id = raw.freelancer_id as number | null;
     const alloc = new Decimal(raw.allocation_pct as string);
@@ -1028,7 +1079,7 @@ export async function cumulativeProjectBurdenedCost(
         ? null
         : new Decimal(raw.daily_cost_override_eur as string);
 
-    const { monthly_cost } = await entityMonthlyCost(emp_id, fl_id, cost_ov, burden);
+    const { monthly_cost, standard_daily_hours } = await entityMonthlyCost(emp_id, fl_id, cost_ov, burden);
     if (monthly_cost === null) continue;
     const a_end_eff =
       a_end !== null && a_end < through_month_end ? a_end : through_month_end;
@@ -1051,7 +1102,16 @@ export async function cumulativeProjectBurdenedCost(
       }
       const weighted_alloc_i = alloc.mul(active_wd).div(full_month_wd);
       if (emp_id === null) {
-        total = total.add(monthly_cost.mul(weighted_alloc_i));
+        const fl_hours_key = `${assignment_id}|${m_start.slice(0, 7)}`;
+        const fl_entered_hours = freelancerHours.get(fl_hours_key);
+        if (fl_entered_hours !== undefined) {
+          const cost_per_hour = monthly_cost
+            .div(20)
+            .div(standard_daily_hours);
+          total = total.add(cost_per_hour.mul(fl_entered_hours));
+        } else {
+          total = total.add(monthly_cost.mul(weighted_alloc_i));
+        }
       } else {
         const key = `${emp_id}|${m_start}`;
         let total_W = weightedAllocCache.get(key);

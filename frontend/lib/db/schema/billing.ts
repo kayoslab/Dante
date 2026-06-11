@@ -1,5 +1,8 @@
+import { sql } from "drizzle-orm";
 import {
+  check,
   date,
+  index,
   integer,
   numeric,
   pgTable,
@@ -7,6 +10,8 @@ import {
   text,
   timestamp,
   unique,
+  uuid,
+  varchar,
 } from "drizzle-orm/pg-core";
 
 // External freelancers staffed on projects. Fixed daily cost, no salary/burden.
@@ -118,3 +123,39 @@ export const assignment = pgTable("assignment", {
   created_at: timestamp({ mode: "date" }).notNull(),
   updated_at: timestamp({ mode: "date" }).notNull(),
 });
+
+// Monthly hours actually worked by a freelancer on a project, for
+// profitability calc. SDM enters the number from the freelancer's
+// invoice; awork sync may also fill rows with source='awork' (manual
+// wins on conflict).
+//
+// The FK is to any assignment row; the action layer enforces that the
+// linked assignment has `freelancer_id IS NOT NULL` since CHECK can't
+// reference another table.
+export const freelancerTimeEntry = pgTable(
+  "freelancer_time_entry",
+  {
+    assignment_id: integer().notNull(),
+    year_month: varchar({ length: 7 }).notNull(),
+    hours_decimal: numeric({ precision: 8, scale: 2 }).notNull(),
+    source: text().notNull().default("manual").$type<"manual" | "awork">(),
+    entered_by: uuid(),
+    entered_at: timestamp({ mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.assignment_id, t.year_month] }),
+    index("freelancer_time_entry_month_idx").on(t.year_month),
+    check(
+      "freelancer_time_entry_year_month_chk",
+      sql`${t.year_month} ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'`,
+    ),
+    check(
+      "freelancer_time_entry_hours_nonneg_chk",
+      sql`${t.hours_decimal} >= 0`,
+    ),
+    check(
+      "freelancer_time_entry_source_chk",
+      sql`${t.source} IN ('manual', 'awork')`,
+    ),
+  ],
+);

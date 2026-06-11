@@ -19,6 +19,7 @@ import type { Client } from "pg";
 import {
   aworkCompany,
   aworkCompanyLink,
+  aworkFreelancerLink,
   aworkProject,
   aworkTimeEntry,
   aworkUser,
@@ -394,4 +395,107 @@ export async function autoLinkAworkCompaniesByName(
     "SELECT COUNT(*)::text AS count FROM awork_company_link",
   );
   return { new_links: rows.rows.length, total: Number(total.rows[0].count) };
+}
+
+/** Auto-link awork users to freelancers by email (case-insensitive).
+ *
+ * Sister to `autoLinkAworkUsersByEmail` — same shape but targets the
+ * freelancer table. An awork user matches at most one of (employee,
+ * freelancer) so a row appearing in both link tables is a data error
+ * worth investigating (operator's email collision). */
+export async function autoLinkAworkFreelancersByEmail(
+  conn: Client,
+): Promise<{ new_links: number; total: number }> {
+  const now = new Date();
+  const rows = await conn.query<{
+    awork_user_id: string;
+    freelancer_id: number;
+  }>(`
+    SELECT au.awork_user_id, f.freelancer_id
+    FROM awork_user au
+    JOIN freelancer f ON LOWER(f.contact_email) = LOWER(au.email)
+    LEFT JOIN awork_freelancer_link link ON link.awork_user_id = au.awork_user_id
+    WHERE link.awork_user_id IS NULL
+      AND au.email IS NOT NULL
+      AND f.contact_email IS NOT NULL
+  `);
+  const db = syncDrizzle(conn);
+  for (const r of rows.rows) {
+    await db
+      .insert(aworkFreelancerLink)
+      .values({
+        awork_user_id: r.awork_user_id,
+        freelancer_id: r.freelancer_id,
+        mapped_at: now,
+      })
+      .onConflictDoNothing();
+  }
+  const total = await conn.query<{ count: string }>(
+    "SELECT COUNT(*)::text AS count FROM awork_freelancer_link",
+  );
+  return { new_links: rows.rows.length, total: Number(total.rows[0].count) };
+}
+
+/** Roll up awork time entries into `freelancer_time_entry` rows.
+ *
+ * Per (assignment, year_month) — where the assignment is the freelancer
+ * assignment that matches both the linked freelancer (via
+ * `awork_freelancer_link`) and the linked project (via
+ * `awork_project_link`) on the entry's `work_date`.
+ *
+ * Conflict rule (must match the comment in `setFreelancerHoursAction`):
+ *   manual rows always win — we UPSERT with `source='awork'` and only
+ *   overwrite the value when the existing row's source is also 'awork'.
+ *
+ * Returns `{ rows_upserted }` so the caller can log how much hours data
+ * the rollup wrote in this run.
+ *
+ * Performance: one aggregate query + per-row UPSERT. For a 40-person
+ * org with maybe 3-5 active freelancers this is fine (<100 rows/run).
+ * If freelancer count grows we'd switch to a single INSERT … SELECT. */
+export async function rollupAworkHoursToFreelancers(
+  conn: Client,
+): Promise<{ rows_upserted: number }> {
+  const rows = await conn.query<{
+    assignment_id: number;
+    year_month: string;
+    hours_decimal: string;
+  }>(`
+    SELECT
+      a.assignment_id,
+      to_char(t.work_date, 'YYYY-MM') AS year_month,
+      ROUND(SUM(t.duration_minutes)::numeric / 60, 2)::text AS hours_decimal
+    FROM awork_time_entry t
+    JOIN awork_freelancer_link fl
+      ON fl.awork_user_id = t.awork_user_id
+    JOIN awork_project_link pl
+      ON pl.awork_project_id = t.awork_project_id
+    JOIN assignment a
+      ON a.project_id = pl.project_id
+      AND a.freelancer_id = fl.freelancer_id
+      AND t.work_date >= a.start_date
+      AND (a.end_date IS NULL OR t.work_date <= a.end_date)
+    WHERE t.duration_minutes IS NOT NULL
+    GROUP BY a.assignment_id, to_char(t.work_date, 'YYYY-MM')
+  `);
+
+  let upserts = 0;
+  for (const r of rows.rows) {
+    // Manual rows win — only update when the existing row is awork-sourced
+    // (or no row yet). The WHERE on the DO UPDATE clause enforces this.
+    const result = await conn.query(
+      `
+      INSERT INTO freelancer_time_entry
+        (assignment_id, year_month, hours_decimal, source, entered_at)
+      VALUES ($1, $2, $3, 'awork', now())
+      ON CONFLICT (assignment_id, year_month) DO UPDATE
+        SET hours_decimal = EXCLUDED.hours_decimal,
+            entered_at = now()
+        WHERE freelancer_time_entry.source = 'awork'
+      `,
+      [r.assignment_id, r.year_month, r.hours_decimal],
+    );
+    if (result.rowCount && result.rowCount > 0) upserts += 1;
+  }
+  return { rows_upserted: upserts };
 }
