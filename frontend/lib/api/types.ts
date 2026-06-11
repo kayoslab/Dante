@@ -1139,6 +1139,12 @@ export type MonthlyAssignmentRow = {
         tracked_days?: string | null;
         /** Tracked Revenue */
         tracked_revenue?: string | null;
+        /** Hours from `freelancer_time_entry` for this (assignment, month).
+         * Only set for freelancer rows. Drives the read-only Tracked column
+         * for freelancers; editing happens in the dedicated Hours card. */
+        entered_hours?: string | null;
+        /** 'manual' = SDM-entered, 'awork' = auto-filled from awork sync. */
+        entered_hours_source?: ("manual" | "awork") | null;
     };
 
 export type MonthlyBreakdown = {
@@ -1222,6 +1228,13 @@ export type MonthlyBreakdown = {
          * @default false
          */
         has_personio_mapping: boolean;
+        /**
+         * True when at least one freelancer_time_entry row exists for
+         * an assignment on this project in this month. UI uses this to
+         * decide whether to render the Tracked column for freelancers.
+         * @default false
+         */
+        has_freelancer_hours: boolean;
         /** Assignments */
         assignments: MonthlyAssignmentRow[];
         /**

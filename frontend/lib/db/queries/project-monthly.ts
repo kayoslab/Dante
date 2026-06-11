@@ -118,21 +118,28 @@ export async function computeProjectMonthly(
   // Entered freelancer hours for this month, keyed by assignment_id.
   // Used to override allocation-based cost with actual tracked hours
   // — same rule as cumulativeProjectCost, so monthly + cumulative
-  // numbers stay in sync.
+  // numbers stay in sync. We also surface the hours + source back to
+  // the UI so the assignment table can display them next to cost
+  // (read-only — the dedicated Freelancer Hours card remains the
+  // editing surface).
   const freelancerHoursRes = await db.execute(sql`
-    SELECT fte.assignment_id, fte.hours_decimal
+    SELECT fte.assignment_id, fte.hours_decimal, fte.source
     FROM freelancer_time_entry fte
     JOIN assignment a ON a.assignment_id = fte.assignment_id
     WHERE a.project_id = ${project_id}
       AND fte.year_month = ${monthYm}
   `);
-  const enteredHours = new Map<number, Decimal>();
+  const enteredHours = new Map<
+    number,
+    { hours: Decimal; source: "manual" | "awork" }
+  >();
   for (const r of freelancerHoursRes.rows as Array<Record<string, unknown>>) {
-    enteredHours.set(
-      r.assignment_id as number,
-      new Decimal(r.hours_decimal as string),
-    );
+    enteredHours.set(r.assignment_id as number, {
+      hours: new Decimal(r.hours_decimal as string),
+      source: r.source as "manual" | "awork",
+    });
   }
+  const has_freelancer_hours = enteredHours.size > 0;
 
   const assignment_rows: Array<Record<string, unknown>> = [];
   let total_revenue = new Decimal(0);
@@ -219,7 +226,8 @@ export async function computeProjectMonthly(
     let cost_share = new Decimal(0);
     const tracked_minutes_this_emp =
       emp_id !== null ? tracked_minutes_per_emp.get(emp_id) ?? 0 : 0;
-    const fl_entered = emp_id === null ? enteredHours.get(asn_id) : undefined;
+    const fl_entry = emp_id === null ? enteredHours.get(asn_id) : undefined;
+    const fl_entered = fl_entry?.hours;
     if (monthly_cost !== null && n_wd > 0) {
       if (fl_entered !== undefined) {
         // Freelancer with entered tracked hours — actuals win over the
@@ -352,6 +360,8 @@ export async function computeProjectMonthly(
         billing === "time_and_material" && emp_id !== null
           ? fmt(tracked_revenue, 2)
           : null,
+      entered_hours: fl_entered === undefined ? null : fl_entered.toFixed(2),
+      entered_hours_source: fl_entry?.source ?? null,
     });
 
     if (billing === "time_and_material") {
@@ -582,6 +592,7 @@ export async function computeProjectMonthly(
         ? total_tracked_revenue_dec.toFixed(2)
         : null,
     has_personio_mapping: has_time_mapping,
+    has_freelancer_hours,
     assignments: assignment_rows,
     unassigned_tracked,
   };

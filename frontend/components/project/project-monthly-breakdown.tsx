@@ -518,19 +518,45 @@ function TrackedCell({
   trackedHours,
   billableDays,
   isFreelancer,
+  enteredHours,
+  enteredHoursSource,
 }: {
   trackedDays: string | null | undefined;
   trackedHours: string | null | undefined;
   billableDays: number;
   isFreelancer: boolean;
+  enteredHours: string | null | undefined;
+  enteredHoursSource: "manual" | "awork" | null | undefined;
 }) {
   if (isFreelancer) {
+    if (enteredHours == null) {
+      return (
+        <td
+          className="px-3 py-2 text-right tabular-nums text-muted-foreground"
+          title="No freelancer hours logged for this month. Edit in the Freelancer hours card above."
+        >
+          —
+        </td>
+      );
+    }
+    // Display in days to match the employee rows (column unit is days);
+    // hours live in the tooltip for operators who need the precision.
+    // Source pill tags awork-sourced rows.
+    const hoursNum = Number(enteredHours);
+    const daysApprox = hoursNum / 8;
     return (
       <td
-        className="px-3 py-2 text-right tabular-nums text-muted-foreground"
-        title="Freelancers don't log time in Personio."
+        className="px-3 py-2 text-right tabular-nums"
+        title={`${hoursNum.toFixed(2)}h logged${enteredHoursSource === "awork" ? " (auto-filled from awork sync — edit to override)" : ""}`}
       >
-        —
+        <span className="inline-flex items-center gap-1">
+          <span>{daysApprox.toFixed(2)}</span>
+          {enteredHoursSource === "awork" && (
+            <span className="rounded bg-muted px-1 text-[8px] uppercase tracking-wider text-muted-foreground">
+              awork
+            </span>
+          )}
+        </span>
       </td>
     );
   }
@@ -609,10 +635,10 @@ function AssignmentTable({
             </th>
             <th className="px-3 py-2 text-right font-medium">Absent</th>
             <th className="px-3 py-2 text-right font-medium">Billable</th>
-            {data.has_personio_mapping && (
+            {(data.has_personio_mapping || data.has_freelancer_hours) && (
               <th
                 className="px-3 py-2 text-right font-medium"
-                title="Days actually logged in Personio attendance for this project (hours / 8, rounded to 1-hour buckets)."
+                title="Employees: days logged in Personio (hours / 8). Freelancers: hours from the Freelancer hours card."
               >
                 Tracked
               </th>
@@ -685,12 +711,14 @@ function AssignmentTable({
                 <td className="px-3 py-2 text-right tabular-nums">
                   {a.billable_days}
                 </td>
-                {data.has_personio_mapping && (
+                {(data.has_personio_mapping || data.has_freelancer_hours) && (
                   <TrackedCell
                     trackedDays={a.tracked_days}
                     trackedHours={a.tracked_hours}
                     billableDays={a.billable_days}
                     isFreelancer={a.kind === "freelancer"}
+                    enteredHours={a.entered_hours}
+                    enteredHoursSource={a.entered_hours_source}
                   />
                 )}
                 <td className="px-3 py-2 text-right tabular-nums">
