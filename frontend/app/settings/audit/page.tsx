@@ -1,10 +1,11 @@
 import Link from "next/link";
+import { forbidden } from "next/navigation";
 import { desc, eq, lt } from "drizzle-orm";
 
 import { db } from "@/lib/db/client";
 import { appAuditLog, appUser } from "@/lib/db/schema";
 import { audit } from "@/lib/auth/audit";
-import { requireSession } from "@/lib/auth/session";
+import { hasRole, requireSession } from "@/lib/auth/session";
 
 import { AuditTable } from "./audit-table";
 
@@ -17,7 +18,8 @@ export default async function AuditPage({
 }: {
   searchParams: Promise<{ before?: string }>;
 }) {
-  const ctx = await requireSession({ minRole: "admin" });
+  const ctx = await requireSession();
+  if (!hasRole(ctx, "admin")) forbidden();
   await audit(ctx, { action: "view_audit_log", target_type: "audit_log" });
 
   const { before } = await searchParams;

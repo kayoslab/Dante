@@ -1,10 +1,11 @@
 import Link from "next/link";
+import { forbidden } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { audit } from "@/lib/auth/audit";
-import { requireSession } from "@/lib/auth/session";
+import { hasRole, requireSession } from "@/lib/auth/session";
 import { getAworkAuthStatus } from "@/lib/sync/awork/auth";
 
 export const metadata = { title: "awork integration — Dante" };
@@ -28,7 +29,8 @@ export default async function AworkIntegrationPage({
 }: {
   searchParams: Promise<{ error?: string; ok?: string }>;
 }) {
-  const ctx = await requireSession({ minRole: "admin" });
+  const ctx = await requireSession();
+  if (!hasRole(ctx, "admin")) forbidden();
   const { error: errorSlug, ok } = await searchParams;
   const status = await getAworkAuthStatus();
 

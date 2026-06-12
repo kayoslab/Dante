@@ -1,15 +1,17 @@
 import { desc, eq, sql } from "drizzle-orm";
+import { forbidden } from "next/navigation";
 
 import { db } from "@/lib/db/client";
 import { appUser, employeeCurrent } from "@/lib/db/schema";
-import { requireSession } from "@/lib/auth/session";
+import { hasRole, requireSession } from "@/lib/auth/session";
 
 import { UsersClient } from "./users-client";
 
 export const metadata = { title: "Users — Dante" };
 
 export default async function UsersPage() {
-  const ctx = await requireSession({ minRole: "admin" });
+  const ctx = await requireSession();
+  if (!hasRole(ctx, "admin")) forbidden();
 
   const rows = await db
     .select({

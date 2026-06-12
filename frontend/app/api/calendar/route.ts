@@ -42,7 +42,13 @@ function bankerHours(min: number): number {
 
 export async function GET(req: NextRequest) {
   return handle(async () => {
-    await requireApiSession();
+    const ctx = await requireApiSession();
+    // The calendar is visible to every signed-in user. Sensitive fields
+    // (daily rates, hire / contract dates, role tier, the actual absence
+    // type) are filtered for non-managers below. Vacation type is *always*
+    // collapsed to "absence" — even for managers — so "Krankheit /
+    // Sickness" (GDPR Art. 9 health data) never leaks through this view.
+    const isManagerOrAdmin = ctx.role === "manager" || ctx.role === "admin";
     const { searchParams } = new URL(req.url);
     const start = searchParams.get("start") ?? "";
     const end = searchParams.get("end") ?? "";
@@ -123,16 +129,23 @@ export async function GET(req: NextRequest) {
         stateCodeForOffice(r.office as string | null),
       );
       const endIso = r.effective_end_date as string | null;
+      // Strip HR-sensitive fields for non-managers (contract end date,
+      // hire date, role tier). FTE + team stay visible because they
+      // drive useful "who's available right now" signals that the
+      // calendar is built around.
       return {
         employee_id: r.employee_id,
         first_name: r.first_name,
         last_name: r.last_name,
         fte: r.fte === null || r.fte === undefined ? null : Number(r.fte),
         team: r.team_user,
-        role_tier: r.role_tier,
-        hire_date: r.hire_date,
-        contract_end_date:
-          endIso && !endIso.startsWith("9999") ? endIso : null,
+        role_tier: isManagerOrAdmin ? r.role_tier : null,
+        hire_date: isManagerOrAdmin ? r.hire_date : null,
+        contract_end_date: isManagerOrAdmin
+          ? endIso && !endIso.startsWith("9999")
+            ? endIso
+            : null
+          : null,
       };
     });
     if (employeeIds.size === 0) {
@@ -297,17 +310,21 @@ export async function GET(req: NextRequest) {
       const c = cellFor(emp_id, raw.day as string);
       const alloc = Number(raw.allocation_pct);
       c.allocation_pct += alloc;
+      // Daily rate is commercial-confidential — surface to managers/admins
+      // only. Customer + project names stay visible so an employee can
+      // tell who's working on what (useful for cross-team awareness).
       c.assignments.push({
         assignment_id: raw.assignment_id as number,
         customer_name: raw.customer_name as string,
         project_name: raw.project_name as string,
         profile: (raw.profile as string | null) ?? null,
         allocation_pct: alloc.toFixed(4),
-        daily_rate_eur:
-          raw.effective_daily_rate_eur === null ||
-          raw.effective_daily_rate_eur === undefined
+        daily_rate_eur: isManagerOrAdmin
+          ? raw.effective_daily_rate_eur === null ||
+            raw.effective_daily_rate_eur === undefined
             ? null
-            : String(raw.effective_daily_rate_eur),
+            : String(raw.effective_daily_rate_eur)
+          : null,
       });
     }
 
@@ -330,8 +347,17 @@ export async function GET(req: NextRequest) {
       if (!employeeIds.has(emp_id)) continue;
       const c = cellFor(emp_id, raw.day as string);
       c.on_vacation = true;
+      // Managers and admins are allowed to see the specific absence
+      // type — they need it for planning ("X is on sick leave so we
+      // can't book that meeting"). For plain employees, collapse to
+      // the generic "absence" so health-related types (Krankheit /
+      // Sickness, GDPR Art. 9 special category) don't leak across
+      // the org. The raw Personio type is the source of truth for
+      // managers; employees should ask Personio if they need detail.
       if (c.vacation_type === null) {
-        c.vacation_type = (raw.time_off_type as string | null) ?? null;
+        c.vacation_type = isManagerOrAdmin
+          ? ((raw.time_off_type as string | null) ?? "absence")
+          : "absence";
       }
     }
 
