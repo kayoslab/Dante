@@ -154,6 +154,27 @@ export const AworkTimeEntrySchema = z
   .passthrough();
 export type AworkTimeEntry = z.infer<typeof AworkTimeEntrySchema>;
 
+// awork "time booking" — Planner page entry. Project-only (no task),
+// covers a date range with a total duration in seconds. The Planner UI
+// renders these as horizontal bars; we treat them as forward-looking
+// planning data on the calendar.
+export const AworkTimeBookingSchema = z
+  .object({
+    id: z.string(),
+    userId: z.string(),
+    projectId: z.string(),
+    // ISO date strings — awork returns "2026-06-15" style for these.
+    startDate: z.string(),
+    endDate: z.string(),
+    duration: z.number(),
+    laneOrder: z.number().nullish(),
+    description: z.string().nullish(),
+    createdOn: dateStringOrNull,
+    updatedOn: dateStringOrNull,
+  })
+  .passthrough();
+export type AworkTimeBooking = z.infer<typeof AworkTimeBookingSchema>;
+
 export const AworkCustomFieldDefinitionSchema = z
   .object({
     id: z.string(),

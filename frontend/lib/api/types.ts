@@ -306,6 +306,10 @@ export type CalendarTrackedEntry = {
         source: string;
     };
 
+export type CalendarPlannedEntry = {
+        project_name: string;
+        hours: number;
+    };
 
 export type CalendarCell = {
         /** Employee Id */
@@ -314,6 +318,13 @@ export type CalendarCell = {
         date: string;
         /** Allocation Pct */
         allocation_pct: string;
+        /**
+         * Cell load = sum over projects of max(manual_allocation,
+         * awork_planned/8, awork_tracked/8). Drives the cell color.
+         * Manual + awork on the same project collapse to max (same
+         * work, two views) rather than summing.
+         */
+        load: string;
         /** On Vacation */
         on_vacation: boolean;
         /** Vacation Type */
@@ -321,15 +332,36 @@ export type CalendarCell = {
         /** Assignments */
         assignments: CalendarAssignment[];
         /**
-         * Tracked Hours
+         * Personio-attendance hours for this cell — the corner number on
+         * the calendar grid. Compare against `allocation_pct` (= planned
+         * load including awork bookings rolled up by the sync) to spot
+         * "she was planned for 100% but clocked 4h" gaps.
          * @default 0
          */
         tracked_hours: number;
+        /**
+         * awork-time-entry hours for this cell. Surfaced in the tooltip
+         * via `tracked_entries`; the corner number stays on the
+         * Personio signal so the two numbers can be visually compared.
+         * @default 0
+         */
+        awork_tracked_hours: number;
         /**
          * Tracked Entries
          * @default []
          */
         tracked_entries: CalendarTrackedEntry[];
+        /**
+         * Total planned hours for this cell, distributed per-day from
+         * awork time bookings (planner data). Drives the cell color.
+         * @default 0
+         */
+        planned_hours: number;
+        /**
+         * Per-project planned hours breakdown for the tooltip.
+         * @default []
+         */
+        planned_entries: CalendarPlannedEntry[];
         /** Name of the state-only public holiday for this employee's office,
          * when the date is a public holiday in their German state but NOT
          * a federal holiday (e.g. Fronleichnam for Bavaria). Federal

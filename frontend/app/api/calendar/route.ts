@@ -180,6 +180,7 @@ export async function GET(req: NextRequest) {
         a.employee_id,
         d.day,
         a.assignment_id,
+        a.project_id,
         CAST(a.allocation_pct AS double precision) AS allocation_pct,
         c.name AS customer_name,
         p.name AS project_name,
@@ -192,6 +193,7 @@ export async function GET(req: NextRequest) {
       LEFT JOIN employee_role_tier rt ON rt.employee_id = a.employee_id
       LEFT JOIN assignment_effective_rate aer ON aer.assignment_id = a.assignment_id
       WHERE a.employee_id IS NOT NULL
+        AND a.source = 'manual'
         AND a.start_date <= d.day
         AND (a.end_date IS NULL OR a.end_date >= d.day)
     `);
@@ -211,17 +213,69 @@ export async function GET(req: NextRequest) {
       awork AS (
         SELECT ul.employee_id, t.work_date,
                COALESCE(ap.name, 'Untagged') AS project_name,
+               -- Dante project_id when the awork project is mapped to a
+               -- Dante project (used to merge with manual assignment
+               -- allocations at the load-calculation step). NULL when
+               -- the awork project isn't linked.
+               apl.project_id AS dante_project_id,
+               t.awork_project_id,
                SUM(t.duration_minutes) AS minutes,
                'awork' AS source
         FROM awork_time_entry t
         JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
         LEFT JOIN awork_project ap ON ap.awork_project_id = t.awork_project_id
+        LEFT JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
         WHERE t.work_date BETWEEN ${start}::date AND ${end}::date
-        GROUP BY ul.employee_id, t.work_date, ap.name
+        GROUP BY ul.employee_id, t.work_date, ap.name, apl.project_id, t.awork_project_id
       )
-      SELECT employee_id, work_date, project_name, minutes, source
-      FROM (SELECT * FROM personio UNION ALL SELECT * FROM awork) u
+      SELECT employee_id, work_date, project_name, minutes, source,
+             dante_project_id, awork_project_id
+      FROM (
+        SELECT employee_id, work_date, project_name, minutes, source,
+               NULL::integer AS dante_project_id, NULL::text AS awork_project_id
+        FROM personio
+        UNION ALL
+        SELECT employee_id, work_date, project_name, minutes, source,
+               dante_project_id, awork_project_id
+        FROM awork
+      ) u
       ORDER BY employee_id, work_date
+    `);
+
+    // 4b) Per-day planned breakdown for the tooltip. The same data
+    // already feeds `assignment.allocation_pct` via the sync rollup
+    // (so it drives the cell color), but the operator wants to see
+    // exactly what hours are scheduled for which project each day —
+    // surface that separately. Divisor uses the FULL booking range
+    // (not the calendar window) so a booking that straddles the
+    // window's edge doesn't inflate the visible days' share.
+    const plnRes = await db.execute(sql`
+      SELECT
+        ul.employee_id,
+        d::date AS day,
+        COALESCE(ap.name, 'Untagged') AS project_name,
+        apl.project_id AS dante_project_id,
+        tb.awork_project_id,
+        tb.duration_seconds * 1.0 / GREATEST(
+          (
+            SELECT COUNT(*)
+            FROM generate_series(tb.start_date, tb.end_date, '1 day'::interval) gd
+            WHERE EXTRACT(DOW FROM gd) NOT IN (0, 6)
+          ),
+          1
+        ) AS per_day_seconds
+      FROM awork_time_booking tb
+      JOIN awork_user_link ul ON ul.awork_user_id = tb.awork_user_id
+      LEFT JOIN awork_project ap ON ap.awork_project_id = tb.awork_project_id
+      LEFT JOIN awork_project_link apl ON apl.awork_project_id = tb.awork_project_id
+      CROSS JOIN LATERAL generate_series(
+        GREATEST(tb.start_date, ${start}::date),
+        LEAST(tb.end_date, ${end}::date),
+        '1 day'::interval
+      ) d
+      WHERE EXTRACT(DOW FROM d) NOT IN (0, 6)
+        AND tb.end_date >= ${start}::date
+        AND tb.start_date <= ${end}::date
     `);
 
     // 5) Vacations
@@ -258,6 +312,24 @@ export async function GET(req: NextRequest) {
         hours: number;
         source: string;
       }>;
+      planned_seconds_raw: number;
+      planned_entries: Array<{
+        project_name: string;
+        hours: number;
+      }>;
+      // Per-project rollup of all load signals. Keyed by Dante
+      // project_id when available, else by `awork:<awork_project_id>`
+      // (awork projects not yet linked stay as their own buckets so
+      // they aren't merged with unrelated manual rows). Cell-level
+      // load = sum over buckets of max(manual, planned_h/8,
+      // awork_tracked_h/8) — taking max collapses double counting
+      // when a manual assignment AND an awork booking describe the
+      // same project on the same day.
+      project_load: Map<string, {
+        manual: number;
+        planned_h: number;
+        awork_tracked_h: number;
+      }>;
     };
 
     const cellMap = new Map<string, Cell>();
@@ -285,6 +357,9 @@ export async function GET(req: NextRequest) {
           personio_minutes_raw: 0,
           awork_minutes_raw: 0,
           tracked_entries: [],
+          planned_seconds_raw: 0,
+          planned_entries: [],
+          project_load: new Map(),
         };
         cellMap.set(key, c);
       }
@@ -304,12 +379,33 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Project-load bucket lookup: use Dante project_id when present,
+    // else fall back to a synthetic `awork:<id>` key so unlinked awork
+    // projects stay isolated from any manual row.
+    const bucketKey = (
+      dante_project_id: number | null | undefined,
+      awork_project_id?: string | null,
+    ): string =>
+      dante_project_id !== null && dante_project_id !== undefined
+        ? `dante:${dante_project_id}`
+        : `awork:${awork_project_id ?? "untagged"}`;
+
+    const getBucket = (c: Cell, key: string) => {
+      let b = c.project_load.get(key);
+      if (!b) {
+        b = { manual: 0, planned_h: 0, awork_tracked_h: 0 };
+        c.project_load.set(key, b);
+      }
+      return b;
+    };
+
     for (const raw of asnRes.rows as Array<Record<string, unknown>>) {
       const emp_id = raw.employee_id as number;
       if (!employeeIds.has(emp_id)) continue;
       const c = cellFor(emp_id, raw.day as string);
       const alloc = Number(raw.allocation_pct);
       c.allocation_pct += alloc;
+      getBucket(c, bucketKey(raw.project_id as number)).manual += alloc;
       // Daily rate is commercial-confidential — surface to managers/admins
       // only. Customer + project names stay visible so an employee can
       // tell who's working on what (useful for cross-team awareness).
@@ -333,12 +429,52 @@ export async function GET(req: NextRequest) {
       if (emp_id === null || !employeeIds.has(emp_id)) continue;
       const c = cellFor(emp_id, raw.work_date as string);
       const mins = Number(raw.minutes ?? 0);
-      if (raw.source === "personio") c.personio_minutes_raw += mins;
-      else c.awork_minutes_raw += mins;
+      if (raw.source === "personio") {
+        c.personio_minutes_raw += mins;
+      } else {
+        // awork tracked time contributes to the project bucket so the
+        // load math can take max(manual, planned, awork_tracked) at
+        // the project level. Personio is intentionally excluded — it
+        // backs the corner number, not the color signal.
+        c.awork_minutes_raw += mins;
+        const key = bucketKey(
+          raw.dante_project_id as number | null,
+          raw.awork_project_id as string | null,
+        );
+        getBucket(c, key).awork_tracked_h += mins / 60;
+      }
       c.tracked_entries.push({
         project_name: raw.project_name as string,
         hours: bankerHours(mins),
         source: raw.source as string,
+      });
+    }
+
+    // Aggregate per-project planned entries — same dedup pattern as
+    // tracked entries above. Also feeds the project_load bucket so
+    // planned hours collapse with manual allocation on the same
+    // Dante project (max, not sum).
+    const plannedSeen = new Map<string, number>();
+    for (const raw of plnRes.rows as Array<Record<string, unknown>>) {
+      const emp_id = raw.employee_id as number | null;
+      if (emp_id === null || !employeeIds.has(emp_id)) continue;
+      const c = cellFor(emp_id, raw.day as string);
+      const sec = Number(raw.per_day_seconds ?? 0);
+      c.planned_seconds_raw += sec;
+      const key = `${emp_id}|${raw.day}|${raw.project_name}`;
+      plannedSeen.set(key, (plannedSeen.get(key) ?? 0) + sec);
+      const bkey = bucketKey(
+        raw.dante_project_id as number | null,
+        raw.awork_project_id as string | null,
+      );
+      getBucket(c, bkey).planned_h += sec / 3600;
+    }
+    for (const [key, sec] of plannedSeen) {
+      const [emp_idS, day, ...nameParts] = key.split("|");
+      const c = cellFor(Number(emp_idS), day);
+      c.planned_entries.push({
+        project_name: nameParts.join("|"),
+        hours: Math.round((sec / 3600) * 10) / 10,
       });
     }
 
@@ -374,15 +510,36 @@ export async function GET(req: NextRequest) {
         const tracked_entries = c.tracked_entries
           .filter((e) => e.hours > 0)
           .sort((a, b) => b.hours - a.hours);
+        const planned_entries = c.planned_entries
+          .filter((e) => e.hours > 0)
+          .sort((a, b) => b.hours - a.hours);
+        const planned_hours =
+          Math.round((c.planned_seconds_raw / 3600) * 10) / 10;
+        // Cell color signal: per-project max of (manual, planned/8,
+        // awork-tracked/8), summed across projects. Collapsing per
+        // project means a manual 1.00 on Project X + an awork 8h
+        // booking on the same Project X stays at 1.00 (same work,
+        // two views) instead of inflating to 2.00.
+        let load = 0;
+        for (const b of c.project_load.values()) {
+          load += Math.max(b.manual, b.planned_h / 8, b.awork_tracked_h / 8);
+        }
         return {
           employee_id: c.employee_id,
           date: c.date,
           allocation_pct: c.allocation_pct.toFixed(4),
+          load: load.toFixed(4),
           on_vacation: c.on_vacation,
           vacation_type: c.vacation_type,
           assignments: c.assignments,
-          tracked_hours: Math.max(personio_h, awork_h),
+          // Corner number on the calendar = Personio attendance only.
+          // Surface awork's clocked + planned figures separately for
+          // tooltip + color logic in the client.
+          tracked_hours: personio_h,
+          awork_tracked_hours: awork_h,
           tracked_entries,
+          planned_hours,
+          planned_entries,
           local_public_holiday: c.local_public_holiday,
         };
       });

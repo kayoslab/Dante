@@ -89,6 +89,26 @@ export const aworkTimeEntry = pgTable("awork_time_entry", {
   last_seen_sync_run_id: integer(),
 });
 
+// awork "time bookings" — the entries rendered on awork's Planner page.
+// One row per (user, project, date range) planning entry. Project-only
+// (no task field), duration is the total for the whole range — the
+// calendar route distributes it evenly across working days when
+// rendering. Indexes serve "what's planned for this user in this
+// window?" lookups; see migration 0013_awork_time_booking.sql.
+export const aworkTimeBooking = pgTable("awork_time_booking", {
+  awork_time_booking_id: text().primaryKey(),
+  awork_user_id: text().notNull(),
+  awork_project_id: text().notNull(),
+  start_date: date({ mode: "string" }).notNull(),
+  end_date: date({ mode: "string" }).notNull(),
+  duration_seconds: integer().notNull(),
+  lane_order: integer(),
+  description: text(),
+  created_on: timestamp({ mode: "date" }),
+  updated_on: timestamp({ mode: "date" }),
+  last_seen_sync_run_id: integer().notNull(),
+});
+
 // awork projects → our project table. PK on awork side: each awork project
 // maps to at most one of ours.
 export const aworkProjectLink = pgTable("awork_project_link", {

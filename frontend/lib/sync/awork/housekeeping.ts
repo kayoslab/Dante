@@ -1,19 +1,19 @@
 /** Post-sync awork housekeeping — pure DB operations.
  *
- * Port of src/dante/services/awork_housekeeping.py. Runs automatically
- * after the awork pull inside `bun run sync`. Five passes:
+ * Runs after the awork pull inside `npm run sync`. Three passes:
  *
- *   1. bulkImportFromAwork:            unmapped awork companies → customer,
- *                                      unmapped awork projects → project.
- *   2. applyAworkMoneyToImported:      Fixed Price / Daily Rate / Order #
- *                                      → project.agreed_amount, project_rate,
- *                                        notes.
- *   3. backfillImportedProjects:       refresh planned dates / time_budget /
- *                                      status from awork.
- *   4. deriveAssignmentsFromAwork:     auto-create [awork-derived] assignments
- *                                      from tracked time.
- *   5. closeStaleDerivedAssignments:   close [awork-derived] when activity
- *                                      stops or planned end is past.
+ *   1. bulkImportFromAwork:        unmapped awork companies → customer,
+ *                                  unmapped awork projects → project.
+ *   2. applyAworkMoneyToImported:  Fixed Price / Daily Rate / Order #
+ *                                  → project.agreed_amount, project_rate, notes.
+ *   3. backfillImportedProjects:   refresh planned dates / time_budget /
+ *                                  status from awork.
+ *
+ * Planned allocations used to be derived here too — `deriveAssignmentsFromAwork`
+ * and `closeStaleDerivedAssignments` — but they synthesized assignment
+ * rows from tracked time and produced wrong open-ended allocations.
+ * The proper source is awork's planning data; see syncAworkPlannings
+ * in sync.ts.
  */
 import type { Client } from "pg";
 
@@ -23,7 +23,6 @@ import {
   customer,
   project,
 } from "@/lib/db/schema";
-import { germanFederalHolidays } from "@/lib/db/_de-holidays";
 import { syncDrizzle } from "@/lib/sync/db";
 
 /** HTML → plain text. Same passes as lib/actions/awork-import.ts::stripHtml. */
@@ -37,282 +36,6 @@ function stripHtml(html: string | null | undefined): string | null {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-function isoDay(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function todayIso(): string {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return isoDay(d);
-}
-
-function diffDays(a: string, b: string): number {
-  return Math.floor(
-    (new Date(a + "T00:00:00Z").getTime() -
-      new Date(b + "T00:00:00Z").getTime()) /
-      86_400_000,
-  );
-}
-
-// ----------------------------------------------------------------------------
-// closeStaleDerivedAssignments
-// ----------------------------------------------------------------------------
-
-export type CloseStaleResult = {
-  stale_threshold_days: number;
-  planned_end_grace_days: number;
-  n_closed: number;
-  dry_run: boolean;
-  changes: Array<{
-    assignment_id: number;
-    new_end_date: string;
-    last_log: string;
-    stale_days: number;
-    planned_end_date: string | null;
-    planned_end_days_past: number | null;
-    triggers: string[];
-  }>;
-};
-
-export async function closeStaleDerivedAssignments(
-  conn: Client,
-  opts: {
-    stale_threshold_days?: number;
-    planned_end_grace_days?: number;
-    dry_run?: boolean;
-  } = {},
-): Promise<CloseStaleResult> {
-  const stale_threshold_days = opts.stale_threshold_days ?? 14;
-  const planned_end_grace_days = opts.planned_end_grace_days ?? 14;
-  const dry_run = opts.dry_run ?? false;
-
-  const rows = await conn.query<{
-    assignment_id: number;
-    start_date: string;
-    planned_end_date: string | null;
-    last_log: string | null;
-  }>(`
-    WITH derived AS (
-      SELECT a.assignment_id, a.project_id, a.employee_id,
-             a.start_date, p.planned_end_date
-      FROM assignment a
-      JOIN project p ON p.project_id = a.project_id
-      WHERE a.end_date IS NULL
-        AND a.employee_id IS NOT NULL
-        AND a.notes LIKE '%awork-derived%'
-    )
-    SELECT d.assignment_id, d.start_date, d.planned_end_date,
-           MAX(t.work_date) AS last_log
-    FROM derived d
-    LEFT JOIN awork_project_link apl ON apl.project_id = d.project_id
-    LEFT JOIN awork_user_link ul ON ul.employee_id = d.employee_id
-    LEFT JOIN awork_time_entry t
-      ON t.awork_project_id = apl.awork_project_id
-     AND t.awork_user_id = ul.awork_user_id
-    GROUP BY d.assignment_id, d.start_date, d.planned_end_date
-  `);
-
-  const today = todayIso();
-  const changes: CloseStaleResult["changes"] = [];
-
-  for (const r of rows.rows) {
-    if (r.last_log === null) continue;
-    const last_log = isoDay(new Date(r.last_log));
-    const stale_days = diffDays(today, last_log);
-    const planned_end =
-      r.planned_end_date === null ? null : isoDay(new Date(r.planned_end_date));
-    const planned_end_days_past =
-      planned_end === null ? null : diffDays(today, planned_end);
-
-    const triggers: string[] = [];
-    if (stale_days > stale_threshold_days)
-      triggers.push(`stale ${stale_days}d`);
-    if (
-      planned_end_days_past !== null &&
-      planned_end_days_past > planned_end_grace_days
-    ) {
-      triggers.push(`planned end ${planned_end_days_past}d past`);
-    }
-    if (triggers.length === 0) continue;
-
-    const start_date = isoDay(new Date(r.start_date));
-    const candidates: string[] = [last_log, start_date];
-    if (planned_end !== null) candidates.push(planned_end);
-    let end_date = candidates.reduce((a, b) => (a > b ? a : b));
-    if (end_date > today) end_date = today;
-
-    changes.push({
-      assignment_id: r.assignment_id,
-      new_end_date: end_date,
-      last_log,
-      stale_days,
-      planned_end_date: planned_end,
-      planned_end_days_past,
-      triggers,
-    });
-
-    if (!dry_run) {
-      await conn.query(
-        "UPDATE assignment SET end_date = $1, updated_at = CURRENT_TIMESTAMP WHERE assignment_id = $2",
-        [end_date, r.assignment_id],
-      );
-    }
-  }
-
-  return {
-    stale_threshold_days,
-    planned_end_grace_days,
-    n_closed: changes.length,
-    dry_run,
-    changes,
-  };
-}
-
-// ----------------------------------------------------------------------------
-// deriveAssignmentsFromAwork
-// ----------------------------------------------------------------------------
-
-export type DeriveAssignmentsResult = {
-  candidates: number;
-  created: number;
-  skipped_existing_assignment: number;
-  skipped_no_employee_link: number;
-  errors: Array<{ employee_id: number; project_id: number; error: string }>;
-  min_total_hours: number;
-  default_profile: string;
-  recent_window_days: number;
-};
-
-export async function deriveAssignmentsFromAwork(
-  conn: Client,
-  opts: {
-    min_total_hours?: number;
-    default_profile?: string;
-    recent_window_days?: number;
-    skip_existing?: boolean;
-  } = {},
-): Promise<DeriveAssignmentsResult> {
-  const min_total_hours = opts.min_total_hours ?? 16;
-  const default_profile = opts.default_profile ?? "default";
-  const recent_window_days = opts.recent_window_days ?? 7;
-  const skip_existing = opts.skip_existing ?? true;
-
-  const rows = await conn.query<{
-    employee_id: number | null;
-    project_id: number;
-    first_log: string;
-    last_log: string;
-    total_min: string;
-  }>(
-    `
-    SELECT ul.employee_id, apl.project_id,
-           MIN(t.work_date) AS first_log,
-           MAX(t.work_date) AS last_log,
-           SUM(t.duration_minutes) AS total_min
-    FROM awork_time_entry t
-    JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-    JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-    WHERE t.duration_minutes > 0
-    GROUP BY ul.employee_id, apl.project_id
-    HAVING SUM(t.duration_minutes) >= $1
-    ORDER BY total_min DESC
-  `,
-    [min_total_hours * 60],
-  );
-
-  const today = todayIso();
-  const now = new Date();
-  const result: DeriveAssignmentsResult = {
-    candidates: rows.rows.length,
-    created: 0,
-    skipped_existing_assignment: 0,
-    skipped_no_employee_link: 0,
-    errors: [],
-    min_total_hours,
-    default_profile,
-    recent_window_days,
-  };
-
-  function workingDaysBetween(start: string, end: string): number {
-    if (start > end) return 0;
-    const years = new Set<number>();
-    for (
-      let y = new Date(start + "T00:00:00Z").getUTCFullYear();
-      y <= new Date(end + "T00:00:00Z").getUTCFullYear();
-      y++
-    ) {
-      years.add(y);
-    }
-    const holidays = new Set<string>();
-    for (const y of years) {
-      for (const k of germanFederalHolidays(y, y).keys()) holidays.add(k);
-    }
-    let n = 0;
-    const cur = new Date(start + "T00:00:00Z");
-    const last = new Date(end + "T00:00:00Z");
-    while (cur <= last) {
-      const dow = cur.getUTCDay();
-      if (dow !== 0 && dow !== 6 && !holidays.has(isoDay(cur))) n += 1;
-      cur.setUTCDate(cur.getUTCDate() + 1);
-    }
-    return n;
-  }
-
-  for (const r of rows.rows) {
-    if (r.employee_id === null) {
-      result.skipped_no_employee_link += 1;
-      continue;
-    }
-    const emp_id = r.employee_id;
-    const project_id = r.project_id;
-    const first_log = isoDay(new Date(r.first_log));
-    const last_log = isoDay(new Date(r.last_log));
-    try {
-      if (skip_existing) {
-        const ex = await conn.query(
-          "SELECT 1 FROM assignment WHERE employee_id = $1 AND project_id = $2 LIMIT 1",
-          [emp_id, project_id],
-        );
-        if (ex.rows.length > 0) {
-          result.skipped_existing_assignment += 1;
-          continue;
-        }
-      }
-      const end_date =
-        diffDays(today, last_log) <= recent_window_days ? null : last_log;
-      const window_end = end_date ?? today;
-      const wd = workingDaysBetween(first_log, window_end) || 1;
-      const total_hours = Number(r.total_min) / 60;
-      const allocation = Math.min(total_hours / (wd * 8), 1);
-
-      await conn.query(
-        `INSERT INTO assignment
-          (employee_id, project_id, profile, allocation_pct,
-           start_date, end_date, notes, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
-        [
-          emp_id,
-          project_id,
-          default_profile,
-          Math.round(allocation * 10000) / 10000,
-          first_log,
-          end_date,
-          "[awork-derived] auto-created from awork time entries; edit if you want a tighter date range or allocation",
-          now,
-        ],
-      );
-      result.created += 1;
-    } catch (err) {
-      result.errors.push({
-        employee_id: emp_id,
-        project_id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-  return result;
-}
 
 // ----------------------------------------------------------------------------
 // applyAworkMoneyToImported
@@ -366,7 +89,7 @@ export async function applyAworkMoneyToImported(
     default_profile_name,
   };
   const now = new Date();
-  const today = todayIso();
+  const today = now.toISOString().slice(0, 10);
 
   for (const r of rows.rows) {
     try {

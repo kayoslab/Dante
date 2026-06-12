@@ -19,7 +19,9 @@ import { aworkClient } from "./awork/client";
 import {
   syncAworkCompanies,
   syncAworkUsers,
+  rollupAworkPlanningsToAssignments,
   syncAworkProjects,
+  syncAworkTimeBookings,
   syncAworkTimeEntries,
   autoLinkAworkUsersByEmail,
   autoLinkAworkCompaniesByName,
@@ -30,8 +32,6 @@ import {
   bulkImportFromAwork,
   applyAworkMoneyToImported,
   backfillImportedProjects,
-  deriveAssignmentsFromAwork,
-  closeStaleDerivedAssignments,
 } from "./awork/housekeeping";
 
 export type SyncOptions = {
@@ -185,6 +185,21 @@ async function runAworkSync(
     n = await syncAworkTimeEntries(conn, aworkClient, sync_run_id, start, end);
     log(`  time entries (${start} → ${end}): ${n}`);
   }
+  // Planner data — what's scheduled looking forward. No date range
+  // arg on the endpoint; sync prunes anything that disappears upstream.
+  const tb = await syncAworkTimeBookings(conn, aworkClient, sync_run_id);
+  log(`  time bookings:        ${tb.upserted} upserted, ${tb.pruned} pruned`);
+
+  // Roll up bookings into `assignment` rows (source = 'awork-planning')
+  // so the home portfolio, project economics, and calendar load all
+  // pick up the planning data. Full refresh — manual assignments are
+  // untouched.
+  const plan = await rollupAworkPlanningsToAssignments(conn);
+  log(
+    `  planning rollup:      deleted ${plan.deleted_previous}, inserted ${plan.inserted}` +
+      `, skipped (unlinked user) ${plan.skipped_unlinked_user}` +
+      `, skipped (unlinked project) ${plan.skipped_unlinked_project}`,
+  );
 
   const users = await autoLinkAworkUsersByEmail(conn);
   log(
@@ -251,23 +266,11 @@ async function runAworkSync(
       `  refresh-imported:FAILED — ${formatSyncError(err)}`,
     );
   }
-  try {
-    const s = await deriveAssignmentsFromAwork(conn);
-    log(
-      `  derive-asgn:     candidates ${s.candidates} · created ${s.created}, ` +
-        `skipped-existing ${s.skipped_existing_assignment}, ` +
-        `skipped-no-link ${s.skipped_no_employee_link}`,
-    );
-  } catch (err) {
-    log(`  derive-asgn:     FAILED — ${formatSyncError(err)}`);
-  }
-  try {
-    const s = await closeStaleDerivedAssignments(conn);
-    log(
-      `  close-stale:     ${s.n_closed} closed ` +
-        `(stale > ${s.stale_threshold_days}d or planned-end > ${s.planned_end_grace_days}d past)`,
-    );
-  } catch (err) {
-    log(`  close-stale:     FAILED — ${formatSyncError(err)}`);
-  }
+  // `deriveAssignmentsFromAwork` + `closeStaleDerivedAssignments` were
+  // retired in commit history — they synthesized assignment rows from
+  // awork time entries (allocation = total_hours / working_days / 8h),
+  // which manufactured open-ended planned allocations for users who
+  // weren't actually planned for any further work. The proper source —
+  // awork's own planning data via `/users/workload` — flows in via a
+  // separate sync stage; see syncAworkPlannings below.
 }

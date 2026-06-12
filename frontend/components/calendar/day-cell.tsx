@@ -13,12 +13,17 @@ import { formatRate } from "@/lib/format";
 //   1. vacation         — amber, intentional time off
 //   2. public holiday   — amber tint, no work expected
 //   3. weekend          — muted gray, no work expected
-//   4. allocation       — blue scale by load, red on overbook
+//   4. load             — blue scale on combined load from THREE
+//                         sources (see comment by `load` below):
+//                          • manual `assignment.allocation_pct`
+//                          • awork planned (time bookings / 8h)
+//                          • awork tracked (time entries / 8h)
 //   5. empty            — nothing
-// Weekend / holiday override allocation: people aren't expected to work, so
-// surfacing "Friday at 100% but it's Karfreitag" matters more than the load.
+//
+// Weekend / holiday / vacation override load so "Friday at 100% but
+// it's Karfreitag" / "she's on holiday today" stays surfaced.
 function colorClass(
-  allocation: number,
+  load: number,
   onVacation: boolean,
   hasHoliday: boolean,
   isWeekend: boolean,
@@ -26,11 +31,11 @@ function colorClass(
   if (onVacation) return "bg-amber-200/80";
   if (hasHoliday) return "bg-amber-100/60";
   if (isWeekend) return "bg-muted/30";
-  if (allocation > 1.0) return "bg-red-300";
-  if (allocation >= 1.0) return "bg-blue-400";
-  if (allocation >= 0.75) return "bg-blue-300";
-  if (allocation >= 0.5) return "bg-blue-200";
-  if (allocation > 0) return "bg-blue-100";
+  if (load > 1.0) return "bg-red-300";
+  if (load >= 1.0) return "bg-blue-400";
+  if (load >= 0.75) return "bg-blue-300";
+  if (load >= 0.5) return "bg-blue-200";
+  if (load > 0) return "bg-blue-100";
   return "";
 }
 
@@ -75,21 +80,28 @@ export function DayCell({
   const onVacation = cell?.on_vacation ?? false;
   // `holiday` is the federal (column-level) name; `localHoliday` is the
   // state-only one (Fronleichnam in Bavaria etc.). Either suppresses
-  // allocation coloring — the employee is not expected to work.
+  // load coloring — the employee is not expected to work.
   const holiday = day.public_holiday;
   const localHoliday = cell?.local_public_holiday ?? null;
+  // Personio attendance — corner number for comparison with awork.
   const trackedHours = cell?.tracked_hours ?? 0;
+  const aworkTrackedHours = cell?.awork_tracked_hours ?? 0;
+  // Color signal — the server already collapsed manual + awork at
+  // the project level (sum over projects of max(manual, planned/8,
+  // awork_tracked/8)) so a manual 100% on Project X + an 8h awork
+  // booking on Project X stay at 1.00, not 2.00. Personio is
+  // intentionally NOT in this sum — it's the corner number, not a
+  // load source.
+  const plannedHours = cell?.planned_hours ?? 0;
+  const load = cell ? Number(cell.load) : 0;
 
-  // Tooltip when there's data: allocation, vacation, holiday, or tracked hours.
+  // Tooltip when there's data: allocation, vacation, holiday, or
+  // tracked hours.
   const hasTooltip = !!cell || !!holiday || !!localHoliday;
 
   const base = cn(
     "h-9 relative border-r border-b transition outline-none",
-    colorClass(allocation, onVacation, !!holiday || !!localHoliday, day.weekend),
-    // Subtle outline on cells with tracked time but no assignment-driven
-    // allocation — surfaces "someone worked here despite no plan".
-    trackedHours > 0 && allocation === 0 && !onVacation &&
-      "bg-emerald-50/60 ring-1 ring-inset ring-emerald-200",
+    colorClass(load, onVacation, !!holiday || !!localHoliday, day.weekend),
     onClick && "cursor-pointer hover:ring-1 hover:ring-inset hover:ring-blue-500/60",
     onClick && "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500",
     !onClick && hasTooltip && "cursor-help",
@@ -117,10 +129,7 @@ export function DayCell({
         <span
           className={cn(
             "pointer-events-none absolute bottom-0 right-0 px-0.5 text-[9px] leading-none tabular-nums",
-            // Higher-contrast color depending on cell background tone.
-            allocation > 0 || onVacation
-              ? "text-foreground/80"
-              : "text-emerald-800",
+            "text-foreground/80",
           )}
         >
           {trackedHours}h
@@ -186,15 +195,38 @@ export function DayCell({
               )}
             </ul>
           )}
-          {allocation > 1.0 && (
+          {load > 1.0 && (
             <div className="rounded bg-red-100 px-2 py-1 text-xs text-red-800">
-              ⚠ Overbooked ({allocation.toFixed(2)} of 1.00)
+              ⚠ Overbooked ({load.toFixed(2)} of 1.00)
+            </div>
+          )}
+          {cell && cell.planned_entries.length > 0 && (
+            <div className="border-t pt-1">
+              <div className="text-xs font-medium">
+                Planned: {plannedHours}h <span className="text-muted-foreground">[awork]</span>
+              </div>
+              <ul className="mt-1 space-y-0.5">
+                {cell.planned_entries.map((e, i) => (
+                  <li
+                    key={`planned-${e.project_name}-${i}`}
+                    className="text-xs"
+                  >
+                    <span className="text-muted-foreground tabular-nums">
+                      {e.hours}h
+                    </span>{" "}
+                    {e.project_name}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           {cell && cell.tracked_entries.length > 0 && (
             <div className="border-t pt-1">
               <div className="text-xs font-medium">
-                Tracked: {cell.tracked_hours}h
+                Clocked: {cell.tracked_hours}h{" "}
+                <span className="text-muted-foreground">[Personio]</span> ·{" "}
+                {aworkTrackedHours}h{" "}
+                <span className="text-muted-foreground">[awork]</span>
               </div>
               <ul className="mt-1 space-y-0.5">
                 {cell.tracked_entries.map((e, i) => (

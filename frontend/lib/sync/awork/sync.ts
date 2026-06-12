@@ -21,6 +21,7 @@ import {
   aworkCompanyLink,
   aworkFreelancerLink,
   aworkProject,
+  aworkTimeBooking,
   aworkTimeEntry,
   aworkUser,
   aworkUserLink,
@@ -333,6 +334,174 @@ export async function syncAworkTimeEntries(
       });
   }
   return items.length;
+}
+
+/** Sync awork "time bookings" — the entries rendered on awork's Planner.
+ * The endpoint is unfiltered (no date window arg), so we pull the full
+ * list every run. After the upsert, prune rows that weren't refreshed
+ * — awork dropped them (PM edited the Planner) and the row would
+ * otherwise survive forever as a ghost on the calendar.
+ *
+ * Returns the count of rows seen + the count of stale rows pruned. */
+export async function syncAworkTimeBookings(
+  conn: Client,
+  client: AworkClient,
+  sync_run_id: number,
+): Promise<{ upserted: number; pruned: number }> {
+  const db = syncDrizzle(conn);
+  const items = await client.listTimeBookings();
+  const set = excludedSet([
+    "awork_user_id",
+    "awork_project_id",
+    "start_date",
+    "end_date",
+    "duration_seconds",
+    "lane_order",
+    "description",
+    "created_on",
+    "updated_on",
+    "last_seen_sync_run_id",
+  ] as const);
+  for (const item of items) {
+    await db
+      .insert(aworkTimeBooking)
+      .values({
+        awork_time_booking_id: item.id,
+        awork_user_id: item.userId,
+        awork_project_id: item.projectId,
+        start_date: item.startDate,
+        end_date: item.endDate,
+        duration_seconds: item.duration,
+        lane_order: item.laneOrder ?? null,
+        description: item.description ?? null,
+        created_on: toDate(item.createdOn),
+        updated_on: toDate(item.updatedOn),
+        last_seen_sync_run_id: sync_run_id,
+      })
+      .onConflictDoUpdate({
+        target: aworkTimeBooking.awork_time_booking_id,
+        set,
+      });
+  }
+  // Stale-row cleanup. Anything not refreshed this run was deleted from
+  // the Planner upstream; remove it so the calendar matches.
+  const pruned = await conn.query<{ id: string }>(
+    `DELETE FROM awork_time_booking
+       WHERE last_seen_sync_run_id <> $1
+       RETURNING awork_time_booking_id AS id`,
+    [sync_run_id],
+  );
+  return { upserted: items.length, pruned: pruned.rows.length };
+}
+
+/** Roll up `awork_time_booking` rows into `assignment` rows so the home
+ * dashboard, project economics, and the calendar's allocation signal
+ * all have something to work with. Wipes existing
+ * `source = 'awork-planning'` rows and re-inserts from scratch — the
+ * Planner is the source of truth and we want the table to match it
+ * exactly. Manual rows (source = 'manual') are left alone.
+ *
+ * Allocation math:
+ *   total_seconds / (weekdays_in_range × 8h × 3600s/h)
+ *
+ * Capped at 1.5 to honor the existing `allocation_pct ≤ 1.5` convention;
+ * two overlapping bookings against the same person on the same project
+ * (unusual but possible) get summed into a single 1.5-capped row.
+ *
+ * Orphaned bookings (awork user / project not linked into Dante) are
+ * skipped silently — they'll start materializing once the auto-linker
+ * picks them up. */
+export async function rollupAworkPlanningsToAssignments(
+  conn: Client,
+): Promise<{
+  deleted_previous: number;
+  inserted: number;
+  skipped_unlinked_user: number;
+  skipped_unlinked_project: number;
+}> {
+  const deleted = await conn.query(
+    `DELETE FROM assignment WHERE source = 'awork-planning'`,
+  );
+  // Pull joined bookings: every `awork_time_booking` resolved to a
+  // Dante employee_id + project_id (when the link exists). Group by
+  // (employee, project) to coalesce overlapping bookings — a single
+  // assignment row per pair, with the widest date range and the sum
+  // of durations driving the allocation.
+  const rows = await conn.query<{
+    employee_id: number | null;
+    project_id: number | null;
+    start_date: string;
+    end_date: string;
+    total_seconds: string;
+  }>(`
+    SELECT
+      ul.employee_id,
+      pl.project_id,
+      MIN(tb.start_date)::text AS start_date,
+      MAX(tb.end_date)::text   AS end_date,
+      SUM(tb.duration_seconds)::text AS total_seconds
+    FROM awork_time_booking tb
+    LEFT JOIN awork_user_link ul ON ul.awork_user_id = tb.awork_user_id
+    LEFT JOIN awork_project_link pl ON pl.awork_project_id = tb.awork_project_id
+    GROUP BY ul.employee_id, pl.project_id
+  `);
+
+  const now = new Date();
+  let inserted = 0;
+  let skipped_unlinked_user = 0;
+  let skipped_unlinked_project = 0;
+
+  for (const r of rows.rows) {
+    if (r.employee_id === null) {
+      skipped_unlinked_user += 1;
+      continue;
+    }
+    if (r.project_id === null) {
+      skipped_unlinked_project += 1;
+      continue;
+    }
+    // Working days in [start, end] (weekends excluded). At least 1 so
+    // a single-day booking still divides cleanly.
+    const wd = await conn.query<{ wd: string }>(
+      `
+      SELECT COUNT(*)::text AS wd
+      FROM generate_series($1::date, $2::date, '1 day'::interval) d
+      WHERE EXTRACT(DOW FROM d) NOT IN (0, 6)
+    `,
+      [r.start_date, r.end_date],
+    );
+    const workdays = Math.max(Number(wd.rows[0]?.wd ?? 0), 1);
+    const totalSeconds = Number(r.total_seconds);
+    const rawAlloc = totalSeconds / (workdays * 8 * 3600);
+    const alloc = Math.min(rawAlloc, 1.5);
+
+    await conn.query(
+      `
+      INSERT INTO assignment
+        (employee_id, project_id, profile, allocation_pct,
+         start_date, end_date, notes, source, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'awork-planning', $8, $8)
+    `,
+      [
+        r.employee_id,
+        r.project_id,
+        null,
+        alloc.toFixed(4),
+        r.start_date,
+        r.end_date,
+        "Synced from awork Planner; edit there to change.",
+        now,
+      ],
+    );
+    inserted += 1;
+  }
+
+  return {
+    deleted_previous: deleted.rowCount ?? 0,
+    inserted,
+    skipped_unlinked_user,
+    skipped_unlinked_project,
+  };
 }
 
 export async function autoLinkAworkUsersByEmail(

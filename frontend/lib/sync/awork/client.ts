@@ -15,12 +15,14 @@ import {
   AworkCompanySchema,
   AworkCustomFieldDefinitionSchema,
   AworkProjectSchema,
+  AworkTimeBookingSchema,
   AworkTimeEntrySchema,
   AworkUserSchema,
   parseList,
   type AworkCompany,
   type AworkCustomFieldDefinition,
   type AworkProject,
+  type AworkTimeBooking,
   type AworkTimeEntry,
   type AworkUser,
 } from "./schemas";
@@ -120,6 +122,16 @@ export const aworkClient = {
         endDate: params.end_date,
       }),
       "time_entry",
+    ),
+  // `/timebookings` powers awork's Planner. No date-range filter on the
+  // endpoint — we pull everything and let the calendar query slice by
+  // employee+date. With ~200 entries per workspace per quarter the
+  // payload stays small even over a year of history.
+  listTimeBookings: async (): Promise<AworkTimeBooking[]> =>
+    parseList(
+      AworkTimeBookingSchema,
+      await paginate("/timebookings"),
+      "time_booking",
     ),
   // `list*` methods filter through the boundary schema. The two raw
   // accessors below stay typed as `unknown` because they're rarely

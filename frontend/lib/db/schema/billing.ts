@@ -120,6 +120,11 @@ export const assignment = pgTable("assignment", {
   daily_rate_override_eur: numeric({ precision: 10, scale: 2 }),
   daily_cost_override_eur: numeric({ precision: 10, scale: 2 }),
   notes: text(),
+  /** Provenance flag — 'manual' for UI-curated rows, 'awork-planning'
+   * for rows synthesized from awork_time_booking on every sync. The
+   * sync wipes its own rows by `WHERE source = 'awork-planning'` then
+   * re-inserts; manual rows are never touched. */
+  source: text().notNull().default("manual"),
   created_at: timestamp({ mode: "date" }).notNull(),
   updated_at: timestamp({ mode: "date" }).notNull(),
 });

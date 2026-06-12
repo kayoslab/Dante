@@ -197,11 +197,11 @@ export function CalendarGrid({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
-        <Legend swatch="bg-blue-100" label="< 50%" />
-        <Legend swatch="bg-blue-200" label="50–74%" />
-        <Legend swatch="bg-blue-300" label="75–99%" />
-        <Legend swatch="bg-blue-400" label="100%" />
-        <Legend swatch="bg-red-300" label=">100%" />
+        <Legend swatch="bg-blue-100" label="< 50% load" />
+        <Legend swatch="bg-blue-200" label="50–74% load" />
+        <Legend swatch="bg-blue-300" label="75–99% load" />
+        <Legend swatch="bg-blue-400" label="100% load" />
+        <Legend swatch="bg-red-300" label=">100% load (overbook, assignment-only)" />
         <Legend swatch="bg-amber-200/80" label="Vacation/absence" />
         <Legend swatch="bg-amber-100/80" label="Public holiday (federal or local state)" />
         <Legend swatch="bg-muted/50" label="Weekend" />
