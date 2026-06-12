@@ -92,7 +92,26 @@ Order matters — Terraform creates empty secret containers, but the operator wr
 
 1. **Terraform apply (round 1)** — VPC, RDS, ECR, ALB, ACM, DNS, Cognito, secrets containers, sync Lambda. The ECS service starts with 0 healthy tasks because no image is pushed yet. Tasks may flap; that's expected.
 
-2. **Seed Secrets Manager** (one-time, out-of-band):
+2. **Seed Secrets Manager** (one-time, out-of-band — *not* via GitHub).
+
+   All app secrets live in AWS Secrets Manager. GitHub Actions never
+   holds any app secret; the deploy workflow assumes an IAM role via
+   OIDC and the ECS task definition injects the values straight from
+   Secrets Manager as env vars at container start. The only thing in
+   the GitHub repo is the deploy-role ARN (a *variable*, not a secret —
+   useless without the OIDC trust policy that Terraform created).
+
+   Secret matrix:
+
+   | Secret container | Filled by | Rotation |
+   |---|---|---|
+   | `dante/prod/auth_secret` | Manual `put-secret-value` with `openssl rand -base64 64` | Only on suspected compromise |
+   | `dante/prod/personio` | Manual `put-secret-value` with the JSON Personio's portal gave you | When Personio admin rotates the API client |
+   | `dante/prod/awork/client` | Manual `put-secret-value` with the awork OAuth client_id (+ optional secret) | Rare |
+   | `dante/prod/awork/tokens` | **Auto** — first sign-in as admin → `/settings/integrations/awork` → click *Authorize*; the OAuth callback writes the tokens. Every `npm run sync` thereafter refreshes them in place. | Never manually |
+   | `dante-prod-rds-master-…` (RDS-managed) | RDS auto-generates on first apply, KMS-encrypted; ECS reads via the task definition `secrets:` block | Auto-rotation via `aws secretsmanager rotate-secret`; force-new-deployment on the service afterwards |
+
+   Commands for the three manual ones:
    ```bash
    # AUTH_SECRET — Auth.js JWT signing key
    aws secretsmanager put-secret-value \
@@ -102,14 +121,17 @@ Order matters — Terraform creates empty secret containers, but the operator wr
    # Personio creds
    aws secretsmanager put-secret-value \
      --secret-id dante/prod/personio \
-     --secret-string '{"client_id":"...","client_secret":"..."}'
+     --secret-string '{"client_id":"papi-...","client_secret":"papi-..."}'
 
-   # awork creds (post-Phase-B)
+   # awork OAuth client (Phase B)
    aws secretsmanager put-secret-value \
      --secret-id dante/prod/awork/client \
      --secret-string '{"client_id":"...","client_secret":"..."}'
-   # awork/tokens fills itself on first sign-in via /settings/integrations/awork
    ```
+
+   The RDS master credential and `dante/prod/awork/tokens` are
+   deliberately omitted — both are populated by their respective
+   automated paths, not by hand.
 
 3. **Build + push container image**:
    ```bash
@@ -142,7 +164,7 @@ Two workflows + two OIDC roles. No long-lived AWS keys.
 2. **terraform**: download the Lambda artifact, `terraform plan` (passing `app_image_uri` + `github_repository` + `hosted_zone_id`), `terraform apply` the plan.
 3. **rollout**: `aws ecs update-service --force-new-deployment` + `aws ecs wait services-stable`. The task definition already moved during the Terraform step; this triggers the service to roll.
 
-**Repository configuration (one-time after first `terraform apply`)** — set as repository **variables** (ARNs aren't secrets):
+**Repository configuration (one-time after first `terraform apply`)** — set as repository **variables** (ARNs aren't secrets). The repo's GitHub Secrets are deliberately empty for app config — all app secrets live in AWS Secrets Manager and the runtime reads them directly; see [Prod bring-up §2](#prod-bring-up).
 - `AWS_DEPLOY_ROLE_ARN` ← `terraform output -raw github_deploy_role_arn`
 - `AWS_CHECK_ROLE_ARN`  ← `terraform output -raw github_check_role_arn`
 - `ECS_CLUSTER_NAME`    ← `terraform output -raw app_cluster_name`

@@ -18,17 +18,40 @@ the analogy will land.
 ## What it does
 
 - **Pulls** employee data, compensation history, absences, and project
-  attendances from the Personio API.
+  attendances from the Personio API. Stale absences (withdrawn or
+  rejected after Personio dropped them from the feed) get cleaned up
+  on every run.
 - **Pulls** companies, users, projects, and time entries from the awork API.
-- **Reconciles** the two — links awork users to Personio employees by email,
-  links awork companies to internal customers by name, derives consultant
-  assignments from logged time.
-- **Shows** the consequences in three roles:
-  - **Employees** see their own profile and the team allocation calendar.
-  - **Managers** see project economics, portfolio margins, consultant
-    utilization, salary bands, and gender-gap analysis.
-  - **Admins** add users, change roles, audit access, re-authorize awork
-    OAuth.
+- **Reconciles** the two — links awork users to both Personio employees
+  and external freelancers by email, links awork companies to internal
+  customers by name, derives consultant assignments from logged time.
+- **Records** the bits Personio doesn't track: monthly freelancer hours
+  per project (entered by the project's SDM, auto-filled from awork
+  when a freelancer happens to log there too) and per-project SDM
+  grants. Freelancer hours drive actuals-based cost; absent an entry
+  the calc falls back to planned allocation.
+- **Knows** the German working calendar per employee: federal +
+  state-specific holidays resolved from the employee's office (Bavaria
+  gets Fronleichnam, BW/Bayern/Sachsen-Anhalt get Heilige Drei Könige,
+  etc.), so per-month billable days and per-month cost reflect what
+  the employee actually owes.
+- **Shows** the consequences in three roles plus one per-project capability:
+  - **Employees** see their own profile, the team allocation calendar
+    (with absences shown as the generic "absence", no daily rates),
+    and a directory of colleagues (without HR-sensitive fields like
+    contract end dates or role tier).
+  - **Service Delivery Managers** are employees who have been granted
+    SDM rights on one or more specific projects via `project_sdm`.
+    They get manager-equivalent access to *their* projects — assignments,
+    rates, freelancer hours, Personio/awork links, monthly P&L,
+    over-budget alerts — but nothing about other projects.
+  - **Managers** see all project economics, portfolio margins,
+    consultant utilization, the real Personio absence type
+    (including sickness — they need it for planning), salary bands,
+    and gender-gap analysis.
+  - **Admins** grant and revoke SDM rights, invite users, change
+    roles, audit access, re-authorize awork OAuth, and run the
+    breakglass migrations.
 
 If you are looking for the spreadsheet version of this, the spreadsheet
 version of this is wrong. That's why this exists.
