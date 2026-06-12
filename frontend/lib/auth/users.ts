@@ -22,8 +22,6 @@ export type AppUserRow = {
   employee_id: number | null;
   role: Role;
   is_disabled: boolean;
-  mfa_required: boolean;
-  mfa_enrolled: boolean;
 };
 
 const USER_SELECT = {
@@ -32,10 +30,6 @@ const USER_SELECT = {
   employee_id: appUser.employee_id,
   role: appUser.role,
   is_disabled: appUser.is_disabled,
-  mfa_required: appUser.mfa_required,
-  // mfa_enrolled is derived — we never need the secret here, just the
-  // boolean state. NOT NULL check via SQL expression.
-  mfa_enrolled: sql<boolean>`${appUser.mfa_enrolled_at} IS NOT NULL`,
 };
 
 /** Find by cognito_sub OR by lowercased email; create if missing.
@@ -81,10 +75,6 @@ export async function findOrCreateAppUser(input: {
   // Only allow the upgrade when the existing sub is a dev-mode stub
   // (`dev:...`). Anything else is either a case-collision attack or a
   // genuine duplicate that needs admin attention.
-  //
-  // Also wipe MFA fields on upgrade — otherwise a malicious dev-mode
-  // user could pre-enroll TOTP and have the real Cognito sign-in
-  // inherit their secret.
   const byEmail = await db
     .select({
       user_id: appUser.user_id,
@@ -92,8 +82,6 @@ export async function findOrCreateAppUser(input: {
       employee_id: appUser.employee_id,
       role: appUser.role,
       is_disabled: appUser.is_disabled,
-      mfa_required: appUser.mfa_required,
-      mfa_enrolled: sql<boolean>`${appUser.mfa_enrolled_at} IS NOT NULL`,
       cognito_sub: appUser.cognito_sub,
     })
     .from(appUser)
@@ -112,9 +100,6 @@ export async function findOrCreateAppUser(input: {
     const update: Record<string, unknown> = {
       cognito_sub: input.cognito_sub,
       last_login_at: new Date(),
-      // Reset MFA on identity transfer — the new owner must re-enroll.
-      mfa_secret: null,
-      mfa_enrolled_at: null,
     };
     if (input.expected_role && byEmail[0].role !== input.expected_role) {
       update.role = input.expected_role;
@@ -129,8 +114,6 @@ export async function findOrCreateAppUser(input: {
       employee_id: byEmail[0].employee_id,
       role: (update.role as Role | undefined) ?? byEmail[0].role,
       is_disabled: byEmail[0].is_disabled,
-      mfa_required: byEmail[0].mfa_required,
-      mfa_enrolled: false, // we just wiped it
     };
   }
 
@@ -149,8 +132,6 @@ export async function findOrCreateAppUser(input: {
       email,
       employee_id: empMatch[0]?.employee_id ?? null,
       role,
-      // admin + manager are MFA-required by default; employees can opt in.
-      mfa_required: role !== "employee",
       last_login_at: new Date(),
     })
     .returning(USER_SELECT);

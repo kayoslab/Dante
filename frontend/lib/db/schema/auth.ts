@@ -51,18 +51,11 @@ export const appUser = pgTable(
      * (audit_log FKs point here); we toggle this flag instead. Mirrors
      * Cognito's AdminDisableUser / AdminEnableUser. */
     is_disabled: boolean().notNull().default(false),
-    /** When true, the user must complete TOTP at sign-in. Defaults true
-     * for admin/manager (set by `inviteUserAction` + a setRole trigger);
-     * users can opt-in for "employee" via `/profile`. */
-    mfa_required: boolean().notNull().default(false),
-    /** Base32-encoded TOTP secret. NULL means the user hasn't enrolled
-     * yet — the setup flow will issue one. Encrypted at rest by Postgres
-     * TDE; application-layer encryption is a later upgrade if scope grows. */
-    mfa_secret: text(),
-    /** When set, the user has completed enrollment. Cleared on admin
-     * reset (e.g. lost device). `mfa_required && mfa_enrolled_at IS NULL`
-     * → user is forced through setup before they can use the app. */
-    mfa_enrolled_at: timestamp({ mode: "date" }),
+    // MFA columns (`mfa_secret`, `mfa_enrolled_at`, the older `mfa_required`)
+    // were dropped in migrations 0011 → 0012 when MFA enforcement moved
+    // to Cognito's hosted UI (TOTP + WebAuthn passkeys). See
+    // `terraform/modules/cognito` for the user-pool `mfa_configuration`
+    // and `web_authn_configuration` blocks.
     created_at: timestamp({ mode: "date" }).notNull().defaultNow(),
     last_login_at: timestamp({ mode: "date" }),
   },

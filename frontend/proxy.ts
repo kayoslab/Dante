@@ -30,10 +30,10 @@ const PUBLIC_PREFIXES = [
   "/favicon", // /favicon.ico
 ];
 
-// MFA setup/verify pages live behind authentication but allow
-// MFA-pending sessions through. The proxy doesn't differentiate (signed
-// in = next()); the gate lives inside the pages themselves via
-// `requireSession({ allowMfaPending: true })`. Don't add /auth/mfa here.
+// MFA enrollment + challenge happen inside Cognito's hosted UI, which
+// the user reaches via the redirect to `/api/auth/signin/cognito`
+// (already allowlisted under `/api/auth`). No in-app MFA pages exist
+// for the proxy to special-case.
 
 function isPublic(pathname: string): boolean {
   if (PUBLIC_PATHS.includes(pathname)) return true;

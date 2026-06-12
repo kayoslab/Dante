@@ -28,8 +28,10 @@ These were extracted from TECH_DEBT.md when it was closed out. They're the durab
 ### Who's who
 
 - **employee** — every regular member of the company, including **team leads**. Team-lead is a project-contribution attribute (`employee_annotation.is_project_contributing`), not a role tier. Team leads use the same UI as anyone else: their own profile, the allocation calendar, the employee list (no detail).
-- **manager** — **C-level** (CEO, CFO, COO). Full-org visibility on everything financial: portfolio economics, salary bands, gender-gap analysis, per-employee economics. Required MFA. Three to five people in a 40-person org.
-- **admin** — usually one person; manages users + audit log + integrations. Required MFA. Disjoint from "manager" in practice but admins automatically inherit manager-level data access via `ROLE_RANK`.
+- **manager** — **C-level** (CEO, CFO, COO). Full-org visibility on everything financial: portfolio economics, salary bands, gender-gap analysis, per-employee economics. Three to five people in a 40-person org.
+- **admin** — usually one person; manages users + audit log + integrations. Disjoint from "manager" in practice but admins automatically inherit manager-level data access via `ROLE_RANK`.
+
+MFA is mandatory for every role — Cognito's hosted UI enforces it (TOTP or WebAuthn passkey). See [§ MFA (Cognito-managed)](#mfa-cognito-managed).
 
 ### Per-role endpoint matrix
 
@@ -42,27 +44,45 @@ These were extracted from TECH_DEBT.md when it was closed out. They're the durab
 A C-level manager can read **any** employee's salary history, monthly economics, and (post-redaction) Personio attributes. There is **no team scoping** because there are no team-tier managers in this org — the manager role is by definition org-wide. This was flagged as H-001 in the pre-launch pen test and is **accepted as design**.
 
 Compensating controls:
-- **MFA required** on every manager account, in-app gated by `requireSession` / `requireApiSession`.
+- **MFA mandatory for every user** (employee, manager, admin) — enforced by Cognito's hosted UI (`mfa_configuration = "ON"` on the user pool). TOTP or WebAuthn passkey, user's choice. By the time we see an OIDC token, MFA has already happened.
 - **Audit log** on every sensitive read: `view_employee_detail`, `view_inspect_payload`, `view_salary_bands`, `view_gender_gap`, `view_salary`. Forensic queries: `SELECT actor_email, COUNT(*) FROM app_audit_log WHERE action IN ('view_inspect_payload','view_employee_detail') AND occurred_at > NOW() - INTERVAL '7 days' GROUP BY actor_email ORDER BY 2 DESC` highlights outliers.
 - **Personio payload redaction** in `/api/inspect/*` — IBAN / BIC / bank / tax_id / SSN / passport / national_id / health_insurance / religion / ethnicity attributes return `"[redacted]"`.
 - **CloudWatch alarm candidate**: spike in `view_inspect_payload` per actor over a 5-minute window. Not yet wired; would require shipping audit rows to CloudWatch via a sync-time export or a stream.
 
 If the org structure changes (e.g. adding a "team-tier manager" role between manager and employee), revisit this and add team-scoped variants of the per-employee endpoints. Until then, the audit log is the primary control and must stay queryable.
 
-## MFA (TOTP)
+## MFA (Cognito-managed)
 
-- **In-app TOTP**, not Cognito SOFTWARE_TOKEN_MFA. Same code path in dev and prod; no Auth.js custom challenge handling.
-- Library: `otplib@12` + `qrcode`. The `authenticator` instance in `lib/auth/mfa.ts` uses default RFC 6238 settings (30s step, ±30s tolerance).
-- Required by default for **admin** and **manager**. Employees can opt in via `/profile` (not yet wired in UI — schema supports it).
-- Per-session, not per-device: `mfa_verified` lives in the JWT. A new sign-in starts with `mfa_verified = false` and the user is bounced to `/auth/mfa/verify` (or `/auth/mfa/setup` if not enrolled).
-- The TOTP secret is in `app_user.mfa_secret` (plain base32). Postgres TDE handles at-rest encryption; app-layer encryption is a later upgrade if the row count grows.
-- **Enforcement points**: `requireSession()` and `requireApiSession()` both redirect/throw if `mfa_required && !mfa_verified`. The MFA pages themselves pass `{ allowMfaPending: true }` to opt out of the bounce.
+MFA is delegated to **Cognito's hosted UI**, configured via
+`terraform/modules/cognito`:
 
-**Reset (lost device)**: admin clicks "Reset MFA" on `/settings/users`. This calls `resetUserMfaAction` which nulls `mfa_secret` + `mfa_enrolled_at`; the user re-enrolls on next sign-in. The action is audited as `user_mfa_reset`.
+- `mfa_configuration = "ON"` — required for every user, no opt-out.
+- `software_token_mfa_configuration { enabled = true }` — TOTP via any
+  authenticator app (Google Authenticator, 1Password, Authy, …).
+- `web_authn_configuration { relying_party_id = <domain>, user_verification = "required" }`
+  — WebAuthn passkeys. Passkeys with user-verification *required* count
+  as a strong second factor on their own; Cognito will accept either a
+  TOTP code or a passkey at the challenge step.
 
-**Auto-enable on promotion**: `setUserRoleAction` flips `mfa_required = true` when promoting to manager/admin. Demoting does NOT auto-clear — admins toggle off explicitly if they want.
+On first sign-in the hosted UI walks the user through enrollment (pick
+TOTP, passkey, or both). On every subsequent sign-in Cognito presents
+the challenge before redirecting back to `/api/auth/callback/cognito`.
+By the time Auth.js's jwt callback runs, MFA has already happened — no
+app-side gate, no app-side state to track. The retired in-app TOTP
+layer (migration 0012 dropped `mfa_secret` + `mfa_enrolled_at`) lived
+in commits prior to the Cognito switch.
 
-**Promotions / new invites**: `inviteUserAction` writes `mfa_required = role !== "employee"`.
+**Reset (lost device)**: handled in the AWS console or via
+`aws cognito-idp admin-set-user-mfa-preference --user-pool-id <id>
+--username <email> --software-token-mfa-settings Enabled=false`
+followed by an `admin-user-global-sign-out`. The user re-enrolls
+through the hosted UI on next sign-in.
+
+**Dev mode** (Credentials provider via `AUTH_DEV_MODE=true`) doesn't
+talk to Cognito and therefore has no MFA. This is the same parity gap
+as before — dev mode is for local UI iteration; never deploy with it
+enabled (the assertion in `lib/auth/config.ts` throws at module init
+if `NODE_ENV=production`).
 
 ## awork integration
 
@@ -146,7 +166,7 @@ Order matters — Terraform creates empty secret containers, but the operator wr
 
 5. **Confirm SNS subscription emails** — the sync Lambda's alarm topic and any others land in `admin@example.com`. Click the confirm link or alarms won't fire.
 
-6. **First sign-in** — Cognito sends a temp-password email to seed admins; you complete first sign-in, set a permanent password, then enroll MFA on `/auth/mfa/setup`.
+6. **First sign-in** — Cognito sends a temp-password email to seed admins; you complete first sign-in, set a permanent password, then Cognito's hosted UI prompts for TOTP enrollment and/or passkey registration. After that the user redirects back to `/` already MFA-verified.
 
 For ongoing redeploys (image rebuild + new SHA), step 3 + step 4 are enough — the rest is one-time.
 

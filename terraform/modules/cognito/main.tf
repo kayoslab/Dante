@@ -60,14 +60,26 @@ resource "aws_cognito_user_pool" "this" {
     temporary_password_validity_days = 7
   }
 
-  # MFA at pool level is OPTIONAL — users can choose to enable TOTP. The app
-  # enforces "admins MUST have MFA configured to use admin-scoped routes" in
-  # session middleware (P1 day 2/3). This keeps the door open for employees
-  # who haven't set up TOTP yet.
-  mfa_configuration = "OPTIONAL"
+  # MFA is mandatory for every user (migration 0011 dropped the per-user
+  # `mfa_required` flag — the in-app gate became universal, and then
+  # delegated to Cognito's native flow). The hosted UI walks new users
+  # through TOTP or passkey enrollment at first sign-in; subsequent
+  # sign-ins prompt for the chosen factor.
+  mfa_configuration = "ON"
 
   software_token_mfa_configuration {
     enabled = true
+  }
+
+  # WebAuthn / passkey support. The relying-party ID binds credentials
+  # to the app's public domain — a passkey enrolled here can't be
+  # replayed at another site. `user_verification = "required"` forces
+  # the authenticator to verify the user (biometric, PIN, or device
+  # unlock) rather than just proving possession, which makes the
+  # passkey itself a strong second factor on its own.
+  web_authn_configuration {
+    relying_party_id  = var.domain_name
+    user_verification = "required"
   }
 
   account_recovery_setting {

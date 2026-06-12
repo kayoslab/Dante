@@ -43,19 +43,20 @@ export const Forbidden = (message = "Forbidden") =>
 export type ApiSessionContext = SessionContext;
 
 /** Route-handler equivalent of `requireSession`. Throws `HTTPError(401)`
- * if there's no session, `HTTPError(403)` if the role is below `minRole`,
- * and `HTTPError(403, "mfa_required")` if the user hasn't completed MFA.
- * The surrounding `handle()` turns those into JSON responses with the
- * right status code.
+ * if there's no session and `HTTPError(403)` if the role is below
+ * `minRole`. The surrounding `handle()` turns those into JSON responses
+ * with the right status code.
+ *
+ * MFA is enforced by Cognito's hosted UI before we ever see a token —
+ * if the user pool's `mfa_configuration = "ON"`, the IdP guarantees
+ * the JWT we receive comes from an MFA-verified sign-in. No in-app gate.
  *
  * Use from EVERY API route. The proxy enforces "signed in or not" but
- * does not enforce roles or MFA — the per-route check is what keeps an
- * employee from hitting `/api/salary/*` and what keeps an MFA-pending
- * admin from reading data before completing TOTP.
+ * does not enforce roles — the per-route check is what keeps an
+ * employee from hitting `/api/salary/*`.
  */
 export async function requireApiSession(opts: {
   minRole?: Role;
-  allowMfaPending?: boolean;
 } = {}): Promise<SessionContext> {
   const session = await auth();
   if (!session?.user) {
@@ -72,13 +73,7 @@ export async function requireApiSession(opts: {
     email: session.user.email,
     role: session.user.role,
     employee_id: session.user.employee_id,
-    mfa_required: session.user.mfa_required,
-    mfa_enrolled: session.user.mfa_enrolled,
-    mfa_verified: session.user.mfa_verified,
   };
-  if (!opts.allowMfaPending && ctx.mfa_required && !ctx.mfa_verified) {
-    throw Forbidden("MFA verification required");
-  }
   if (opts.minRole && ROLE_RANK[ctx.role] < ROLE_RANK[opts.minRole]) {
     throw Forbidden(
       `requires role ${opts.minRole} or above (you are ${ctx.role})`,

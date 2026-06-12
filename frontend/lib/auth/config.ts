@@ -2,7 +2,6 @@ import type { NextAuthConfig } from "next-auth";
 import Cognito from "next-auth/providers/cognito";
 import Credentials from "next-auth/providers/credentials";
 
-import { verifyMfaProof } from "./mfa-proof";
 import { findOrCreateAppUser } from "./users";
 
 /** App-level role derived from Cognito groups (or the dev override list).
@@ -12,19 +11,15 @@ export type Role = "admin" | "manager" | "employee";
 
 declare module "next-auth" {
   /** Surfaces the role + the linked employee_id on `session.user` so every
-   * server-rendered page + Server Action can branch on it. */
+   * server-rendered page + Server Action can branch on it. MFA is
+   * enforced upstream by Cognito's hosted UI (`mfa_configuration = "ON"`),
+   * so there's no app-side MFA state on the session. */
   interface Session {
     user: {
       user_id: string;
       email: string;
       role: Role;
       employee_id: number | null;
-      /** MFA gate state — `mfa_required && !mfa_verified` means the user
-       * has signed in but hasn't completed TOTP yet. `requireSession`
-       * redirects them to `/auth/mfa/*`. */
-      mfa_required: boolean;
-      mfa_enrolled: boolean;
-      mfa_verified: boolean;
     };
   }
 }
@@ -35,11 +30,6 @@ declare module "@auth/core/jwt" {
     email: string;
     role: Role;
     employee_id: number | null;
-    mfa_required: boolean;
-    mfa_enrolled: boolean;
-    /** Flipped by the verify Server Action via Auth.js's `unstable_update`
-     * after a correct TOTP code. Never set on the initial sign-in token. */
-    mfa_verified: boolean;
   }
 }
 
@@ -146,7 +136,7 @@ export const authConfig = {
       ],
 
   callbacks: {
-    async jwt({ token, user, profile, trigger, session }) {
+    async jwt({ token, user, profile }) {
       // On sign-in, hydrate the token with our app's user record + role.
       // `user` is populated only on the initial authorize() call.
       if (user) {
@@ -157,17 +147,11 @@ export const authConfig = {
           (user as { employee_id?: number | null }).employee_id ??
           token.employee_id ??
           null;
-        token.mfa_required =
-          (user as { mfa_required?: boolean }).mfa_required ?? false;
-        token.mfa_enrolled =
-          (user as { mfa_enrolled?: boolean }).mfa_enrolled ?? false;
-        // mfa_verified always starts false on a fresh sign-in. The verify
-        // Server Action calls `unstable_update({ mfa_verified: true })` after
-        // a correct TOTP code, which re-enters this callback with
-        // trigger="update" — that's where we flip the bit (see below).
-        token.mfa_verified = false;
       }
-      // On Cognito sign-in, profile carries `cognito:groups`.
+      // On Cognito sign-in, profile carries `cognito:groups`. Cognito's
+      // hosted UI enforces MFA before the OIDC code is issued
+      // (`mfa_configuration = "ON"` on the user pool), so by the time
+      // we see a token, MFA has already happened. No app-side gate.
       if (profile) {
         const groups =
           (profile as { "cognito:groups"?: string[] })["cognito:groups"] ?? [];
@@ -179,30 +163,6 @@ export const authConfig = {
           token.email = u.email;
           token.employee_id = u.employee_id;
           token.role = cognitoRoleFor(groups);
-          token.mfa_required = u.mfa_required;
-          token.mfa_enrolled = u.mfa_enrolled;
-          token.mfa_verified = false;
-        }
-      }
-      // Trusted self-update from the verify Server Action. Auth.js v5's
-      // `useSession().update(data)` is CLIENT-CALLABLE — a malicious
-      // browser script could call it with `{ mfa_verified: true }` and
-      // bypass MFA. To distinguish a legitimate server-side update from
-      // a client-fabricated one, the verify action mints an HMAC proof
-      // (keyed with AUTH_SECRET) over `${user_id}:${time_window}`. The
-      // client can't compute the HMAC; the update silently fails for
-      // any payload without a valid proof.
-      if (trigger === "update" && session && typeof session === "object") {
-        const s = session as {
-          mfa_verified?: boolean;
-          mfa_enrolled?: boolean;
-          mfa_proof?: string;
-        };
-        const proofValid =
-          token.user_id != null && verifyMfaProof(token.user_id, s.mfa_proof);
-        if (proofValid) {
-          if (s.mfa_verified === true) token.mfa_verified = true;
-          if (s.mfa_enrolled === true) token.mfa_enrolled = true;
         }
       }
       return token;
@@ -219,9 +179,6 @@ export const authConfig = {
         email: token.email,
         role: token.role,
         employee_id: token.employee_id,
-        mfa_required: token.mfa_required ?? false,
-        mfa_enrolled: token.mfa_enrolled ?? false,
-        mfa_verified: token.mfa_verified ?? false,
       };
       return session;
     },

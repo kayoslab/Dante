@@ -20,7 +20,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   inviteUserAction,
-  resetUserMfaAction,
   setUserDisabledAction,
   setUserRoleAction,
 } from "@/lib/actions/users";
@@ -36,8 +35,6 @@ type Row = {
   employee_name: string | null;
   created_at: string;
   last_login_at: string | null;
-  mfa_required: boolean;
-  mfa_enrolled: boolean;
 };
 
 export function UsersClient({
@@ -125,17 +122,6 @@ function UserRow({ row, isSelf }: { row: Row; isSelf: boolean }) {
     });
   }
 
-  function resetMfa() {
-    if (!confirm(`Reset MFA for ${row.email}? They'll re-enroll on next sign-in.`)) {
-      return;
-    }
-    startTransition(async () => {
-      const r = await resetUserMfaAction({ user_id: row.user_id });
-      if (!r.ok) toast.error(r.error.detail);
-      else toast.success("MFA reset — user will re-enroll on next sign-in.");
-    });
-  }
-
   return (
     <tr className={row.is_disabled ? "bg-muted/30 text-muted-foreground" : ""}>
       <td className="px-3 py-2">
@@ -179,17 +165,6 @@ function UserRow({ row, isSelf }: { row: Row; isSelf: boolean }) {
       </td>
       <td className="px-3 py-2 text-right">
         <div className="flex justify-end gap-2">
-          {row.mfa_enrolled && (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={isPending}
-              onClick={resetMfa}
-              title="Clear this user's TOTP secret. They'll re-enroll on next sign-in."
-            >
-              Reset MFA
-            </Button>
-          )}
           {!isSelf && (
             <Button
               size="xs"

@@ -89,6 +89,7 @@ module "cognito" {
   environment       = "prod"
   name_prefix       = "dante"
   seed_admin_emails = var.seed_admin_emails
+  domain_name       = var.domain
 
   callback_urls = [
     "https://${var.domain}/api/auth/callback/cognito",

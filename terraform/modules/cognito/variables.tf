@@ -18,6 +18,11 @@ variable "callback_urls" {
   type        = list(string)
 }
 
+variable "domain_name" {
+  description = "Public domain the app is hosted on (e.g. dante.example.com). Used as the WebAuthn relying-party ID — passkeys are scoped to this exact domain so credentials can't be replayed elsewhere."
+  type        = string
+}
+
 variable "logout_urls" {
   description = "Sign-out redirect URLs allowed for the app client."
   type        = list(string)

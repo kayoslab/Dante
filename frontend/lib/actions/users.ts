@@ -98,9 +98,6 @@ export async function inviteUserAction(
       email,
       role,
       employee_id: empMatch[0]?.employee_id ?? null,
-      // admin + manager invitations default to MFA-required. Employees
-      // can opt in via /profile later.
-      mfa_required: role !== "employee",
     })
     .returning({
       user_id: appUser.user_id,
@@ -142,13 +139,8 @@ export async function setUserRoleAction(
   const parsed = SetRoleSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  // Promoting an employee → manager/admin should force MFA on. Demoting
-  // does not auto-clear `mfa_required` — keeping the stronger setting is
-  // safer than silently weakening it; admins can flip it off explicitly.
+  // MFA is mandatory for everyone; nothing role-specific to set here.
   const updates: Record<string, unknown> = { role: parsed.data.role };
-  if (parsed.data.role !== "employee") {
-    updates.mfa_required = true;
-  }
 
   // Wrap the last-admin check + the role write in a transaction with
   // `SELECT ... FOR UPDATE` on the admin rows. Two admins demoting each
@@ -275,44 +267,6 @@ export async function setUserDisabledAction(
 }
 
 /* ---------- reset MFA (lost device) ---------- */
-
-const ResetMfaSchema = z.object({
-  user_id: z.string().uuid(),
-});
-
-/** Admin-only: clear a user's TOTP secret + enrollment timestamp. The
- * user goes through `/auth/mfa/setup` on next sign-in. Use when a phone
- * is lost or a fresh authenticator app is needed. */
-export async function resetUserMfaAction(
-  input: unknown,
-): Promise<ActionResult<{ user_id: string }>> {
-  let ctx;
-  try {
-    ctx = await requireAdmin();
-  } catch (e) {
-    const f = bailForbidden<{ user_id: string }>(e);
-    if (f) return f;
-    throw e;
-  }
-  const parsed = ResetMfaSchema.safeParse(input);
-  if (!parsed.success) return fromZod(parsed.error);
-
-  const updated = await db
-    .update(appUser)
-    .set({ mfa_secret: null, mfa_enrolled_at: null })
-    .where(eq(appUser.user_id, parsed.data.user_id))
-    .returning({ user_id: appUser.user_id });
-  if (!updated[0]) return err("not_found", "User not found.");
-
-  await audit(ctx, {
-    action: "user_mfa_reset",
-    target_type: "app_user",
-    target_id: parsed.data.user_id,
-  });
-
-  revalidatePath("/settings/users");
-  return ok(updated[0]);
-}
 
 /* ---------- link to employee ---------- */
 

@@ -4,9 +4,15 @@
  * Component page, route handler, and Server Action calls at the top. It:
  *   - redirects to /login if there's no session
  *   - redirects to /login if the user has been disabled (was H-008)
- *   - redirects to /auth/mfa/* if MFA is pending
  *   - throws a 403 Forbidden if the user lacks the minimum role
  *   - returns a typed `SessionContext` for the page/action body
+ *
+ * MFA is handled by Cognito's hosted UI in prod (TOTP + WebAuthn passkeys
+ * with `mfa_configuration = "ON"` on the user pool, see
+ * `terraform/modules/cognito`). The in-app TOTP layer that used to live
+ * here was retired in migration 0012 — there's no app-side MFA gate
+ * because the IdP enforces it before we ever see a token. Dev mode
+ * (Credentials provider) has no MFA, as before.
  *
  * The role hierarchy (admin > manager > employee) is checked numerically.
  * Pages that should be reachable by any signed-in user (employees
@@ -25,9 +31,6 @@ export type SessionContext = {
   email: string;
   role: Role;
   employee_id: number | null;
-  mfa_required: boolean;
-  mfa_enrolled: boolean;
-  mfa_verified: boolean;
 };
 
 export const ROLE_RANK: Record<Role, number> = {
@@ -83,18 +86,10 @@ export function invalidateDisabledCache(user_id: string): void {
 /** Use from a Server Component or Server Action. Redirects:
  *  - unauthenticated → /login
  *  - disabled account → /login (terminated employee, fired admin, etc.)
- *  - signed in but MFA required + not enrolled → /auth/mfa/setup
- *  - signed in + MFA required + enrolled + not verified → /auth/mfa/verify
  *
- * Throws `ForbiddenError` if the role is below `minRole`.
- *
- * Pages that ARE the MFA setup/verify pages must pass
- * `{ allowMfaPending: true }` so this helper doesn't redirect them in a loop. */
+ * Throws `ForbiddenError` if the role is below `minRole`. */
 export async function requireSession(opts: {
   minRole?: Role;
-  /** Bypass the MFA-gate redirect. Used by the `/auth/mfa/*` pages
-   * themselves and by `/api/auth/*`. */
-  allowMfaPending?: boolean;
 } = {}): Promise<SessionContext> {
   const session = await auth();
   if (!session?.user) {
@@ -111,13 +106,7 @@ export async function requireSession(opts: {
     email: session.user.email,
     role: session.user.role,
     employee_id: session.user.employee_id,
-    mfa_required: session.user.mfa_required,
-    mfa_enrolled: session.user.mfa_enrolled,
-    mfa_verified: session.user.mfa_verified,
   };
-  if (!opts.allowMfaPending && ctx.mfa_required && !ctx.mfa_verified) {
-    redirect(ctx.mfa_enrolled ? "/auth/mfa/verify" : "/auth/mfa/setup");
-  }
   if (opts.minRole && ROLE_RANK[ctx.role] < ROLE_RANK[opts.minRole]) {
     throw new ForbiddenError(
       `requires role ${opts.minRole} or above (you are ${ctx.role})`,
@@ -128,8 +117,7 @@ export async function requireSession(opts: {
 
 /** Non-throwing variant — returns null if not signed in. Used by middleware
  * and by pages that need to render different content per role without
- * forcing a redirect. Does NOT enforce MFA or disabled-user checks — callers
- * that care must check `ctx.mfa_required && !ctx.mfa_verified` themselves. */
+ * forcing a redirect. Does NOT enforce the disabled-user check. */
 export async function getSession(): Promise<SessionContext | null> {
   const session = await auth();
   if (!session?.user) return null;
@@ -138,9 +126,6 @@ export async function getSession(): Promise<SessionContext | null> {
     email: session.user.email,
     role: session.user.role,
     employee_id: session.user.employee_id,
-    mfa_required: session.user.mfa_required,
-    mfa_enrolled: session.user.mfa_enrolled,
-    mfa_verified: session.user.mfa_verified,
   };
 }
 

@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { forbidden } from "next/navigation";
 
 import { db } from "@/lib/db/client";
@@ -24,8 +24,6 @@ export default async function UsersPage() {
       employee_last_name: employeeCurrent.last_name,
       created_at: appUser.created_at,
       last_login_at: appUser.last_login_at,
-      mfa_required: appUser.mfa_required,
-      mfa_enrolled: sql<boolean>`${appUser.mfa_enrolled_at} IS NOT NULL`,
     })
     .from(appUser)
     .leftJoin(employeeCurrent, eq(employeeCurrent.employee_id, appUser.employee_id))
@@ -46,8 +44,6 @@ export default async function UsersPage() {
             : null,
         created_at: r.created_at.toISOString(),
         last_login_at: r.last_login_at?.toISOString() ?? null,
-        mfa_required: r.mfa_required,
-        mfa_enrolled: r.mfa_enrolled,
       }))}
     />
   );
