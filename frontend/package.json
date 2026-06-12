@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "NODE_OPTIONS=--disable-warning=DEP0205 next dev",
     "build": "next build",
     "start": "next start",
     "sync": "tsx scripts/sync.ts",
@@ -12,7 +12,8 @@
     "build:migrate": "tsx scripts/build-migrate.ts",
     "check:awork-readonly": "tsx scripts/check-awork-readonly.ts",
     "check:types": "tsc --noEmit",
-    "check": "npm run check:types && npm run check:awork-readonly"
+    "test": "tsx --test 'lib/**/*.test.ts'",
+    "check": "npm run check:types && npm run check:awork-readonly && npm test"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1067.0",

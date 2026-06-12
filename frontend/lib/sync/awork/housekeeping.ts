@@ -9,11 +9,8 @@
  *   3. backfillImportedProjects:   refresh planned dates / time_budget /
  *                                  status from awork.
  *
- * Planned allocations used to be derived here too — `deriveAssignmentsFromAwork`
- * and `closeStaleDerivedAssignments` — but they synthesized assignment
- * rows from tracked time and produced wrong open-ended allocations.
- * The proper source is awork's planning data; see syncAworkPlannings
- * in sync.ts.
+ * Planning-data rollup into `assignment` lives in
+ * `rollupAworkPlanningsToAssignments` in sync.ts.
  */
 import type { Client } from "pg";
 

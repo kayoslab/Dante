@@ -362,7 +362,13 @@ export async function syncAworkTimeBookings(
     "updated_on",
     "last_seen_sync_run_id",
   ] as const);
+  // awork's Planner also stores absence-style bookings (vacation,
+  // training, etc.) with no project. Personio's absence feed already
+  // covers those, so drop them here rather than carrying nulls through
+  // the schema.
+  let upserted = 0;
   for (const item of items) {
+    if (!item.projectId) continue;
     await db
       .insert(aworkTimeBooking)
       .values({
@@ -382,6 +388,7 @@ export async function syncAworkTimeBookings(
         target: aworkTimeBooking.awork_time_booking_id,
         set,
       });
+    upserted += 1;
   }
   // Stale-row cleanup. Anything not refreshed this run was deleted from
   // the Planner upstream; remove it so the calendar matches.
@@ -391,7 +398,7 @@ export async function syncAworkTimeBookings(
        RETURNING awork_time_booking_id AS id`,
     [sync_run_id],
   );
-  return { upserted: items.length, pruned: pruned.rows.length };
+  return { upserted, pruned: pruned.rows.length };
 }
 
 /** Roll up `awork_time_booking` rows into `assignment` rows so the home
@@ -422,28 +429,40 @@ export async function rollupAworkPlanningsToAssignments(
   const deleted = await conn.query(
     `DELETE FROM assignment WHERE source = 'awork-planning'`,
   );
-  // Pull joined bookings: every `awork_time_booking` resolved to a
-  // Dante employee_id + project_id (when the link exists). Group by
-  // (employee, project) to coalesce overlapping bookings — a single
-  // assignment row per pair, with the widest date range and the sum
-  // of durations driving the allocation.
+  // Group bookings by the AWORK keys (not the Dante keys) so an
+  // unmapped (user, project) bucket counts as one — grouping by the
+  // resolved IDs would collapse every unmapped pair into a single
+  // (NULL, NULL) row and the skip counters would lie.
+  //
+  // Each (awork_user, awork_project) pair becomes one assignment row.
+  // Routing: prefer the employee link; fall back to freelancer link
+  // (matches the rest of the awork sync — multi-org Dante employees
+  // are the primary case, freelancers a secondary one).
   const rows = await conn.query<{
+    awork_user_id: string;
+    awork_project_id: string;
     employee_id: number | null;
+    freelancer_id: number | null;
     project_id: number | null;
     start_date: string;
     end_date: string;
     total_seconds: string;
   }>(`
     SELECT
+      tb.awork_user_id,
+      tb.awork_project_id,
       ul.employee_id,
+      fl.freelancer_id,
       pl.project_id,
       MIN(tb.start_date)::text AS start_date,
       MAX(tb.end_date)::text   AS end_date,
       SUM(tb.duration_seconds)::text AS total_seconds
     FROM awork_time_booking tb
     LEFT JOIN awork_user_link ul ON ul.awork_user_id = tb.awork_user_id
+    LEFT JOIN awork_freelancer_link fl ON fl.awork_user_id = tb.awork_user_id
     LEFT JOIN awork_project_link pl ON pl.awork_project_id = tb.awork_project_id
-    GROUP BY ul.employee_id, pl.project_id
+    GROUP BY tb.awork_user_id, tb.awork_project_id,
+             ul.employee_id, fl.freelancer_id, pl.project_id
   `);
 
   const now = new Date();
@@ -452,7 +471,9 @@ export async function rollupAworkPlanningsToAssignments(
   let skipped_unlinked_project = 0;
 
   for (const r of rows.rows) {
-    if (r.employee_id === null) {
+    const has_employee = r.employee_id !== null;
+    const has_freelancer = r.freelancer_id !== null;
+    if (!has_employee && !has_freelancer) {
       skipped_unlinked_user += 1;
       continue;
     }
@@ -478,12 +499,13 @@ export async function rollupAworkPlanningsToAssignments(
     await conn.query(
       `
       INSERT INTO assignment
-        (employee_id, project_id, profile, allocation_pct,
+        (employee_id, freelancer_id, project_id, profile, allocation_pct,
          start_date, end_date, notes, source, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'awork-planning', $8, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'awork-planning', $9, $9)
     `,
       [
-        r.employee_id,
+        has_employee ? r.employee_id : null,
+        has_employee ? null : r.freelancer_id,
         r.project_id,
         null,
         alloc.toFixed(4),

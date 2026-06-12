@@ -190,7 +190,7 @@ export function DayCell({
               ))}
               {allocation > 0 && cell && cell.assignments.length > 1 && (
                 <li className="border-t pt-1 text-xs font-medium tabular-nums">
-                  total: {allocation.toFixed(2)}
+                  manual total: {allocation.toFixed(2)}
                 </li>
               )}
             </ul>

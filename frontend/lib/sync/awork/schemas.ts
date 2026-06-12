@@ -158,11 +158,16 @@ export type AworkTimeEntry = z.infer<typeof AworkTimeEntrySchema>;
 // covers a date range with a total duration in seconds. The Planner UI
 // renders these as horizontal bars; we treat them as forward-looking
 // planning data on the calendar.
+//
+// `projectId` is nullish because awork's Planner also stores
+// absence-style bookings (vacation, training, etc.) with no project
+// attached. The sync filters those out — they're already covered by
+// the Personio absence feed.
 export const AworkTimeBookingSchema = z
   .object({
     id: z.string(),
     userId: z.string(),
-    projectId: z.string(),
+    projectId: z.string().nullish(),
     // ISO date strings — awork returns "2026-06-15" style for these.
     startDate: z.string(),
     endDate: z.string(),

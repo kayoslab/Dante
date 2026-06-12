@@ -60,6 +60,27 @@ async function projectIdOfAssignment(
   return row?.project_id ?? null;
 }
 
+/** Reject mutations against synthesized rows (source != 'manual').
+ * The awork-planning rollup wipes and re-inserts on every sync, so any
+ * hand-edit would be silently destroyed; surface a 422 instead. */
+async function ensureManualAssignment(
+  assignment_id: number,
+): Promise<ActionResult<null>> {
+  const [row] = await db
+    .select({ source: assignment.source })
+    .from(assignment)
+    .where(eq(assignment.assignment_id, assignment_id))
+    .limit(1);
+  if (!row) return err("not_found", `assignment not found: ${assignment_id}`);
+  if (row.source !== "manual") {
+    return err(
+      "validation_error",
+      `assignment is auto-generated (source=${row.source}); edit the upstream awork booking instead`,
+    );
+  }
+  return ok(null);
+}
+
 const IsoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD");
@@ -464,13 +485,8 @@ export async function updateAssignmentAction(
   const parsed = UpdateAssignmentSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const existing = await db
-    .select({ id: assignment.assignment_id })
-    .from(assignment)
-    .where(eq(assignment.assignment_id, assignment_id));
-  if (existing.length === 0) {
-    return err("not_found", `assignment not found: ${assignment_id}`);
-  }
+  const guard = await ensureManualAssignment(assignment_id);
+  if (!guard.ok) return guard;
 
   const updates: Record<string, unknown> = {};
   if (parsed.data.profile !== undefined) updates.profile = parsed.data.profile;
@@ -537,6 +553,9 @@ export async function endAssignmentAction(
   const parsed = EndAssignmentSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
+  const guard = await ensureManualAssignment(assignment_id);
+  if (!guard.ok) return guard;
+
   const [existing] = await db
     .select({ start_date: assignment.start_date })
     .from(assignment)
@@ -574,13 +593,8 @@ export async function deleteAssignmentAction(
   }
   const auth = await requireProjectAccess(project_id);
   if (!auth.ok) return auth.result;
-  const existing = await db
-    .select({ id: assignment.assignment_id })
-    .from(assignment)
-    .where(eq(assignment.assignment_id, assignment_id));
-  if (existing.length === 0) {
-    return err("not_found", `assignment not found: ${assignment_id}`);
-  }
+  const guard = await ensureManualAssignment(assignment_id);
+  if (!guard.ok) return guard;
   await db
     .delete(assignment)
     .where(eq(assignment.assignment_id, assignment_id));

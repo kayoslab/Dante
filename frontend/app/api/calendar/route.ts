@@ -8,6 +8,11 @@ import {
   stateCodeForOffice,
 } from "@/lib/db/_de-holidays";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import {
+  bucketKey,
+  computeLoad,
+  type ProjectLoadBucket,
+} from "@/lib/api/_calendar-load";
 
 const MAX_WINDOW_DAYS = 400;
 
@@ -312,24 +317,14 @@ export async function GET(req: NextRequest) {
         hours: number;
         source: string;
       }>;
-      planned_seconds_raw: number;
       planned_entries: Array<{
         project_name: string;
         hours: number;
       }>;
-      // Per-project rollup of all load signals. Keyed by Dante
-      // project_id when available, else by `awork:<awork_project_id>`
-      // (awork projects not yet linked stay as their own buckets so
-      // they aren't merged with unrelated manual rows). Cell-level
-      // load = sum over buckets of max(manual, planned_h/8,
-      // awork_tracked_h/8) — taking max collapses double counting
-      // when a manual assignment AND an awork booking describe the
-      // same project on the same day.
-      project_load: Map<string, {
-        manual: number;
-        planned_h: number;
-        awork_tracked_h: number;
-      }>;
+      // Per-project rollup of all load signals. See bucketKey + the
+      // computeLoad doc in lib/api/_calendar-load.ts for the
+      // max-per-project / sum-across-projects semantics.
+      project_load: Map<string, ProjectLoadBucket>;
     };
 
     const cellMap = new Map<string, Cell>();
@@ -357,7 +352,6 @@ export async function GET(req: NextRequest) {
           personio_minutes_raw: 0,
           awork_minutes_raw: 0,
           tracked_entries: [],
-          planned_seconds_raw: 0,
           planned_entries: [],
           project_load: new Map(),
         };
@@ -378,17 +372,6 @@ export async function GET(req: NextRequest) {
         if (iso_day >= start && iso_day <= end) cellFor(emp_id, iso_day);
       }
     }
-
-    // Project-load bucket lookup: use Dante project_id when present,
-    // else fall back to a synthetic `awork:<id>` key so unlinked awork
-    // projects stay isolated from any manual row.
-    const bucketKey = (
-      dante_project_id: number | null | undefined,
-      awork_project_id?: string | null,
-    ): string =>
-      dante_project_id !== null && dante_project_id !== undefined
-        ? `dante:${dante_project_id}`
-        : `awork:${awork_project_id ?? "untagged"}`;
 
     const getBucket = (c: Cell, key: string) => {
       let b = c.project_load.get(key);
@@ -450,32 +433,36 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Aggregate per-project planned entries — same dedup pattern as
-    // tracked entries above. Also feeds the project_load bucket so
-    // planned hours collapse with manual allocation on the same
-    // Dante project (max, not sum).
-    const plannedSeen = new Map<string, number>();
+    // Aggregate planned bookings into both project_load (for the
+    // load math) and planned_entries (for the tooltip). The per-cell
+    // map collapses multiple bookings on the same project into one
+    // entry; flushed to the array below after the loop.
+    const plannedSeen = new Map<Cell, Map<string, number>>();
     for (const raw of plnRes.rows as Array<Record<string, unknown>>) {
       const emp_id = raw.employee_id as number | null;
       if (emp_id === null || !employeeIds.has(emp_id)) continue;
       const c = cellFor(emp_id, raw.day as string);
       const sec = Number(raw.per_day_seconds ?? 0);
-      c.planned_seconds_raw += sec;
-      const key = `${emp_id}|${raw.day}|${raw.project_name}`;
-      plannedSeen.set(key, (plannedSeen.get(key) ?? 0) + sec);
       const bkey = bucketKey(
         raw.dante_project_id as number | null,
         raw.awork_project_id as string | null,
       );
       getBucket(c, bkey).planned_h += sec / 3600;
+      const nameKey = raw.project_name as string;
+      let perCell = plannedSeen.get(c);
+      if (!perCell) {
+        perCell = new Map();
+        plannedSeen.set(c, perCell);
+      }
+      perCell.set(nameKey, (perCell.get(nameKey) ?? 0) + sec);
     }
-    for (const [key, sec] of plannedSeen) {
-      const [emp_idS, day, ...nameParts] = key.split("|");
-      const c = cellFor(Number(emp_idS), day);
-      c.planned_entries.push({
-        project_name: nameParts.join("|"),
-        hours: Math.round((sec / 3600) * 10) / 10,
-      });
+    for (const [c, perCell] of plannedSeen) {
+      for (const [project_name, sec] of perCell) {
+        c.planned_entries.push({
+          project_name,
+          hours: Math.round((sec / 3600) * 10) / 10,
+        });
+      }
     }
 
     for (const raw of vacRes.rows as Array<Record<string, unknown>>) {
@@ -513,17 +500,7 @@ export async function GET(req: NextRequest) {
         const planned_entries = c.planned_entries
           .filter((e) => e.hours > 0)
           .sort((a, b) => b.hours - a.hours);
-        const planned_hours =
-          Math.round((c.planned_seconds_raw / 3600) * 10) / 10;
-        // Cell color signal: per-project max of (manual, planned/8,
-        // awork-tracked/8), summed across projects. Collapsing per
-        // project means a manual 1.00 on Project X + an awork 8h
-        // booking on the same Project X stays at 1.00 (same work,
-        // two views) instead of inflating to 2.00.
-        let load = 0;
-        for (const b of c.project_load.values()) {
-          load += Math.max(b.manual, b.planned_h / 8, b.awork_tracked_h / 8);
-        }
+        const { load, planned_hours } = computeLoad(c.project_load.values());
         return {
           employee_id: c.employee_id,
           date: c.date,

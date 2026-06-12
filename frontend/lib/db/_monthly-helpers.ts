@@ -364,12 +364,26 @@ export async function employeeWeightedAllocInMonth(
 ): Promise<Decimal> {
   const n_wd = working_days.length;
   if (n_wd === 0) return new Decimal(0);
+  // Include awork-planning rows so an employee with only Planner data
+  // still shows utilization. Dedup via NOT EXISTS so a (employee,
+  // project) pair with BOTH manual + planning counts the manual once
+  // (manual is the authoritative contract). Planning rows orphaned
+  // from a manual sibling are kept.
   const r = await db.execute(sql`
-    SELECT allocation_pct, start_date, end_date
-    FROM assignment
-    WHERE employee_id = ${employee_id}
-      AND start_date <= ${month_end}::date
-      AND (end_date IS NULL OR end_date >= ${month_start}::date)
+    SELECT a.allocation_pct, a.start_date, a.end_date
+    FROM assignment a
+    WHERE a.employee_id = ${employee_id}
+      AND a.start_date <= ${month_end}::date
+      AND (a.end_date IS NULL OR a.end_date >= ${month_start}::date)
+      AND NOT (
+        a.source = 'awork-planning'
+        AND EXISTS (
+          SELECT 1 FROM assignment m
+          WHERE m.employee_id = a.employee_id
+            AND m.project_id = a.project_id
+            AND m.source = 'manual'
+        )
+      )
   `);
   let total = new Decimal(0);
   const wdSet = new Set(working_days);
@@ -402,13 +416,24 @@ export async function projectTotalWeightedAllocInMonth(
 ): Promise<Decimal> {
   const n_wd = working_days.length;
   if (n_wd === 0) return new Decimal(0);
+  // Include planning rows; dedup vs manual on (employee, project)
+  // so the FP attribution denominator isn't inflated when both exist.
   const r = await db.execute(sql`
-    SELECT allocation_pct, start_date, end_date
-    FROM assignment
-    WHERE project_id = ${project_id}
-      AND employee_id IS NOT NULL
-      AND start_date <= ${month_end}::date
-      AND (end_date IS NULL OR end_date >= ${month_start}::date)
+    SELECT a.allocation_pct, a.start_date, a.end_date
+    FROM assignment a
+    WHERE a.project_id = ${project_id}
+      AND a.employee_id IS NOT NULL
+      AND a.start_date <= ${month_end}::date
+      AND (a.end_date IS NULL OR a.end_date >= ${month_start}::date)
+      AND NOT (
+        a.source = 'awork-planning'
+        AND EXISTS (
+          SELECT 1 FROM assignment m
+          WHERE m.employee_id = a.employee_id
+            AND m.project_id = a.project_id
+            AND m.source = 'manual'
+        )
+      )
   `);
   let total = new Decimal(0);
   for (const raw of r.rows as Array<Record<string, unknown>>) {
@@ -883,6 +908,8 @@ export async function cumulativeProjectCost(
   burden: number,
 ): Promise<Decimal> {
   const has_time_mapping = await projectHasTimeMapping(project_id);
+  // Include planning rows; dedup vs manual on (employee, project) so
+  // cumulative cost isn't doubled when both exist for the same pair.
   const asnRes = await db.execute(sql`
     SELECT a.assignment_id, a.employee_id, a.freelancer_id, a.allocation_pct,
            a.start_date, a.end_date, a.daily_cost_override_eur,
@@ -890,6 +917,15 @@ export async function cumulativeProjectCost(
     FROM assignment a
     LEFT JOIN employee_current ec ON ec.employee_id = a.employee_id
     WHERE a.project_id = ${project_id}
+      AND NOT (
+        a.source = 'awork-planning'
+        AND EXISTS (
+          SELECT 1 FROM assignment m
+          WHERE m.employee_id = a.employee_id
+            AND m.project_id = a.project_id
+            AND m.source = 'manual'
+        )
+      )
   `);
 
   // Pre-load freelancer monthly hours so the freelancer branch below can
@@ -1044,6 +1080,9 @@ export async function cumulativeProjectBurdenedCost(
   through_month_end: string,
   burden: number,
 ): Promise<Decimal> {
+  // Same dedup pattern as `cumulativeProjectCost`. Manual wins when
+  // both exist for a given (employee, project); orphan planning rows
+  // still contribute so awork-only projects accumulate cost.
   const asnRes = await db.execute(sql`
     SELECT a.assignment_id, a.employee_id, a.freelancer_id, a.allocation_pct,
            a.start_date, a.end_date, a.daily_cost_override_eur,
@@ -1051,6 +1090,15 @@ export async function cumulativeProjectBurdenedCost(
     FROM assignment a
     LEFT JOIN employee_current ec ON ec.employee_id = a.employee_id
     WHERE a.project_id = ${project_id}
+      AND NOT (
+        a.source = 'awork-planning'
+        AND EXISTS (
+          SELECT 1 FROM assignment m
+          WHERE m.employee_id = a.employee_id
+            AND m.project_id = a.project_id
+            AND m.source = 'manual'
+        )
+      )
   `);
 
   // Same freelancer-hours override path as cumulativeProjectCost — see

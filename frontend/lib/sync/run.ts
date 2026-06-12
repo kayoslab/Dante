@@ -266,11 +266,4 @@ async function runAworkSync(
       `  refresh-imported:FAILED — ${formatSyncError(err)}`,
     );
   }
-  // `deriveAssignmentsFromAwork` + `closeStaleDerivedAssignments` were
-  // retired in commit history — they synthesized assignment rows from
-  // awork time entries (allocation = total_hours / working_days / 8h),
-  // which manufactured open-ended planned allocations for users who
-  // weren't actually planned for any further work. The proper source —
-  // awork's own planning data via `/users/workload` — flows in via a
-  // separate sync stage; see syncAworkPlannings below.
 }

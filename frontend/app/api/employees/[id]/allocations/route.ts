@@ -52,6 +52,12 @@ export async function GET(
       ORDER BY a.start_date DESC, a.assignment_id DESC
     `);
 
+    await audit(ctx, {
+      action: "view_employee_allocations",
+      target_type: "employee",
+      target_id: employee_id,
+    });
+
     return (result.rows as Array<Record<string, unknown>>).map((r) => ({
       assignment_id: r.assignment_id,
       project_id: r.project_id,
@@ -68,11 +74,5 @@ export async function GET(
           ? null
           : Number(r.effective_daily_rate_eur).toFixed(2),
     }));
-    await audit(ctx, {
-      action: "view_employee_allocations",
-      target_type: "employee",
-      target_id: employee_id,
-    });
-
   });
 }
