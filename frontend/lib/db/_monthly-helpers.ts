@@ -16,7 +16,11 @@ import Decimal from "decimal.js";
 import { sql } from "drizzle-orm";
 
 import { db } from "./client";
-import { germanFederalHolidays } from "./_de-holidays";
+import {
+  germanFederalHolidays,
+  germanHolidaysForStateCached,
+  stateCodeForOffice,
+} from "./_de-holidays";
 
 // Match Python Decimal defaults: 28-digit precision, ROUND_HALF_EVEN (banker's).
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_EVEN });
@@ -880,9 +884,12 @@ export async function cumulativeProjectCost(
 ): Promise<Decimal> {
   const has_time_mapping = await projectHasTimeMapping(project_id);
   const asnRes = await db.execute(sql`
-    SELECT assignment_id, employee_id, freelancer_id, allocation_pct,
-           start_date, end_date, daily_cost_override_eur
-    FROM assignment WHERE project_id = ${project_id}
+    SELECT a.assignment_id, a.employee_id, a.freelancer_id, a.allocation_pct,
+           a.start_date, a.end_date, a.daily_cost_override_eur,
+           ec.office AS employee_office
+    FROM assignment a
+    LEFT JOIN employee_current ec ON ec.employee_id = a.employee_id
+    WHERE a.project_id = ${project_id}
   `);
 
   // Pre-load freelancer monthly hours so the freelancer branch below can
@@ -904,22 +911,35 @@ export async function cumulativeProjectCost(
     );
   }
 
-  const holidayCache = new Map<number, Map<string, string>>();
+  // Per-(state, year) holiday cache and per-(state, m_start) working-days
+  // cache. State code is derived per assignment from the employee's office
+  // — federal-only for freelancers and employees with unknown/foreign
+  // offices (stateCode === null → key "DE").
+  const holidayCache = new Map<string, Map<string, string>>();
   const wdCache = new Map<string, string[]>();
-  function holidayFor(year: number): Map<string, string> {
-    let h = holidayCache.get(year);
+  function holidayFor(
+    stateCode: string | null,
+    year: number,
+  ): Map<string, string> {
+    const key = `${stateCode ?? "DE"}|${year}`;
+    let h = holidayCache.get(key);
     if (!h) {
-      h = germanFederalHolidays(year, year);
-      holidayCache.set(year, h);
+      h = germanHolidaysForStateCached(stateCode, year, year);
+      holidayCache.set(key, h);
     }
     return h;
   }
-  function wdFor(m_start: string, m_end: string): string[] {
-    let wd = wdCache.get(m_start);
+  function wdFor(
+    stateCode: string | null,
+    m_start: string,
+    m_end: string,
+  ): string[] {
+    const key = `${stateCode ?? "DE"}|${m_start}`;
+    let wd = wdCache.get(key);
     if (!wd) {
       const y = Number(m_start.slice(0, 4));
-      wd = workingDaysInRange(m_start, m_end, holidayFor(y));
-      wdCache.set(m_start, wd);
+      wd = workingDaysInRange(m_start, m_end, holidayFor(stateCode, y));
+      wdCache.set(key, wd);
     }
     return wd;
   }
@@ -932,6 +952,9 @@ export async function cumulativeProjectCost(
     const alloc = new Decimal(raw.allocation_pct as string);
     const a_start = raw.start_date as string;
     const a_end = raw.end_date as string | null;
+    const empStateCode = stateCodeForOffice(
+      raw.employee_office as string | null,
+    );
     const cost_ov =
       raw.daily_cost_override_eur === null ||
       raw.daily_cost_override_eur === undefined
@@ -955,7 +978,7 @@ export async function cumulativeProjectCost(
       const m_end = lastOfMonth(cur_month);
       const window_start = a_start > m_start ? a_start : m_start;
       const window_end = a_end_eff < m_end ? a_end_eff : m_end;
-      const wd = wdFor(m_start, m_end);
+      const wd = wdFor(empStateCode, m_start, m_end);
       const full_month_wd = wd.length;
       const active_wd = wd.filter(
         (d) => d >= window_start && d <= window_end,
@@ -996,7 +1019,7 @@ export async function cumulativeProjectCost(
             emp_id,
             window_start,
             window_end,
-            holidayFor(y),
+            holidayFor(empStateCode, y),
           );
           paid_active_wd -= unpaid.size;
         }
@@ -1022,9 +1045,12 @@ export async function cumulativeProjectBurdenedCost(
   burden: number,
 ): Promise<Decimal> {
   const asnRes = await db.execute(sql`
-    SELECT assignment_id, employee_id, freelancer_id, allocation_pct,
-           start_date, end_date, daily_cost_override_eur
-    FROM assignment WHERE project_id = ${project_id}
+    SELECT a.assignment_id, a.employee_id, a.freelancer_id, a.allocation_pct,
+           a.start_date, a.end_date, a.daily_cost_override_eur,
+           ec.office AS employee_office
+    FROM assignment a
+    LEFT JOIN employee_current ec ON ec.employee_id = a.employee_id
+    WHERE a.project_id = ${project_id}
   `);
 
   // Same freelancer-hours override path as cumulativeProjectCost — see
@@ -1044,23 +1070,33 @@ export async function cumulativeProjectBurdenedCost(
     );
   }
 
-  const holidayCache = new Map<number, Map<string, string>>();
+  // Per-(state, year) cache — same shape as cumulativeProjectCost.
+  const holidayCache = new Map<string, Map<string, string>>();
   const wdCache = new Map<string, string[]>();
   const weightedAllocCache = new Map<string, Decimal>();
-  function holidayFor(year: number): Map<string, string> {
-    let h = holidayCache.get(year);
+  function holidayFor(
+    stateCode: string | null,
+    year: number,
+  ): Map<string, string> {
+    const key = `${stateCode ?? "DE"}|${year}`;
+    let h = holidayCache.get(key);
     if (!h) {
-      h = germanFederalHolidays(year, year);
-      holidayCache.set(year, h);
+      h = germanHolidaysForStateCached(stateCode, year, year);
+      holidayCache.set(key, h);
     }
     return h;
   }
-  function wdFor(m_start: string, m_end: string): string[] {
-    let wd = wdCache.get(m_start);
+  function wdFor(
+    stateCode: string | null,
+    m_start: string,
+    m_end: string,
+  ): string[] {
+    const key = `${stateCode ?? "DE"}|${m_start}`;
+    let wd = wdCache.get(key);
     if (!wd) {
       const y = Number(m_start.slice(0, 4));
-      wd = workingDaysInRange(m_start, m_end, holidayFor(y));
-      wdCache.set(m_start, wd);
+      wd = workingDaysInRange(m_start, m_end, holidayFor(stateCode, y));
+      wdCache.set(key, wd);
     }
     return wd;
   }
@@ -1073,6 +1109,9 @@ export async function cumulativeProjectBurdenedCost(
     const alloc = new Decimal(raw.allocation_pct as string);
     const a_start = raw.start_date as string;
     const a_end = raw.end_date as string | null;
+    const empStateCode = stateCodeForOffice(
+      raw.employee_office as string | null,
+    );
     const cost_ov =
       raw.daily_cost_override_eur === null ||
       raw.daily_cost_override_eur === undefined
@@ -1091,7 +1130,7 @@ export async function cumulativeProjectBurdenedCost(
       const m_end = lastOfMonth(cur_month);
       const window_start = a_start > m_start ? a_start : m_start;
       const window_end = a_end_eff < m_end ? a_end_eff : m_end;
-      const working_days = wdFor(m_start, m_end);
+      const working_days = wdFor(empStateCode, m_start, m_end);
       const full_month_wd = working_days.length;
       const active_wd = working_days.filter(
         (d) => d >= window_start && d <= window_end,
@@ -1130,7 +1169,7 @@ export async function cumulativeProjectBurdenedCost(
             emp_id,
             m_start,
             m_end,
-            holidayFor(y),
+            holidayFor(empStateCode, y),
           );
           const paid_share = new Decimal(full_month_wd - unpaid.size).div(
             full_month_wd,

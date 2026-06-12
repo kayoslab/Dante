@@ -9,6 +9,10 @@ import { sql } from "drizzle-orm";
 
 import { db } from "../client";
 import {
+  germanHolidaysForStateCached,
+  stateCodeForOffice,
+} from "../_de-holidays";
+import {
   absencesForEmployee,
   burdenFactor,
   employeeFte,
@@ -40,7 +44,7 @@ export async function computeEmployeeMonthly(
   const empRes = await db.execute(sql`
     SELECT ec.first_name, ec.last_name, ec.status,
            COALESCE(a.is_real_employee, TRUE) AS is_real,
-           ec.hire_date, ec.employment_end_date
+           ec.hire_date, ec.employment_end_date, ec.office
     FROM employee_current ec
     LEFT JOIN employee_annotation a ON a.employee_id = ec.employee_id
     WHERE ec.employee_id = ${employee_id}
@@ -54,9 +58,23 @@ export async function computeEmployeeMonthly(
   const is_real = empRow.is_real as boolean;
   const hire_date = (empRow.hire_date as string | null) ?? null;
   const end_date = (empRow.employment_end_date as string | null) ?? null;
+  const office = (empRow.office as string | null) ?? null;
   const who_name = `${first_name ?? ""} ${last_name ?? ""}`;
 
-  const holidays = holidaysForYearOf(month_start);
+  // Per-employee holiday set: federal + state-specific for the office.
+  // The project month's `working_days` stays federal-only (so it's
+  // comparable across employees on the same project), but this set is
+  // what we filter `active_days` and absences against — so a Bavarian
+  // doesn't show as billable on Fronleichnam.
+  const stateCode = stateCodeForOffice(office);
+  const holidays =
+    stateCode === null
+      ? holidaysForYearOf(month_start)
+      : germanHolidaysForStateCached(
+          stateCode,
+          Number(month_start.slice(0, 4)),
+          Number(month_end.slice(0, 4)),
+        );
   const working_days = workingDaysInRange(month_start, month_end, holidays);
   const n_wd = working_days.length;
   const burden = await burdenFactor();

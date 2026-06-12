@@ -16,6 +16,10 @@ import { sql } from "drizzle-orm";
 
 import { db } from "../client";
 import {
+  germanHolidaysForStateCached,
+  stateCodeForOffice,
+} from "../_de-holidays";
+import {
   absencesForEmployee,
   burdenFactor,
   cumulativeProjectBurdenedCost,
@@ -106,9 +110,11 @@ export async function computeProjectMonthly(
     SELECT a.assignment_id, a.employee_id, a.freelancer_id, a.profile,
            a.allocation_pct, a.start_date, a.end_date,
            a.daily_rate_override_eur, a.daily_cost_override_eur,
-           rt.role_tier
+           rt.role_tier,
+           ec.office AS employee_office
     FROM assignment a
     LEFT JOIN employee_role_tier rt ON rt.employee_id = a.employee_id
+    LEFT JOIN employee_current ec ON ec.employee_id = a.employee_id
     WHERE a.project_id = ${project_id}
       AND a.start_date <= ${month_end}::date
       AND (a.end_date IS NULL OR a.end_date >= ${month_start}::date)
@@ -168,17 +174,35 @@ export async function computeProjectMonthly(
         ? null
         : new Decimal(raw.daily_cost_override_eur as string);
     const role_tier = (raw.role_tier as string | null) ?? null;
+    const employee_office = (raw.employee_office as string | null) ?? null;
 
     const { monthly_cost, who_name, standard_daily_hours } =
       await entityMonthlyCost(emp_id, fl_id, cost_ov, burden);
     const effective_profile = profile ?? role_tier;
     const fte = emp_id !== null ? await employeeFte(emp_id) : new Decimal(1);
 
+    // Per-employee holiday set: federal + state-specific for the employee's
+    // office. Falls back to federal-only for freelancers (no office) and
+    // employees with unknown / foreign offices. Local-only holidays
+    // (Fronleichnam for Bavaria, Heilige Drei Könige for BW/BY/SA, etc.)
+    // are absent from `working_days` (which is federal-only) so we filter
+    // them out of `active_days` explicitly below.
+    const empStateCode = stateCodeForOffice(employee_office);
+    const empHolidays =
+      empStateCode === null
+        ? holidays
+        : germanHolidaysForStateCached(
+            empStateCode,
+            Number(month_start.slice(0, 4)),
+            Number(month_end.slice(0, 4)),
+          );
+
     const a_window_start = a_start > month_start ? a_start : month_start;
     const a_window_end =
       a_end === null ? month_end : a_end < month_end ? a_end : month_end;
     const active_days = working_days.filter(
-      (d) => d >= a_window_start && d <= a_window_end,
+      (d) =>
+        d >= a_window_start && d <= a_window_end && !empHolidays.has(d),
     );
 
     let absence_set = new Set<string>();
@@ -188,7 +212,7 @@ export async function computeProjectMonthly(
         emp_id,
         month_start,
         month_end,
-        holidays,
+        empHolidays,
       );
       absence_set = a;
       unpaid_set = u;

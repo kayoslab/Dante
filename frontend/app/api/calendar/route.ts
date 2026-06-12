@@ -2,7 +2,11 @@ import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
 import { db } from "@/lib/db/client";
-import { germanFederalHolidays } from "@/lib/db/_de-holidays";
+import {
+  germanFederalHolidays,
+  germanHolidaysForState,
+  stateCodeForOffice,
+} from "@/lib/db/_de-holidays";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 
 const MAX_WINDOW_DAYS = 400;
@@ -86,6 +90,7 @@ export async function GET(req: NextRequest) {
              END AS fte,
              a.team_user,
              rt.role_tier,
+             ec.office,
              ec.hire_date,
              LEAST(
                  COALESCE(ec.contract_end_date, DATE '9999-12-31'),
@@ -106,8 +111,17 @@ export async function GET(req: NextRequest) {
     `);
 
     const employeeIds = new Set<number>();
+    // Per-employee state code for local-holiday lookups below. Stored
+    // separately from the public response so we don't leak office strings
+    // unnecessarily — the UI only needs the rendered holiday name.
+    const employeeStateCode = new Map<number, string | null>();
     const employees = (empRes.rows as Array<Record<string, unknown>>).map((r) => {
-      employeeIds.add(r.employee_id as number);
+      const empId = r.employee_id as number;
+      employeeIds.add(empId);
+      employeeStateCode.set(
+        empId,
+        stateCodeForOffice(r.office as string | null),
+      );
       const endIso = r.effective_end_date as string | null;
       return {
         employee_id: r.employee_id,
@@ -123,6 +137,25 @@ export async function GET(req: NextRequest) {
     });
     if (employeeIds.size === 0) {
       return { start, end, days, employees: [], cells: [] };
+    }
+
+    // Per-state holiday set, computed once per unique state code on the
+    // grid. The set returned by `germanHolidaysForState` already includes
+    // federal holidays — we subtract them when emitting per-cell so the
+    // existing column-level `public_holiday` field handles the federal
+    // case and `local_public_holiday` only surfaces the *additional*
+    // state holidays (Fronleichnam, Heilige Drei Könige, etc.).
+    const yearStart = Number(start.slice(0, 4));
+    const yearEnd = Number(end.slice(0, 4));
+    const localHolidayByState = new Map<string, Map<string, string>>();
+    for (const code of new Set(employeeStateCode.values())) {
+      if (code === null) continue;
+      const stateAll = germanHolidaysForState(code, yearStart, yearEnd);
+      const stateOnly = new Map<string, string>();
+      for (const [date, name] of stateAll) {
+        if (!holidays.has(date)) stateOnly.set(date, name);
+      }
+      localHolidayByState.set(code, stateOnly);
     }
 
     // 3) Assignment day-expansion
@@ -196,6 +229,7 @@ export async function GET(req: NextRequest) {
       allocation_pct: number;
       on_vacation: boolean;
       vacation_type: string | null;
+      local_public_holiday: string | null;
       assignments: Array<{
         assignment_id: number;
         customer_name: string;
@@ -218,12 +252,22 @@ export async function GET(req: NextRequest) {
       const key = `${emp_id}|${iso_day}`;
       let c = cellMap.get(key);
       if (!c) {
+        // Resolve the state-only public holiday at cell creation time so
+        // the value is set even on otherwise-empty cells (an employee on
+        // Fronleichnam with no assignment + no vacation still needs the
+        // amber tint).
+        const stateCode = employeeStateCode.get(emp_id) ?? null;
+        const localName =
+          stateCode === null
+            ? null
+            : localHolidayByState.get(stateCode)?.get(iso_day) ?? null;
         c = {
           employee_id: emp_id,
           date: iso_day,
           allocation_pct: 0,
           on_vacation: false,
           vacation_type: null,
+          local_public_holiday: localName,
           assignments: [],
           personio_minutes_raw: 0,
           awork_minutes_raw: 0,
@@ -233,6 +277,19 @@ export async function GET(req: NextRequest) {
       }
       return c;
     };
+
+    // Ensure every (employee, day-with-state-holiday) cell exists so the
+    // calendar grid can render the local holiday tint even when nothing
+    // else (assignment, absence, tracked time) lives on that cell.
+    for (const emp_id of employeeIds) {
+      const stateCode = employeeStateCode.get(emp_id) ?? null;
+      if (stateCode === null) continue;
+      const stateHolidays = localHolidayByState.get(stateCode);
+      if (!stateHolidays) continue;
+      for (const iso_day of stateHolidays.keys()) {
+        if (iso_day >= start && iso_day <= end) cellFor(emp_id, iso_day);
+      }
+    }
 
     for (const raw of asnRes.rows as Array<Record<string, unknown>>) {
       const emp_id = raw.employee_id as number;
@@ -300,6 +357,7 @@ export async function GET(req: NextRequest) {
           assignments: c.assignments,
           tracked_hours: Math.max(personio_h, awork_h),
           tracked_entries,
+          local_public_holiday: c.local_public_holiday,
         };
       });
 

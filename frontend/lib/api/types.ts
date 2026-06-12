@@ -330,6 +330,12 @@ export type CalendarCell = {
          * @default []
          */
         tracked_entries: CalendarTrackedEntry[];
+        /** Name of the state-only public holiday for this employee's office,
+         * when the date is a public holiday in their German state but NOT
+         * a federal holiday (e.g. Fronleichnam for Bavaria). Federal
+         * holidays still come through `CalendarDay.public_holiday` at the
+         * column level. Null otherwise. */
+        local_public_holiday?: string | null;
     };
 
 export type CalendarDay = {

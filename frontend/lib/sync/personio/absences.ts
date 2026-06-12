@@ -1,5 +1,6 @@
 /** Personio /company/time-offs → absence rows. */
 import type { Client } from "pg";
+import { and, gte, lte, lt } from "drizzle-orm";
 
 import { absence } from "@/lib/db/schema";
 import { syncDrizzle } from "@/lib/sync/db";
@@ -80,5 +81,32 @@ export async function syncAbsences(
         set,
       });
   }
+
+  // Cleanup: rows whose date window overlaps the synced range AND that
+  // weren't refreshed by this run no longer exist in Personio (withdrawn,
+  // declined, deleted). The upsert above never removes them, which is
+  // how stale rows like Ina Clima's June-10 Überstundenausgleich linger
+  // in Dante even after Personio drops them. Scope strictly to the
+  // synced window so a partial sync of, say, "2026-06-01 → 2026-06-15"
+  // can never wipe out absences in other date ranges.
+  const deleted = await db
+    .delete(absence)
+    .where(
+      and(
+        lt(absence.last_seen_sync_run_id, sync_run_id),
+        lte(absence.start_date, end_date),
+        gte(absence.end_date, start_date),
+      ),
+    )
+    .returning({ id: absence.absence_id });
+  if (deleted.length > 0) {
+    // Log here keeps the run summary informative even when nothing else
+    // dramatic happens this run. Use console.warn so it surfaces above
+    // the typical info-level upsert chatter without needing structured logs.
+    console.warn(
+      `personio absences: removed ${deleted.length} stale row(s) (window ${start_date}→${end_date})`,
+    );
+  }
+
   return items.length;
 }

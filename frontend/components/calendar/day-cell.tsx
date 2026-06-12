@@ -73,15 +73,19 @@ export function DayCell({
 
   const allocation = cell ? Number(cell.allocation_pct) : 0;
   const onVacation = cell?.on_vacation ?? false;
+  // `holiday` is the federal (column-level) name; `localHoliday` is the
+  // state-only one (Fronleichnam in Bavaria etc.). Either suppresses
+  // allocation coloring — the employee is not expected to work.
   const holiday = day.public_holiday;
+  const localHoliday = cell?.local_public_holiday ?? null;
   const trackedHours = cell?.tracked_hours ?? 0;
 
   // Tooltip when there's data: allocation, vacation, holiday, or tracked hours.
-  const hasTooltip = !!cell || !!holiday;
+  const hasTooltip = !!cell || !!holiday || !!localHoliday;
 
   const base = cn(
     "h-9 relative border-r border-b transition outline-none",
-    colorClass(allocation, onVacation, !!holiday, day.weekend),
+    colorClass(allocation, onVacation, !!holiday || !!localHoliday, day.weekend),
     // Subtle outline on cells with tracked time but no assignment-driven
     // allocation — surfaces "someone worked here despite no plan".
     trackedHours > 0 && allocation === 0 && !onVacation &&
@@ -142,6 +146,12 @@ export function DayCell({
           {holiday && (
             <div className="rounded bg-amber-100 px-2 py-1 text-xs text-amber-900">
               Feiertag: {holiday}
+            </div>
+          )}
+          {!holiday && localHoliday && (
+            <div className="rounded bg-amber-100 px-2 py-1 text-xs text-amber-900">
+              Feiertag: {localHoliday}{" "}
+              <span className="text-amber-900/70">(lokal)</span>
             </div>
           )}
           {onVacation && cell?.vacation_type && (
