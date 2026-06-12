@@ -30,6 +30,20 @@ declare module "@auth/core/jwt" {
     email: string;
     role: Role;
     employee_id: number | null;
+    /** OAuth tokens from Cognito. Stored on the JWT so server actions can
+     * call Cognito's self-service APIs (ChangePassword, WebAuthn registration,
+     * etc.) on behalf of the user. Read server-side only — NEVER surface
+     * these via the session callback; XSS that reaches /api/auth/session
+     * must not pick them up. */
+    cognito_access_token?: string;
+    cognito_refresh_token?: string;
+    /** Unix seconds. Used to refresh proactively a few seconds before
+     * Cognito would reject the access token. */
+    cognito_access_expires_at?: number;
+    /** Set when the refresh-token exchange returns 4xx — the user must
+     * re-sign-in for any Cognito SDK call. The session itself stays
+     * usable for app-side reads until the JWT cookie expires. */
+    cognito_refresh_failed?: boolean;
   }
 }
 
@@ -74,6 +88,48 @@ function cognitoRoleFor(groups: string[] | undefined): Role {
   if (groups.includes("admin")) return "admin";
   if (groups.includes("manager")) return "manager";
   return "employee";
+}
+
+/** Exchange the stored refresh token for a fresh access token. Returns
+ * null if Cognito rejects the refresh (revoked, expired, or pool config
+ * changed) — caller flips `cognito_refresh_failed` and the user is
+ * prompted to re-sign-in on the next Cognito API call. */
+async function refreshCognitoAccessToken(
+  refresh_token: string,
+): Promise<{ access_token: string; expires_at: number } | null> {
+  const issuer = process.env.COGNITO_ISSUER;
+  const clientId = process.env.COGNITO_CLIENT_ID;
+  const clientSecret = process.env.COGNITO_CLIENT_SECRET;
+  if (!issuer || !clientId) return null;
+  const tokenEndpoint = `${issuer.replace(/\/$/, "")}/oauth2/token`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  // Confidential app clients (the prod default) require HTTP Basic auth
+  // with the client_id:client_secret pair. Public clients skip this.
+  if (clientSecret) {
+    const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+    headers.Authorization = `Basic ${basic}`;
+  }
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: clientId,
+    refresh_token,
+  }).toString();
+  try {
+    const res = await fetch(tokenEndpoint, { method: "POST", headers, body });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      access_token: string;
+      expires_in: number;
+    };
+    return {
+      access_token: data.access_token,
+      expires_at: Math.floor(Date.now() / 1000) + data.expires_in,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export const authConfig = {
@@ -136,7 +192,7 @@ export const authConfig = {
       ],
 
   callbacks: {
-    async jwt({ token, user, profile }) {
+    async jwt({ token, user, profile, account }) {
       // On sign-in, hydrate the token with our app's user record + role.
       // `user` is populated only on the initial authorize() call.
       if (user) {
@@ -163,6 +219,39 @@ export const authConfig = {
           token.email = u.email;
           token.employee_id = u.employee_id;
           token.role = cognitoRoleFor(groups);
+        }
+      }
+      // Capture Cognito OAuth tokens on initial sign-in. Server actions
+      // in `lib/auth/cognito-self-service.ts` use the access token to
+      // call ChangePassword / WebAuthn-* / SetUserMFAPreference on the
+      // signed-in user's behalf.
+      if (account?.provider === "cognito") {
+        token.cognito_access_token = account.access_token;
+        token.cognito_refresh_token = account.refresh_token;
+        token.cognito_access_expires_at = account.expires_at;
+        token.cognito_refresh_failed = false;
+      }
+      // Proactive refresh — Cognito access tokens last 60min by default.
+      // We refresh 30s early to avoid the access-token-just-expired race
+      // when the SDK call lands on Cognito after we've decided the token
+      // is fresh. If the refresh fails, mark the flag so the SDK wrapper
+      // can prompt the user to re-sign-in instead of replaying a
+      // permanently-rejected refresh on every request.
+      const now = Math.floor(Date.now() / 1000);
+      if (
+        token.cognito_refresh_token &&
+        token.cognito_access_expires_at &&
+        !token.cognito_refresh_failed &&
+        now > token.cognito_access_expires_at - 30
+      ) {
+        const refreshed = await refreshCognitoAccessToken(
+          token.cognito_refresh_token,
+        );
+        if (refreshed) {
+          token.cognito_access_token = refreshed.access_token;
+          token.cognito_access_expires_at = refreshed.expires_at;
+        } else {
+          token.cognito_refresh_failed = true;
         }
       }
       return token;

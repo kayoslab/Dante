@@ -277,10 +277,13 @@ module "app" {
     DANTE_DATABASE_NAME     = module.rds.database_name
 
     # Auth.js — Cognito pointers; client secret + AUTH_SECRET arrive via `secrets:`.
-    AUTH_TRUST_HOST   = "true"
+    AUTH_TRUST_HOST = "true"
     COGNITO_CLIENT_ID = module.cognito.client_id
     COGNITO_ISSUER    = module.cognito.issuer_url
-    NEXTAUTH_URL      = "https://${var.domain}"
+    # Cognito hosted UI base URL — `/login`'s "Forgot password?" link
+    # composes a redirect to <hosted-ui>/forgotPassword?...
+    COGNITO_HOSTED_UI_URL = module.cognito.oauth_endpoint
+    NEXTAUTH_URL          = "https://${var.domain}"
   }
 
   # Native ECS secret injection — values surface as env vars to the

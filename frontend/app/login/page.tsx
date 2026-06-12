@@ -11,6 +11,24 @@ const DEV_MODE = process.env.AUTH_DEV_MODE === "true";
 const COGNITO_ENABLED =
   !DEV_MODE && process.env.COGNITO_CLIENT_ID !== undefined;
 
+/** Compose the Cognito hosted UI forgot-password URL. Returns null when
+ * the env vars aren't set (dev mode) so the link doesn't render. After
+ * the reset Cognito redirects back to NEXTAUTH_URL — which is the same
+ * URL the OAuth callback uses, keeping the trusted-redirect surface small. */
+function forgotPasswordUrl(): string | null {
+  const base = process.env.COGNITO_HOSTED_UI_URL;
+  const clientId = process.env.COGNITO_CLIENT_ID;
+  const nextAuthUrl = process.env.NEXTAUTH_URL;
+  if (!base || !clientId || !nextAuthUrl) return null;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    response_type: "code",
+    redirect_uri: `${nextAuthUrl.replace(/\/$/, "")}/api/auth/callback/cognito`,
+    scope: "openid email profile",
+  });
+  return `${base.replace(/\/$/, "")}/forgotPassword?${params.toString()}`;
+}
+
 export default async function LoginPage({
   searchParams,
 }: {
@@ -21,6 +39,7 @@ export default async function LoginPage({
   // Reject absolute / protocol-relative URLs — open-redirect prevention.
   const callback = safeCallback(callbackUrl);
   if (session) redirect(callback);
+  const forgotUrl = forgotPasswordUrl();
 
   return (
     <div className="mx-auto flex min-h-[70vh] w-full max-w-sm flex-col justify-center gap-6">
@@ -61,6 +80,17 @@ export default async function LoginPage({
         devMode={DEV_MODE}
         cognitoEnabled={COGNITO_ENABLED}
       />
+
+      {forgotUrl && (
+        <div className="text-center text-xs">
+          <a
+            href={forgotUrl}
+            className="text-muted-foreground hover:text-foreground hover:underline"
+          >
+            Forgot password?
+          </a>
+        </div>
+      )}
     </div>
   );
 }

@@ -99,7 +99,7 @@ version of this is wrong. That's why this exists.
   Manager and never seen by the operator.
 - **Sync:** A Lambda fires daily at 06:00 UTC, pulls Personio + awork,
   upserts via typed Drizzle inserts, purges audit log entries older than
-  13 months. Failures land in an SQS DLQ; CloudWatch alarms publish to
+  30 days. Failures land in an SQS DLQ; CloudWatch alarms publish to
   an SNS topic.
 - **Auth:** AWS Cognito user pool with hosted UI. MFA is mandatory for
   every user (`mfa_configuration = "ON"`); the user pool offers both

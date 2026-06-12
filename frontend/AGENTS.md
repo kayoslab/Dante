@@ -84,6 +84,70 @@ as before — dev mode is for local UI iteration; never deploy with it
 enabled (the assertion in `lib/auth/config.ts` throws at module init
 if `NODE_ENV=production`).
 
+## Profile self-service
+
+The `/profile` page surfaces three Cognito-backed self-service flows.
+All three call `cognito-idp` via the user's own OAuth access token,
+so the SDK enforces "users can only mutate their own account".
+
+- **Change password** — `ChangePasswordCommand`, requires the user to
+  enter the current password. Backed by `changePasswordAction`.
+- **Passkeys** — list / add / remove. The add path runs the WebAuthn
+  registration ceremony in the browser
+  (`navigator.credentials.create()`); both ends of the trip
+  (`StartWebAuthnRegistrationCommand` →
+  `CompleteWebAuthnRegistrationCommand`) go through the action layer.
+  Passkeys are scoped to the relying-party ID set in
+  `web_authn_configuration.relying_party_id` (the public domain), so a
+  credential can't be replayed at another site.
+- **Authenticator app (TOTP)** — enroll / disable via
+  `AssociateSoftwareToken`, `VerifySoftwareToken`,
+  `SetUserMFAPreference`. Cognito rejects "disable TOTP" if it would
+  leave the user with no MFA factor at all (pool is
+  `mfa_configuration = "ON"`), so the user must have a passkey
+  registered before they can drop TOTP — the API error surfaces in
+  the UI as-is.
+
+The forgot-password flow on `/login` redirects to Cognito's hosted UI
+at `<COGNITO_HOSTED_UI_URL>/forgotPassword?...`. The hosted UI handles
+the email-code dance and lands back at our `/api/auth/callback/cognito`
+after the user picks a new password — no Dante code involved in the
+middle.
+
+### Cognito tokens on the JWT
+
+Auth.js's JWT callback now persists the Cognito `access_token`,
+`refresh_token` and `expires_at` on the encrypted session cookie so the
+self-service actions have something to call Cognito with. The token is
+refreshed proactively 30 seconds before expiry against the OIDC
+`/oauth2/token` endpoint. If the refresh fails (revoked, expired pool
+rotation, etc.) the JWT marks `cognito_refresh_failed = true`; the
+next call to `getCognitoAccessToken()` throws `CognitoReauthRequired`,
+the action returns a "forbidden" error and the UI prompts the user to
+re-sign-in.
+
+Access tokens **never** leave the server: `cognito-tokens.ts` decodes
+the JWT cookie via `@auth/core/jwt`'s `getToken()` rather than going
+through the Auth.js session callback. Anything on the session reaches
+the client via `/api/auth/session` — easy XSS exfil path — so we keep
+those fields strictly server-side.
+
+### Admin reset (lost device / no factors left)
+
+If a user loses their phone AND their passkey hardware, they can't get
+in. Admin recovery is still out-of-band via the AWS console / CLI:
+
+    aws cognito-idp admin-set-user-mfa-preference \
+      --user-pool-id <id> --username <email> \
+      --software-token-mfa-settings Enabled=false
+    aws cognito-idp admin-user-global-sign-out \
+      --user-pool-id <id> --username <email>
+
+After that the user can sign in via the hosted UI's forgot-password
+flow and re-enrol on `/profile`. We deliberately don't expose an
+in-app "Reset MFA" button — admins should hit Cognito's audit trail
+directly when they bypass MFA.
+
 ## awork integration
 
 - **Read-only invariant.** The data-path client (`lib/sync/awork/client.ts`) only exposes `list*` / `get*`. The only POST in the codebase is to awork's OAuth token endpoint, and it lives in `lib/sync/awork/auth.ts`.
