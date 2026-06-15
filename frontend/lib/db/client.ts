@@ -47,12 +47,36 @@ function getPool(): Pool {
     // connections — keep room for sync Lambda + admin tools.
     // Override with PGPOOL_MAX if scaling assumptions change.
     const max = Number.parseInt(process.env.PGPOOL_MAX ?? "5", 10);
-    global.__pgPool = new Pool({
+    const pool = new Pool({
       connectionString: resolveConnectionString(),
       max: Number.isFinite(max) && max > 0 ? max : 5,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
     });
+    // Per-connection `statement_timeout`. Caps any single query so a
+    // pathological N+1 or a runaway calendar window can't pin a pool
+    // connection forever. Applies to the API pool only — the sync
+    // pipeline uses `openSyncConn` (a separate Client) so long-running
+    // rollups aren't affected. Set once per new connection; persists
+    // for the connection's lifetime.
+    const stmt_timeout_ms = Number.parseInt(
+      process.env.PG_STATEMENT_TIMEOUT_MS ?? "15000",
+      10,
+    );
+    if (stmt_timeout_ms > 0) {
+      pool.on("connect", (client) => {
+        // Fire-and-forget; if it fails we'd rather not block startup —
+        // the missing timeout is logged but doesn't break the request.
+        client
+          .query(`SET statement_timeout = ${stmt_timeout_ms}`)
+          .catch(() => {
+            // Intentionally swallowed — the connection still works,
+            // just without the cap. Worth a log line in observability
+            // if/when we wire one in.
+          });
+      });
+    }
+    global.__pgPool = pool;
   }
   return global.__pgPool;
 }

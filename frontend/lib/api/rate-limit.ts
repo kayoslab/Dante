@@ -47,3 +47,51 @@ export function checkRateLimit(
   bucket.updated_at = now;
   buckets.set(key, bucket);
 }
+
+/** Three named tiers covering most read endpoints. Pick one per route
+ * based on how much the underlying query costs the DB:
+ *
+ *  - expensive: multi-CTE / month-iteration queries (calendar, portfolio
+ *    monthly, project FP P&L). One signed-in user can't loop these.
+ *  - normal:    typical resource list / detail GET.
+ *  - cheap:     small lookups, dropdowns, config.
+ *
+ * Apply at the top of the route handler, right after `requireApiSession`:
+ *   const ctx = await requireApiSession();
+ *   enforceRateLimit(ctx, "calendar", "expensive");
+ *
+ * The global per-user ceiling in `requireApiSession` is the safety net
+ * that catches any route we forget to tag; the tier here is the precise
+ * limit for that specific endpoint. */
+export const RATE_LIMITS = {
+  expensive: { per_minute: 20 },
+  normal: { per_minute: 60 },
+  cheap: { per_minute: 240 },
+} as const;
+export type RateLimitTier = keyof typeof RATE_LIMITS;
+
+export function enforceRateLimit(
+  ctx: { user_id: string },
+  scope: string,
+  tier: RateLimitTier,
+): void {
+  checkRateLimit(ctx.user_id, scope, RATE_LIMITS[tier]);
+}
+
+/** Per-user GLOBAL ceiling applied inside `requireApiSession`. Catches
+ * any route we forget to tag with a `enforceRateLimit` call and any
+ * future route that ships without an explicit tier. 10 req/sec
+ * sustained is well above legitimate UI usage (a full tab refresh
+ * triggers ~5 requests) but below what would meaningfully load the
+ * 5-connection pool.
+ *
+ * Override with `PER_USER_API_PER_MINUTE` env var. */
+export function enforceGlobalApiRateLimit(ctx: { user_id: string }): void {
+  const per_minute = Number.parseInt(
+    process.env.PER_USER_API_PER_MINUTE ?? "600",
+    10,
+  );
+  checkRateLimit(ctx.user_id, "_global", {
+    per_minute: Number.isFinite(per_minute) && per_minute > 0 ? per_minute : 600,
+  });
+}

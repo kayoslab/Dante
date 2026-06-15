@@ -5,6 +5,7 @@ import { db } from "@/lib/db/client";
 import { addMonths, firstOfMonth } from "@/lib/db/_monthly-helpers";
 import { computeProjectMonthly } from "@/lib/db/queries/project-monthly";
 import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { requireApiProjectAccess } from "@/lib/auth/project-capability";
 
 export async function GET(
@@ -17,7 +18,8 @@ export async function GET(
     if (!Number.isInteger(project_id)) {
       throw Validation(`invalid project id: ${rawId}`);
     }
-    await requireApiProjectAccess(project_id);
+    const ctx = await requireApiProjectAccess(project_id);
+    enforceRateLimit(ctx, "project_monthly_series", "expensive");
     const { searchParams } = new URL(req.url);
     const from_raw = searchParams.get("from_month") ?? "";
     const to_raw = searchParams.get("to_month") ?? "";

@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 
 import { audit } from "@/lib/auth/audit";
 import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { addMonths } from "@/lib/db/_monthly-helpers";
 import { computeEmployeeMonthly } from "@/lib/db/queries/employee-monthly";
 
@@ -11,6 +12,7 @@ export async function GET(
 ) {
   return handle(async () => {
     const ctx = await requireApiSession({ minRole: "manager" });
+    enforceRateLimit(ctx, "employee_monthly_series", "expensive");
     const { id: rawId } = await params;
     const employee_id = Number(rawId);
     if (!Number.isInteger(employee_id)) {

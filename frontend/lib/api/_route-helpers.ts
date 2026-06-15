@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { auth, type Role } from "@/lib/auth";
 import { ROLE_RANK, isUserDisabled, type SessionContext } from "@/lib/auth/session";
 import { log } from "@/lib/logger";
+import { enforceGlobalApiRateLimit } from "./rate-limit";
 
 export type ErrorCode =
   | "internal_error"
@@ -79,6 +80,10 @@ export async function requireApiSession(opts: {
       `requires role ${opts.minRole} or above (you are ${ctx.role})`,
     );
   }
+  // Per-user global ceiling. Per-route tiers via `enforceRateLimit`
+  // sit below this; this is the safety net that bounds even the
+  // routes that don't bother tagging a tier.
+  enforceGlobalApiRateLimit(ctx);
   return ctx;
 }
 

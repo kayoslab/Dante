@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 
 import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { addMonths } from "@/lib/db/_monthly-helpers";
 import { computeFreelancerMonthly } from "@/lib/db/queries/freelancer-monthly";
 
@@ -9,7 +10,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   return handle(async () => {
-    await requireApiSession({ minRole: "manager" });
+    const ctx = await requireApiSession({ minRole: "manager" });
+    enforceRateLimit(ctx, "freelancer_monthly_series", "expensive");
     const { id: rawId } = await params;
     const freelancer_id = Number(rawId);
     if (!Number.isInteger(freelancer_id)) {

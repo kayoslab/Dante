@@ -4,6 +4,7 @@ import type { NextRequest } from "next/server";
 import { db } from "@/lib/db/client";
 import { audit } from "@/lib/auth/audit";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 
 const VALID_GROUPING = new Set(["tier", "team"]);
 const VALID_BASIS = new Set(["fix", "total"]);
@@ -11,6 +12,7 @@ const VALID_BASIS = new Set(["fix", "total"]);
 export async function GET(req: NextRequest) {
   return handle(async () => {
     const ctx = await requireApiSession({ minRole: "manager" });
+    enforceRateLimit(ctx, "salary_gender_gap", "expensive");
     const { searchParams } = new URL(req.url);
     const grouping = searchParams.get("grouping") ?? "tier";
     const basis = searchParams.get("basis") ?? "fix";

@@ -8,6 +8,7 @@ import {
   stateCodeForOffice,
 } from "@/lib/db/_de-holidays";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 import {
   bucketKey,
   computeLoad,
@@ -53,6 +54,10 @@ export async function GET(req: NextRequest) {
     // type) are filtered for non-managers below. Vacation type is *always*
     // collapsed to "absence" — even for managers — so "Krankheit /
     // Sickness" (GDPR Art. 9 health data) never leaks through this view.
+    // Calendar runs 5 CTEs over up to a 400-day window — the heaviest
+    // read endpoint. Tag it expensive so a sustained loop can't starve
+    // the 5-connection pool.
+    enforceRateLimit(ctx, "calendar", "expensive");
     const isManagerOrAdmin = ctx.role === "manager" || ctx.role === "admin";
     const { searchParams } = new URL(req.url);
     const start = searchParams.get("start") ?? "";

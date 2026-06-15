@@ -4,6 +4,7 @@ import type { NextRequest } from "next/server";
 import { db } from "@/lib/db/client";
 import { germanFederalHolidays } from "@/lib/db/_de-holidays";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 
 function lastOfMonth(monthStart: string): string {
   // monthStart is YYYY-MM-01. Last day = next month - 1 day.
@@ -15,7 +16,8 @@ function lastOfMonth(monthStart: string): string {
 
 export async function GET(req: NextRequest) {
   return handle(async () => {
-    await requireApiSession({ minRole: "manager" });
+    const ctx = await requireApiSession({ minRole: "manager" });
+    enforceRateLimit(ctx, "tracked_hours", "expensive");
     const { searchParams } = new URL(req.url);
     const monthParam = searchParams.get("month") ?? "";
     const team = searchParams.get("team");

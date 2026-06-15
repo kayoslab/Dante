@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 
 import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { requireApiProjectAccess } from "@/lib/auth/project-capability";
 import { computeProjectMonthly } from "@/lib/db/queries/project-monthly";
 
@@ -14,7 +15,8 @@ export async function GET(
     if (!Number.isInteger(project_id)) {
       throw Validation(`invalid project id: ${rawId}`);
     }
-    await requireApiProjectAccess(project_id);
+    const ctx = await requireApiProjectAccess(project_id);
+    enforceRateLimit(ctx, "project_monthly", "expensive");
 
     const { searchParams } = new URL(req.url);
     const monthRaw = searchParams.get("month") ?? "";

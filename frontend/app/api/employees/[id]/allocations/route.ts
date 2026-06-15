@@ -5,6 +5,7 @@ import { db } from "@/lib/db/client";
 import { roleTierFromAlias } from "@/lib/db/_sql-fragments";
 import { audit } from "@/lib/auth/audit";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 
 export async function GET(
   _req: NextRequest,
@@ -12,6 +13,7 @@ export async function GET(
 ) {
   return handle(async () => {
     const ctx = await requireApiSession({ minRole: "manager" });
+    enforceRateLimit(ctx, "employee_allocations", "expensive");
     const { id: rawId } = await params;
     const employee_id = Number(rawId);
     if (!Number.isInteger(employee_id)) {

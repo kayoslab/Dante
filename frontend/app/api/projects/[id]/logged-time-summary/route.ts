@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 
 import { db } from "@/lib/db/client";
 import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { requireApiProjectAccess } from "@/lib/auth/project-capability";
 
 export async function GET(
@@ -15,7 +16,8 @@ export async function GET(
     if (!Number.isInteger(project_id)) {
       throw Validation(`invalid project id: ${rawId}`);
     }
-    await requireApiProjectAccess(project_id);
+    const ctx = await requireApiProjectAccess(project_id);
+    enforceRateLimit(ctx, "logged_time_summary", "expensive");
 
     const proj = await db.execute(sql`
       SELECT name FROM project WHERE project_id = ${project_id}

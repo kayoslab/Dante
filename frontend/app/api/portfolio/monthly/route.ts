@@ -15,10 +15,12 @@ import {
 } from "@/lib/db/_monthly-helpers";
 import { computeProjectMonthly } from "@/lib/db/queries/project-monthly";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 
 export async function GET(req: NextRequest) {
   return handle(async () => {
-    await requireApiSession({ minRole: "manager" });
+    const ctx = await requireApiSession({ minRole: "manager" });
+    enforceRateLimit(ctx, "portfolio_monthly", "expensive");
     const { searchParams } = new URL(req.url);
     const monthRaw = searchParams.get("month") ?? "";
     if (!/^\d{4}-\d{2}$/.test(monthRaw)) {
