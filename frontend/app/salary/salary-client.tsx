@@ -7,9 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { GenderGapChart } from "@/components/salary/gender-gap-chart";
 import { SalaryBandChart } from "@/components/salary/salary-band-chart";
+import { SalaryOutliersList } from "@/components/salary/salary-outliers-list";
 import {
   useGenderGap,
   useSalaryBands,
+  useSalaryOutliers,
   type BandGrouping,
   type GapBasis,
   type GapGrouping,
@@ -38,6 +40,7 @@ export function SalaryClient() {
   const [gapBasis, setGapBasis] = useState<GapBasis>("fix");
 
   const bands = useSalaryBands(bandGrouping);
+  const outliers = useSalaryOutliers(bandGrouping);
   const gap = useGenderGap(gapGrouping, gapBasis);
 
   return (
@@ -48,8 +51,7 @@ export function SalaryClient() {
         </h1>
         <p className="text-sm text-muted-foreground">
           All figures are monthly FTE-normalized EUR. Excludes multi-org and
-          non-real employees. Disclosure guard: cells with fewer than 3
-          employees per gender are redacted.
+          non-real employees. Restricted to admin + manager roles.
         </p>
       </div>
 
@@ -78,6 +80,31 @@ export function SalaryClient() {
             </p>
           )}
           {bands.data && <SalaryBandChart rows={bands.data} />}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Outliers &amp; band exceedances</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Employees whose FTE-normalized salary
+            {bandGrouping === "tier"
+              ? " exceeds the max of a higher-ranked tier, or"
+              : ""}
+            {" "}sits above their own band's upper fence (p75 + 1.5·IQR).
+            Click a name to open their profile.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {outliers.isLoading && <Skeleton className="h-32 w-full" />}
+          {outliers.isError && (
+            <p className="text-sm text-red-600">
+              {outliers.error instanceof Error
+                ? outliers.error.message
+                : "Failed to load"}
+            </p>
+          )}
+          {outliers.data && <SalaryOutliersList rows={outliers.data} />}
         </CardContent>
       </Card>
 

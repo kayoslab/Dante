@@ -209,7 +209,13 @@ export async function computeEmployeeMonthly(
       (d) => d >= a_window_start && d <= a_window_end,
     );
     const absent_active = active_days.filter((d) => absences.has(d));
-    const billable_count = active_days.length - absent_active.length;
+    // FTE-prorated billable day equivalents — see the matching comment
+    // in project-monthly.ts. An 88%-FTE consultant on a project for 21
+    // calendar days bills 18.48 day-units, not 21, because each day is
+    // 7h not 8h. Keeps the figure consistent with revenue (which is
+    // already FTE-prorated via `r.mul(alloc).mul(fte)` below).
+    const billable_count_calendar = active_days.length - absent_active.length;
+    const billable_day_equivs = new Decimal(billable_count_calendar).mul(fte);
     const weighted_alloc_i =
       n_wd > 0 ? alloc.mul(active_days.length).div(n_wd) : new Decimal(0);
     total_alloc_weighted = total_alloc_weighted.add(weighted_alloc_i);
@@ -261,7 +267,7 @@ export async function computeEmployeeMonthly(
       allocation_pct: alloc.toFixed(4),
       active_working_days: active_days.length,
       absence_days: absent_active.length,
-      billable_days: billable_count,
+      billable_days: Number(billable_day_equivs.toFixed(2)),
       rate_unresolved_days,
       project_id,
       project_name,

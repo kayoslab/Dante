@@ -572,7 +572,7 @@ function AssignmentTable({
                 {a.absence_days}
               </td>
               <td className="px-3 py-2 text-right tabular-nums">
-                {a.billable_days}
+                {a.billable_days.toFixed(1)}
               </td>
               <td className="px-3 py-2 text-right tabular-nums">
                 {formatEUR(a.revenue)}

@@ -34,6 +34,20 @@ const USER_SELECT = {
 
 /** Find by cognito_sub OR by lowercased email; create if missing.
  * Optionally synchronize role to a caller-supplied value (Cognito groups). */
+/** Look up the `employee_current.employee_id` whose email matches.
+ * Case-insensitive. Returns null if no match (typical for service
+ * accounts or pre-Personio-sync sign-ins). */
+async function lookupEmployeeIdByEmail(
+  lowerEmail: string,
+): Promise<number | null> {
+  const m = await db
+    .select({ employee_id: employeeCurrent.employee_id })
+    .from(employeeCurrent)
+    .where(sql`LOWER(${employeeCurrent.email}) = ${lowerEmail}`)
+    .limit(1);
+  return m[0]?.employee_id ?? null;
+}
+
 export async function findOrCreateAppUser(input: {
   email: string;
   cognito_sub: string;
@@ -56,12 +70,25 @@ export async function findOrCreateAppUser(input: {
     if (input.expected_role && bySub[0].role !== input.expected_role) {
       update.role = input.expected_role;
     }
+    // Self-heal the employee_id link on each login: the original
+    // email-match runs once on insert. If the Personio sync had not
+    // yet imported this person at that moment (or their email was
+    // added/corrected later), the link is permanently NULL otherwise.
+    // Retry per-login while it's still null so the SDM grant picker,
+    // /profile and every employee-scoped view start working on the
+    // next sign-in instead of needing an admin DB poke.
+    let employee_id = bySub[0].employee_id;
+    if (employee_id === null) {
+      employee_id = await lookupEmployeeIdByEmail(lowerEmail);
+      if (employee_id !== null) update.employee_id = employee_id;
+    }
     await db
       .update(appUser)
       .set(update)
       .where(eq(appUser.user_id, bySub[0].user_id));
     return {
       ...bySub[0],
+      employee_id,
       role: (update.role as Role | undefined) ?? bySub[0].role,
     };
   }
@@ -104,6 +131,14 @@ export async function findOrCreateAppUser(input: {
     if (input.expected_role && byEmail[0].role !== input.expected_role) {
       update.role = input.expected_role;
     }
+    // Same self-heal as the bySub branch above — if the original
+    // first-signin email match missed (Personio sync hadn't run yet),
+    // retry now.
+    let employee_id = byEmail[0].employee_id;
+    if (employee_id === null) {
+      employee_id = await lookupEmployeeIdByEmail(lowerEmail);
+      if (employee_id !== null) update.employee_id = employee_id;
+    }
     await db
       .update(appUser)
       .set(update)
@@ -111,26 +146,23 @@ export async function findOrCreateAppUser(input: {
     return {
       user_id: byEmail[0].user_id,
       email: byEmail[0].email,
-      employee_id: byEmail[0].employee_id,
+      employee_id,
       role: (update.role as Role | undefined) ?? byEmail[0].role,
       is_disabled: byEmail[0].is_disabled,
     };
   }
 
   // First sign-in. Auto-link to employee_current by email if possible.
-  const empMatch = await db
-    .select({ employee_id: employeeCurrent.employee_id })
-    .from(employeeCurrent)
-    .where(sql`LOWER(${employeeCurrent.email}) = ${lowerEmail}`)
-    .limit(1);
-
+  // (Subsequent sign-ins retry the same lookup in the bySub/byEmail
+  // branches above if employee_id is still null.)
+  const employee_id = await lookupEmployeeIdByEmail(lowerEmail);
   const role = input.expected_role ?? "employee";
   const inserted = await db
     .insert(appUser)
     .values({
       cognito_sub: input.cognito_sub,
       email,
-      employee_id: empMatch[0]?.employee_id ?? null,
+      employee_id,
       role,
       last_login_at: new Date(),
     })

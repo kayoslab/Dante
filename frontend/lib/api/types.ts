@@ -1715,6 +1715,22 @@ export type SalaryBandRow = {
         max: number;
     };
 
+export type SalaryOutlierReason = {
+        kind: "in_band" | "cross_band";
+        label: string;
+        reference: number;
+        delta: number;
+    };
+
+export type SalaryOutlier = {
+        employee_id: number;
+        name: string;
+        position: string | null;
+        group_key: string;
+        salary: number;
+        reasons: SalaryOutlierReason[];
+    };
+
 export type Setting = {
         /** Key */
         key: string;

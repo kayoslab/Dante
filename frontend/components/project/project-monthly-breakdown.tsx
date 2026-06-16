@@ -561,8 +561,13 @@ function TrackedCell({
     );
   }
   const days = trackedDays ? Number(trackedDays) : 0;
-  // Variance: tracked vs billable. Green when reasonably close (±10%),
-  // amber when significantly under, red when significantly over.
+  // Variance: tracked vs billable. Both sides are FTE-aware now —
+  // `billableDays` is the calendar working days × FTE day-equivalents
+  // (an 88% consultant on the project for 21 days gets 18.48 here),
+  // and `trackedDays` is `tracked_hours / 8` from Personio attendance
+  // (which is also FTE-proportional since lower-FTE people log fewer
+  // hours per day). Same scale on both sides → meaningful ratio.
+  // Green ±10%, amber significantly under, red significantly over.
   const delta = days - billableDays;
   const ratio = billableDays > 0 ? days / billableDays : 0;
   let tone = "";
@@ -708,8 +713,15 @@ function AssignmentTable({
                     </span>
                   )}
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums">
-                  {a.billable_days}
+                <td
+                  className="px-3 py-2 text-right tabular-nums"
+                  title={
+                    a.kind === "employee" && a.fte && Number(a.fte) < 1
+                      ? `${a.active_working_days} calendar working day(s) on this project × ${Number(a.fte).toFixed(2)} FTE`
+                      : undefined
+                  }
+                >
+                  {a.billable_days.toFixed(1)}
                 </td>
                 {(data.has_personio_mapping || data.has_freelancer_hours) && (
                   <TrackedCell

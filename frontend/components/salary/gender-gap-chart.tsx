@@ -28,17 +28,15 @@ const config = {
 } satisfies ChartConfig;
 
 export function GenderGapChart({ rows }: { rows: GenderGapRow[] }) {
-  // Only render groups where AT LEAST ONE side cleared the n=3 disclosure
-  // guard. The backend already filters with HAVING so empty rows shouldn't
-  // come through, but defensive against future tweaks.
+  // Defensive: the underlying view's HAVING clause already drops groups
+  // where neither gender has anyone, but tolerate empty/all-null shapes.
   const visible = rows.filter(
-    (r) => r.median_female !== null || r.median_male !== null,
+    (r) => r.median_female != null || r.median_male != null,
   );
   if (visible.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No group has at least 3 employees of both genders (disclosure
-        guard suppresses smaller cells).
+        No group has any salary data to compare.
       </p>
     );
   }
@@ -144,8 +142,8 @@ export function GenderGapChart({ rows }: { rows: GenderGapRow[] }) {
         </table>
       </div>
       <p className="text-xs text-muted-foreground">
-        Cells with fewer than 3 employees of either gender are redacted (—)
-        to protect individuals. Gap is calculated as{" "}
+        Empty cells (—) mean no employees of that gender are recorded in the
+        group. Gap is calculated as{" "}
         <code>(median_male − median_female) / median_male × 100</code>.
       </p>
     </div>

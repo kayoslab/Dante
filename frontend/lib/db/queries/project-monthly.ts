@@ -219,7 +219,19 @@ export async function computeProjectMonthly(
     }
     const absent_active = active_days.filter((d) => absence_set.has(d));
     const unpaid_active = active_days.filter((d) => unpaid_set.has(d));
-    const billable_count = active_days.length - absent_active.length;
+    const billable_count_calendar = active_days.length - absent_active.length;
+    // FTE-prorated billable day equivalents. An employee on 88% FTE
+    // (e.g. Christian Szofer at 35h/week) spending 21 calendar days on
+    // a project bills the customer for 21 × 0.88 = 18.48 day-units of
+    // work — which is what they would actually log in Personio (7h/day
+    // instead of 8h). The display, the tracked-vs-billable variance
+    // colouring in `<TrackedCell>` and the `tracked_revenue`
+    // proration all need this FTE-adjusted figure; otherwise an 88%
+    // consultant tracking their full hours looks 12% under-billed.
+    // Revenue itself is already FTE-prorated via `r.mul(alloc).mul(fte)`
+    // below, so the denominator we use for tracked_revenue must match
+    // or we double-discount.
+    const billable_day_equivs = new Decimal(billable_count_calendar).mul(fte);
     const paid_active_days = active_days.length - unpaid_active.length;
 
     let revenue = new Decimal(0);
@@ -336,11 +348,11 @@ export async function computeProjectMonthly(
     let tracked_revenue = new Decimal(0);
     if (
       billing === "time_and_material" &&
-      billable_count > 0 &&
+      billable_day_equivs.gt(0) &&
       revenue.gt(0) &&
       tracked_days_dec.gt(0)
     ) {
-      tracked_revenue = revenue.mul(tracked_days_dec).div(billable_count);
+      tracked_revenue = revenue.mul(tracked_days_dec).div(billable_day_equivs);
     }
 
     const effective_revenue =
@@ -363,7 +375,7 @@ export async function computeProjectMonthly(
       allocation_pct: alloc.toFixed(4),
       active_working_days: active_days.length,
       absence_days: absent_active.length,
-      billable_days: billable_count,
+      billable_days: Number(billable_day_equivs.toFixed(2)),
       rate_unresolved_days,
       kind: emp_id !== null ? "employee" : "freelancer",
       who_name,
