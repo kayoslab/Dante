@@ -61,3 +61,22 @@ resource "aws_secretsmanager_secret" "auth_secret" {
   kms_key_id              = try(aws_kms_key.secrets[0].arn, null)
   recovery_window_in_days = var.recovery_window_in_days
 }
+
+# Cognito user-pool client secret. Unlike the other secrets in this
+# module, terraform owns BOTH the shape and the value: the cognito
+# module generates the secret as a sensitive output, and the env's
+# `module.secrets` call wires it straight in. Keeping it in Secrets
+# Manager (rather than the task def's plaintext environment block)
+# means a `DescribeTaskDefinition` call no longer leaks the value.
+resource "aws_secretsmanager_secret" "cognito_client_secret" {
+  name                    = "${local.prefix}/cognito_client_secret"
+  description             = "Cognito user-pool client secret — populated by terraform from module.cognito.client_secret."
+  kms_key_id              = try(aws_kms_key.secrets[0].arn, null)
+  recovery_window_in_days = var.recovery_window_in_days
+}
+
+resource "aws_secretsmanager_secret_version" "cognito_client_secret" {
+  count         = var.cognito_client_secret == null ? 0 : 1
+  secret_id     = aws_secretsmanager_secret.cognito_client_secret.id
+  secret_string = var.cognito_client_secret
+}

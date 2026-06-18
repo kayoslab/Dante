@@ -81,9 +81,9 @@ variable "rds_multi_az" {
 }
 
 variable "rds_engine_version" {
-  description = "Pinned Postgres major.minor. Match what's running locally (`postgres:16-alpine`)."
+  description = "Pinned Postgres major.minor. Match what's running locally (`postgres:16-alpine`). Refresh periodically — AWS retires minor versions over time; check `aws rds describe-db-engine-versions --engine postgres` if a plan errors with 'Cannot find version'."
   type        = string
-  default     = "16.4"
+  default     = "16.14"
 }
 
 # --- DNS ---------------------------------------------------------------

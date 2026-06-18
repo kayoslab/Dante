@@ -221,9 +221,10 @@ resource "aws_vpc_endpoint" "interface" {
   vpc_id            = aws_vpc.this.id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
   vpc_endpoint_type = "Interface"
-  # Interface endpoints attach ENIs to both app + data subnets so RDS-side
-  # tooling (if any) and the Lambda can both use them.
-  subnet_ids          = concat(aws_subnet.app[*].id, aws_subnet.data[*].id)
+  # Interface endpoints require AT MOST one subnet per AZ. Use the app
+  # subnets (one per AZ) — the ECS app, sync Lambda, and any RDS-side
+  # tooling all route through them via the endpoint's private DNS.
+  subnet_ids          = aws_subnet.app[*].id
   security_group_ids  = [aws_security_group.endpoints.id]
   private_dns_enabled = true
 

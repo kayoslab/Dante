@@ -122,7 +122,9 @@ resource "aws_lambda_function" "sync" {
         DANTE_ENV                 = var.environment
         DANTE_USE_SECRETS_MANAGER = "1"
         DANTE_LOG_LEVEL           = "info"
-        AWS_REGION                = data.aws_region.current.name
+        # AWS_REGION is reserved by the Lambda runtime — it injects the
+        # function's region automatically and rejects an explicit value.
+        # The SDK reads it the same way either way.
         NODE_ENV                  = "production"
       },
       # DB config — the Lambda runtime fetches credentials from the

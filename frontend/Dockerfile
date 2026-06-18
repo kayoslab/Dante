@@ -40,6 +40,15 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
+# Build-only DATABASE_URL placeholder. `next build` imports every API
+# route to collect page data, and `lib/db/client.ts` eagerly creates the
+# pg pool at module load (throwing if no connection string is set). The
+# build never issues queries, so the value just needs to satisfy the
+# eager check. Point at localhost:1 so it fails closed if it ever leaks.
+# The real DATABASE_URL is composed at runtime from the RDS-managed
+# secret injected by the ECS task definition.
+ENV DATABASE_URL=postgresql://build:build@localhost:1/build_placeholder
+
 # Next.js standalone output + the bundled migration runner. Both end up
 # under dist/ — `next build` writes .next/standalone, the migrate script
 # writes dist/migrate/migrate.js.
@@ -82,8 +91,11 @@ EXPOSE 3000
 
 # The ECS task definition has its own healthcheck — defining one in the
 # image too keeps `docker run` developer ergonomics intact.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -q -O- http://localhost:3000/api/auth/csrf || exit 1
+# Generous timeouts because Next.js 16's standalone server logs "Ready"
+# before it finishes JIT-compiling route handlers; the first request to
+# /api/auth/csrf (which loads Auth.js) can take 5-10s on a cold start.
+HEALTHCHECK --interval=30s --timeout=15s --start-period=90s --retries=5 \
+  CMD wget -q -O- --timeout=10 http://localhost:3000/api/auth/csrf || exit 1
 
 ENTRYPOINT ["./entrypoint.sh"]
 CMD ["node", "server.js"]

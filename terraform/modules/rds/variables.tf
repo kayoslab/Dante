@@ -72,13 +72,13 @@ variable "multi_az" {
 }
 
 variable "backup_retention_days" {
-  description = "Automated backup retention (1–35 days). 7 covers the typical incident-response window without growing storage costs much."
+  description = "Automated backup retention in days. 1–35 enables automated backups (7 covers the typical incident-response window without growing storage costs much). 0 disables automated backups entirely — only acceptable for throwaway environments; never production."
   type        = number
   default     = 7
 
   validation {
-    condition     = var.backup_retention_days >= 1 && var.backup_retention_days <= 35
-    error_message = "backup_retention_days must be between 1 and 35."
+    condition     = var.backup_retention_days >= 0 && var.backup_retention_days <= 35
+    error_message = "backup_retention_days must be between 0 (disabled) and 35."
   }
 }
 

@@ -20,3 +20,10 @@ variable "create_kms_key" {
   type        = bool
   default     = true
 }
+
+variable "cognito_client_secret" {
+  description = "Cognito user-pool client secret. When non-null, terraform writes this value into the `cognito_client_secret` container directly (no out-of-band seeding). Leave null to create the empty container only — the operator must seed it later."
+  type        = string
+  default     = null
+  sensitive   = true
+}

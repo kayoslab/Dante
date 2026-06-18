@@ -40,7 +40,8 @@ function resolveConnectionString(): string {
   const endpoint = process.env.DANTE_DATABASE_ENDPOINT;
   const dbname = process.env.DANTE_DATABASE_NAME;
   if (username && password && endpoint && dbname) {
-    return `postgresql://${username}:${encodeURIComponent(password)}@${endpoint}/${dbname}?sslmode=require`;
+    // `uselibpqcompat=true` — see the matching comment in lib/db/client.ts.
+    return `postgresql://${username}:${encodeURIComponent(password)}@${endpoint}/${dbname}?uselibpqcompat=true&sslmode=require`;
   }
 
   throw new Error(

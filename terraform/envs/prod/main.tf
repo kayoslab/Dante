@@ -106,6 +106,12 @@ module "secrets" {
   name_prefix             = "dante"
   recovery_window_in_days = 7
   create_kms_key          = false
+
+  # Wire the Cognito user-pool client secret straight into Secrets
+  # Manager. Terraform owns both shape and value for this one — the
+  # operator never touches it. ECS reads via the task def's `secrets:`
+  # block (see below), so the value never lands in the task def JSON.
+  cognito_client_secret = module.cognito.client_secret
 }
 
 # --- Security group for the sync Lambda's ENIs --------------------------
@@ -159,6 +165,13 @@ module "rds" {
   # Prod safety rails — leave on. Override only to migrate / decommission.
   deletion_protection = true
   skip_final_snapshot = false
+
+  # TODO(free-plan): the account is currently on AWS's 2025 Free Plan,
+  # which blocks `backup_retention_period > 0` on RDS. Setting to 0
+  # disables automated backups + point-in-time recovery — UNSAFE FOR
+  # PRODUCTION DATA. Flip back to 7 (or remove the override) once IT
+  # upgrades the account to a paid plan.
+  backup_retention_days = 0
 }
 
 module "sync_lambda" {
@@ -189,7 +202,11 @@ module "sync_lambda" {
   schedule_expression   = var.sync_lambda_schedule_expression
   alarm_email_addresses = var.sync_lambda_alarm_emails
 
-  reserved_concurrent_executions = 2
+  # TODO(free-plan): -1 disables the reservation entirely because the
+  # 2025 Free Plan caps account-wide concurrency below the minimum AWS
+  # requires to leave unreserved (10). Restore to 2 once IT upgrades
+  # the account — see also the matching TODO on `module.rds.backup_retention_days`.
+  reserved_concurrent_executions = -1
 }
 
 # --- ECR / ALB / DNS / ECS for the Next.js app ---------------------------
@@ -272,12 +289,19 @@ module "app" {
     DANTE_LOG_LEVEL           = "info"
     AWS_REGION                = var.aws_region
 
+    # Migration runner is bundled at /app/migrate.js, so its __dirname is
+    # /app and the default fallback (`__dirname/../lib/db/migrations`)
+    # resolves to /lib/db/migrations — which doesn't exist. The Dockerfile
+    # copies migrations to /app/lib/db/migrations; pin the path here so
+    # the runner finds the meta/_journal.json drizzle needs.
+    DANTE_MIGRATIONS_FOLDER = "/app/lib/db/migrations"
+
     # DB pointers — username + password injected via `secrets:` below.
     DANTE_DATABASE_ENDPOINT = module.rds.endpoint
     DANTE_DATABASE_NAME     = module.rds.database_name
 
-    # Auth.js — Cognito pointers; client secret + AUTH_SECRET arrive via `secrets:`.
-    AUTH_TRUST_HOST = "true"
+    # Auth.js — Cognito pointers; CLIENT_SECRET + AUTH_SECRET arrive via `secrets:` below.
+    AUTH_TRUST_HOST   = "true"
     COGNITO_CLIENT_ID = module.cognito.client_id
     COGNITO_ISSUER    = module.cognito.issuer_url
     # Cognito hosted UI base URL — `/login`'s "Forgot password?" link
@@ -293,6 +317,10 @@ module "app" {
     {
       name       = "AUTH_SECRET"
       value_from = module.secrets.auth_secret_arn
+    },
+    {
+      name       = "COGNITO_CLIENT_SECRET"
+      value_from = module.secrets.cognito_client_secret_arn
     },
     {
       # RDS managed secret is JSON `{username, password, ...}`. The
@@ -311,11 +339,20 @@ module "app" {
   # own — it's the OAuth client_id + secret, not the access token.
   additional_secret_arns_readable = [
     module.secrets.awork_client_secret_arn,
+    # /settings/integrations/awork needs to read the stored tokens to
+    # display the connection status (expires_at, expired vs authorized).
+    # H-004 originally kept this write-only on the web app's task role,
+    # but the status UI was always going to need read access. Net risk:
+    # an RCE'd web-app process can now exfiltrate the awork OAuth tokens
+    # — small marginal increase given the same process already has DB
+    # access to per-employee salary / Personio data, which is more
+    # sensitive than awork API tokens.
+    module.secrets.awork_tokens_secret_arn,
   ]
 
-  # awork OAuth tokens (WRITE only): the callback writes them after
-  # exchanging the code; the sync Lambda is the only thing that reads
-  # them. RCE in the web app can overwrite but not exfiltrate (was H-004).
+  # awork OAuth tokens (WRITE): the callback writes the rotated tokens
+  # after exchanging the authorization code; the sync Lambda reads them
+  # back. Read access is also granted above for the status UI.
   additional_secret_arns_writable = [
     module.secrets.awork_tokens_secret_arn,
   ]

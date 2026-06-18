@@ -107,13 +107,13 @@ variable "timeout" {
 }
 
 variable "reserved_concurrent_executions" {
-  description = "Maximum concurrent Lambda invocations. Bounds the RDS connection footprint: each running sync holds one pg connection, so this caps Lambda's share of RDS max_connections. 2 allows one in-flight + one overlapping if the cron fires before the prior run finishes; 0 throttles the function to zero (use for incident response)."
+  description = "Maximum concurrent Lambda invocations. Bounds the RDS connection footprint: each running sync holds one pg connection, so this caps Lambda's share of RDS max_connections. 2 allows one in-flight + one overlapping if the cron fires before the prior run finishes; 0 throttles the function to zero (use for incident response); -1 disables the reservation entirely — fall back to the account-wide pool. Use -1 only when the account-wide concurrency quota is too low for any reservation (e.g. AWS Free Plan)."
   type        = number
   default     = 2
 
   validation {
-    condition     = var.reserved_concurrent_executions >= 0
-    error_message = "reserved_concurrent_executions must be >= 0 (use 0 to throttle, not -1)."
+    condition     = var.reserved_concurrent_executions >= -1
+    error_message = "reserved_concurrent_executions must be >= -1 (-1 disables the reservation, 0 throttles to zero, >=1 reserves that many)."
   }
 }
 

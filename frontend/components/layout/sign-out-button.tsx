@@ -1,21 +1,24 @@
-import { signOut } from "@/lib/auth";
+import { SignOutButtonClient } from "./sign-out-button-client";
 
-/** Server Component wrapping a Server Action that ends the session.
- * Avoids the client-side `signOut()` round trip — submit-to-server is
- * simpler and works without JS. */
+/** Server Component — reads the Cognito hosted-UI env vars and hands the
+ * composed logout URL to the client. The client component handles the
+ * actual navigation because server-action redirects to external hosts
+ * are unreliable in Auth.js v5 + Next.js (the redirect is returned as
+ * a same-origin navigation in the RSC payload, never reaches Cognito).
+ *
+ * Cognito's /logout endpoint clears its IdP-side session cookie and
+ * bounces the browser to logout_uri (must be in the user-pool client's
+ * allowed `logout_urls`). Without this bounce, signing out of the app
+ * only clears the Auth.js cookie — Cognito still considers the user
+ * signed in, so the next click on "Sign in" silently re-issues an
+ * OAuth code without prompting for credentials. */
 export function SignOutButton() {
-  async function action() {
-    "use server";
-    await signOut({ redirectTo: "/login" });
-  }
-  return (
-    <form action={action}>
-      <button
-        type="submit"
-        className="rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:border-foreground transition"
-      >
-        Sign out
-      </button>
-    </form>
-  );
+  const hostedUi = process.env.COGNITO_HOSTED_UI_URL;
+  const clientId = process.env.COGNITO_CLIENT_ID;
+  const appUrl = process.env.NEXTAUTH_URL;
+  const cognitoLogoutUrl =
+    hostedUi && clientId && appUrl
+      ? `${hostedUi}/logout?client_id=${clientId}&logout_uri=${encodeURIComponent(appUrl)}`
+      : null;
+  return <SignOutButtonClient cognitoLogoutUrl={cognitoLogoutUrl} />;
 }

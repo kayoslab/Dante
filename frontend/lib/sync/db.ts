@@ -52,8 +52,9 @@ async function resolveDatabaseUrl(): Promise<string> {
     }
     // Endpoint shape from RDS is `host:port`. URL-encode the password
     // so special characters survive the connection string parser.
+    // `uselibpqcompat=true` — see the matching comment in lib/db/client.ts.
     const pw = encodeURIComponent(creds.password);
-    return `postgresql://${creds.username}:${pw}@${endpoint}/${dbname}?sslmode=require`;
+    return `postgresql://${creds.username}:${pw}@${endpoint}/${dbname}?uselibpqcompat=true&sslmode=require`;
   }
 
   throw new Error(

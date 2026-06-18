@@ -33,6 +33,29 @@ One module per AWS-shaped concern. Environments compose modules. State is local 
    aws sts get-caller-identity
    ```
 
+## ⚠️ AWS Free Plan workarounds (prod)
+
+The prod AWS account (`000000000000`) was on AWS's 2025 Free Plan at bring-up. The plan hard-blocks two configurations Dante needs at safe defaults, so the prod env temporarily overrides them. Both overrides live in `terraform/envs/prod/main.tf` marked `TODO(free-plan)`:
+
+| Setting | Safe default | Free-Plan override | Impact |
+|---|---|---|---|
+| `module.rds.backup_retention_days` | `7` | `0` | **No automated backups, no point-in-time recovery.** Do not put real employee data in prod RDS until restored. |
+| `module.sync_lambda.reserved_concurrent_executions` | `2` | `-1` | No concurrency reservation. The sync Lambda runs from the account-wide pool; under contention it could exceed the intended 2-in-flight cap on RDS connections. |
+
+**Restoration steps once the account is upgraded:**
+
+1. Confirm IT has attached a billing method and the account is on a paid plan (`aws ce get-cost-and-usage` should succeed without quota errors).
+2. Edit `terraform/envs/prod/main.tf`: remove the `TODO(free-plan)` overrides, set `backup_retention_days = 7` and `reserved_concurrent_executions = 2`.
+3. `terraform plan` + `terraform apply` from `terraform/envs/prod/`.
+4. Verify RDS picked up the change:
+   ```
+   aws rds describe-db-instances --db-instance-identifier dante-prod \
+     --query 'DBInstances[0].BackupRetentionPeriod'
+   ```
+   Should return `7`. If still `0`, the plan succeeded but the account hasn't actually been upgraded — talk to IT before re-trying.
+
+Other Free-Plan symptoms surfaced during bring-up: the `aws rds describe-db-engine-versions` list excludes recently-retired minor versions (we bumped to 16.14), and RDS rejects some optional features outright with `FreeTierRestrictionError`. The `aws_region` lock to `eu-central-1` in `variables.tf` is unrelated (GDPR), not a Free-Plan effect.
+
 ## Phase P1 (Day 1) — Cognito User Pool only
 
 This applies the smallest possible footprint: one Cognito User Pool, three role groups, one app client, and your seeded admin user. **Estimated cost: €0** at this scale (Cognito free tier covers 50k MAU).

@@ -27,7 +27,15 @@ function resolveConnectionString(): string {
   const dbname = process.env.DANTE_DATABASE_NAME;
   if (username && password && endpoint && dbname) {
     // URL-encode the password so a `:` or `@` survives the parser.
-    return `postgresql://${username}:${encodeURIComponent(password)}@${endpoint}/${dbname}?sslmode=require`;
+    // `uselibpqcompat=true` restores the pre-tightening pg-connection-string
+    // semantics where `sslmode=require` means "encrypt but don't verify the
+    // chain" — needed for RDS, whose root CA isn't in Node's default trust
+    // store. The pg client warns loudly without it ("require/verify-ca are
+    // treated as verify-full"); the TCP path is already private (RDS sits
+    // in data subnets unreachable from the internet), so the value-add of
+    // strict chain verification here is small. Bundle the RDS Global CA
+    // bundle and switch to sslmode=verify-full when we tighten this.
+    return `postgresql://${username}:${encodeURIComponent(password)}@${endpoint}/${dbname}?uselibpqcompat=true&sslmode=require`;
   }
 
   throw new Error(

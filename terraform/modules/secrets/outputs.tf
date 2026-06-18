@@ -28,8 +28,13 @@ output "auth_secret_arn" {
   value       = aws_secretsmanager_secret.auth_secret.arn
 }
 
+output "cognito_client_secret_arn" {
+  description = "ARN of the Cognito user-pool client secret. Pass into the ECS task definition's `secrets:` block as `COGNITO_CLIENT_SECRET`. Not added to `all_secret_arns` because the sync Lambda has no reason to read it."
+  value       = aws_secretsmanager_secret.cognito_client_secret.arn
+}
+
 output "all_secret_arns" {
-  description = "All secret ARNs, for IAM policy generation in dependent modules (ECS task role, Lambda execution role)."
+  description = "Secret ARNs the sync Lambda needs read access to. The ECS app's execution-role policy is derived from the task definition's `secrets:` block (not from this list), so app-only secrets can be omitted."
   value = [
     aws_secretsmanager_secret.personio.arn,
     aws_secretsmanager_secret.awork_client.arn,
