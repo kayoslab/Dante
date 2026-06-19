@@ -31,9 +31,26 @@ async function resolveDatabaseUrl(): Promise<string> {
   const fromEnv = process.env.DATABASE_URL;
   if (fromEnv) return fromEnv;
 
-  const secretArn = process.env.DANTE_DATABASE_SECRET_ARN;
   const endpoint = process.env.DANTE_DATABASE_ENDPOINT;
   const dbname = process.env.DANTE_DATABASE_NAME;
+
+  // Pre-resolved username + password (injected by ECS into the web-app
+  // process via the task definition's `secrets:` block — see
+  // terraform/envs/prod/main.tf). The web app uses this path when
+  // `/settings` triggers an in-process sync via `runSyncAction`; we
+  // already have credentials, no reason to do a second Secrets Manager
+  // round-trip. Mirrors the same fallback in `lib/db/client.ts`.
+  const username = process.env.DB_USERNAME;
+  const password = process.env.DB_PASSWORD;
+  if (username && password && endpoint && dbname) {
+    const pw = encodeURIComponent(password);
+    return `postgresql://${username}:${pw}@${endpoint}/${dbname}?uselibpqcompat=true&sslmode=require`;
+  }
+
+  // Secrets Manager path (the sync Lambda's runtime). The Lambda doesn't
+  // get the credentials injected — it reads the RDS managed secret
+  // directly using DANTE_DATABASE_SECRET_ARN.
+  const secretArn = process.env.DANTE_DATABASE_SECRET_ARN;
   if (secretArn && endpoint && dbname) {
     const res = await secretsManager.send(
       new GetSecretValueCommand({ SecretId: secretArn }),
@@ -58,10 +75,13 @@ async function resolveDatabaseUrl(): Promise<string> {
   }
 
   throw new Error(
-    "DATABASE_URL is not set, and DANTE_DATABASE_{SECRET_ARN,ENDPOINT,NAME} " +
-      "are not all present for the Secrets Manager path. In dev: copy " +
-      ".env.example to .env and start Postgres via `docker compose up -d`. " +
-      "In prod: confirm the Lambda env vars are populated by the sync-lambda module.",
+    "DATABASE_URL is not set, neither DB_USERNAME/DB_PASSWORD nor " +
+      "DANTE_DATABASE_SECRET_ARN are present, and DANTE_DATABASE_ENDPOINT / " +
+      "DANTE_DATABASE_NAME are not both set. In dev: copy .env.example to " +
+      ".env and start Postgres via `docker compose up -d`. In prod: confirm " +
+      "the Lambda env vars are populated by the sync-lambda module, or that " +
+      "the ECS task definition injects DB_USERNAME/DB_PASSWORD from the " +
+      "RDS managed secret.",
   );
 }
 

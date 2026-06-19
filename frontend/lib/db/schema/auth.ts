@@ -53,9 +53,8 @@ export const appUser = pgTable(
     is_disabled: boolean().notNull().default(false),
     // MFA columns (`mfa_secret`, `mfa_enrolled_at`, the older `mfa_required`)
     // were dropped in migrations 0011 → 0012 when MFA enforcement moved
-    // to Cognito's hosted UI (TOTP + WebAuthn passkeys). See
-    // `terraform/modules/cognito` for the user-pool `mfa_configuration`
-    // and `web_authn_configuration` blocks.
+    // to Cognito's hosted UI (TOTP). See `terraform/modules/cognito` for
+    // the user-pool `mfa_configuration` block.
     created_at: timestamp({ mode: "date" }).notNull().defaultNow(),
     last_login_at: timestamp({ mode: "date" }),
   },

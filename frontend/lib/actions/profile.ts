@@ -15,14 +15,9 @@ import { z } from "zod";
 import { audit } from "@/lib/auth/audit";
 import {
   changePassword,
-  completePasskeyRegistration,
-  deletePasskey,
-  listPasskeys,
   setTotpPreference,
-  startPasskeyRegistration,
   startTotpEnrollment,
   verifyTotpEnrollment,
-  type PasskeySummary,
 } from "@/lib/auth/cognito-self-service";
 import { CognitoReauthRequired } from "@/lib/auth/cognito-tokens";
 import { requireSession } from "@/lib/auth/session";
@@ -111,82 +106,6 @@ export async function changePasswordAction(
 }
 
 // ---------------------------------------------------------------------------
-// Passkeys
-// ---------------------------------------------------------------------------
-
-export async function listPasskeysAction(): Promise<
-  ActionResult<PasskeySummary[]>
-> {
-  await requireSession();
-  try {
-    const items = await listPasskeys();
-    return ok(items);
-  } catch (e) {
-    return mapCognitoError(e);
-  }
-}
-
-export async function startPasskeyRegistrationAction(): Promise<
-  ActionResult<{ creation_options: unknown }>
-> {
-  await requireSession();
-  try {
-    const opts = await startPasskeyRegistration();
-    return ok({ creation_options: opts });
-  } catch (e) {
-    return mapCognitoError(e);
-  }
-}
-
-const CompletePasskeySchema = z.object({
-  // The browser's PublicKeyCredential.toJSON() output. Shape is opaque to
-  // us — we forward it verbatim and Cognito validates.
-  credential: z.record(z.string(), z.unknown()),
-});
-
-export async function completePasskeyRegistrationAction(
-  input: unknown,
-): Promise<ActionResult<null>> {
-  const ctx = await requireSession();
-  const parsed = CompletePasskeySchema.safeParse(input);
-  if (!parsed.success) return fromZod(parsed.error);
-  try {
-    await completePasskeyRegistration(parsed.data.credential);
-  } catch (e) {
-    return mapCognitoError(e);
-  }
-  await audit(ctx, {
-    action: "self_passkey_registered",
-    target_type: "user",
-    target_id: ctx.user_id,
-  });
-  return ok(null);
-}
-
-const DeletePasskeySchema = z.object({
-  credential_id: z.string().min(1),
-});
-
-export async function deletePasskeyAction(
-  input: unknown,
-): Promise<ActionResult<null>> {
-  const ctx = await requireSession();
-  const parsed = DeletePasskeySchema.safeParse(input);
-  if (!parsed.success) return fromZod(parsed.error);
-  try {
-    await deletePasskey(parsed.data.credential_id);
-  } catch (e) {
-    return mapCognitoError(e);
-  }
-  await audit(ctx, {
-    action: "self_passkey_removed",
-    target_type: "user",
-    target_id: ctx.user_id,
-  });
-  return ok(null);
-}
-
-// ---------------------------------------------------------------------------
 // TOTP
 // ---------------------------------------------------------------------------
 
@@ -222,13 +141,6 @@ export async function confirmTotpEnrollmentAction(
   if (!parsed.success) return fromZod(parsed.error);
   try {
     await verifyTotpEnrollment(parsed.data.code);
-    // Cognito's `VerifySoftwareToken` confirms the secret pairs with
-    // the user, but doesn't enable TOTP as the MFA method on its own.
-    // The user pool is `mfa_configuration = "ON"`, so they must already
-    // have *some* MFA enabled — flipping TOTP on here makes it
-    // preferred. Removing it on its own is rejected by Cognito if no
-    // other factor is registered (the wrapper for that path lives in
-    // `setTotpPreference(false)` but we don't expose it here yet).
     await setTotpPreference(true);
   } catch (e) {
     return mapCognitoError(e);
@@ -241,20 +153,3 @@ export async function confirmTotpEnrollmentAction(
   return ok(null);
 }
 
-export async function disableTotpAction(): Promise<ActionResult<null>> {
-  const ctx = await requireSession();
-  try {
-    // Cognito rejects this if it would leave the user with no MFA factor
-    // (the user pool is `mfa_configuration = "ON"`). The error surfaces
-    // as a generic InvalidParameterException — we forward the message.
-    await setTotpPreference(false);
-  } catch (e) {
-    return mapCognitoError(e);
-  }
-  await audit(ctx, {
-    action: "self_totp_disabled",
-    target_type: "user",
-    target_id: ctx.user_id,
-  });
-  return ok(null);
-}

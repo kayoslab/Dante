@@ -12,12 +12,8 @@ import {
   AssociateSoftwareTokenCommand,
   ChangePasswordCommand,
   CognitoIdentityProviderClient,
-  CompleteWebAuthnRegistrationCommand,
-  DeleteWebAuthnCredentialCommand,
   GetUserCommand,
-  ListWebAuthnCredentialsCommand,
   SetUserMFAPreferenceCommand,
-  StartWebAuthnRegistrationCommand,
   VerifySoftwareTokenCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 
@@ -60,72 +56,6 @@ export async function changePassword(
       AccessToken,
       PreviousPassword: current_password,
       ProposedPassword: new_password,
-    }),
-  );
-}
-
-// ---------------------------------------------------------------------------
-// WebAuthn / passkeys
-// ---------------------------------------------------------------------------
-
-export type PasskeySummary = {
-  credential_id: string;
-  friendly_name: string | null;
-  created_at: string | null;
-  authenticator_attachment: string | null;
-};
-
-/** List all WebAuthn credentials on the signed-in user's account. */
-export async function listPasskeys(): Promise<PasskeySummary[]> {
-  const AccessToken = await getCognitoAccessToken();
-  const res = await client().send(
-    new ListWebAuthnCredentialsCommand({ AccessToken }),
-  );
-  const creds = res.Credentials ?? [];
-  return creds.map((c) => ({
-    credential_id: c.CredentialId ?? "",
-    friendly_name: c.FriendlyCredentialName ?? null,
-    created_at: c.CreatedAt?.toISOString() ?? null,
-    authenticator_attachment: c.AuthenticatorAttachment ?? null,
-  }));
-}
-
-/** Step 1 of passkey registration. Returns the WebAuthn
- * `PublicKeyCredentialCreationOptions` JSON that the browser feeds into
- * `navigator.credentials.create()`. */
-export async function startPasskeyRegistration(): Promise<unknown> {
-  const AccessToken = await getCognitoAccessToken();
-  const res = await client().send(
-    new StartWebAuthnRegistrationCommand({ AccessToken }),
-  );
-  return res.CredentialCreationOptions ?? null;
-}
-
-/** Step 2 of passkey registration. The browser hands back the
- * `PublicKeyCredential` from `navigator.credentials.create()`; we
- * forward it as-is to Cognito to persist. */
-export async function completePasskeyRegistration(
-  credential: Record<string, unknown>,
-): Promise<void> {
-  const AccessToken = await getCognitoAccessToken();
-  // Cognito expects the credential as a `DocumentType` (free-form JSON).
-  // The shape comes verbatim from `navigator.credentials.create()` →
-  // PublicKeyCredential's `toJSON()` and is opaque to us; we just forward.
-  await client().send(
-    new CompleteWebAuthnRegistrationCommand({
-      AccessToken,
-      Credential: credential as never,
-    }),
-  );
-}
-
-/** Remove a registered passkey by its credential ID. */
-export async function deletePasskey(credential_id: string): Promise<void> {
-  const AccessToken = await getCognitoAccessToken();
-  await client().send(
-    new DeleteWebAuthnCredentialCommand({
-      AccessToken,
-      CredentialId: credential_id,
     }),
   );
 }
@@ -178,10 +108,10 @@ export async function verifyTotpEnrollment(
   }
 }
 
-/** Toggle TOTP MFA on/off for the user. Note that the user pool is
- * configured with `mfa_configuration = "ON"` — Cognito requires at
- * least one factor enabled, so we never let the user disable TOTP
- * unless they have a passkey registered. The caller checks that. */
+/** Toggle TOTP MFA on/off for the user. The user pool is configured
+ * with `mfa_configuration = "ON"` and TOTP is the only available factor,
+ * so Cognito rejects attempts to disable it. We only call this with
+ * `enabled = true` after a successful enrollment. */
 export async function setTotpPreference(enabled: boolean): Promise<void> {
   const AccessToken = await getCognitoAccessToken();
   await client().send(

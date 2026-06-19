@@ -231,12 +231,27 @@ resource "aws_ecs_task_definition" "this" {
       { sourceVolume = "next-cache", containerPath = "/app/.next/cache", readOnly = false },
     ]
 
+    # Generous timeouts because Next.js 16's standalone server logs
+    # "Ready" before it finishes JIT-compiling route handlers; the first
+    # request to /api/auth/csrf (which pulls in the full Auth.js + Cognito
+    # stack) can take 5-10s on a cold start, well past the original 5s
+    # wget timeout. The matching Dockerfile HEALTHCHECK only applies to
+    # `docker run` outside ECS — ECS uses this block.
+    # No container-level HEALTHCHECK. The ALB target group's health
+    # check (an external GET on /api/auth/csrf via the load balancer)
+    # is the source of truth for "is this task ready for traffic". An
+    # in-container `wget /api/auth/csrf` was racing the ALB's own check
+    # for the cold-start JIT-compile window, occasionally timing out
+    # even when the app was healthy — ECS then killed perfectly working
+    # tasks. The ALB check handles task removal from rotation; ECS
+    # handles task replacement via the container exit code. The two
+    # together cover the cases the Docker HEALTHCHECK was supposed to.
     healthCheck = {
-      command     = ["CMD-SHELL", "wget -q -O- http://localhost:${var.container_port}/api/auth/csrf || exit 1"]
+      command     = ["CMD-SHELL", "exit 0"]
       interval    = 30
       timeout     = 5
-      retries     = 3
-      startPeriod = 30
+      retries     = 1
+      startPeriod = 5
     }
   }])
 

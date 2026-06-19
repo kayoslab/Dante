@@ -60,26 +60,19 @@ resource "aws_cognito_user_pool" "this" {
     temporary_password_validity_days = 7
   }
 
+  sign_in_policy {
+    allowed_first_auth_factors = ["PASSWORD"]
+  }
+
   # MFA is mandatory for every user (migration 0011 dropped the per-user
   # `mfa_required` flag — the in-app gate became universal, and then
   # delegated to Cognito's native flow). The hosted UI walks new users
-  # through TOTP or passkey enrollment at first sign-in; subsequent
-  # sign-ins prompt for the chosen factor.
+  # through TOTP enrollment at first sign-in; subsequent sign-ins
+  # prompt for the TOTP code.
   mfa_configuration = "ON"
 
   software_token_mfa_configuration {
     enabled = true
-  }
-
-  # WebAuthn / passkey support. The relying-party ID binds credentials
-  # to the app's public domain — a passkey enrolled here can't be
-  # replayed at another site. `user_verification = "required"` forces
-  # the authenticator to verify the user (biometric, PIN, or device
-  # unlock) rather than just proving possession, which makes the
-  # passkey itself a strong second factor on its own.
-  web_authn_configuration {
-    relying_party_id  = var.domain_name
-    user_verification = "required"
   }
 
   account_recovery_setting {
@@ -110,9 +103,14 @@ resource "aws_cognito_user_pool" "this" {
   }
 
   email_configuration {
-    # Default Cognito sender. Switch to SES (d.alighieri@dante.example.com)
-    # in prod once the domain is set up with DKIM/DMARC.
-    email_sending_account = "COGNITO_DEFAULT"
+    # When `ses_source_arn` is set we use SES so messages come from a
+    # domain we own (DKIM + DMARC aligned, no quarantine). Cognito's
+    # default sender is rate-limited to ~50/day and routinely filtered
+    # by corporate inboxes, so it's only useful for dev.
+    email_sending_account  = var.ses_source_arn == null ? "COGNITO_DEFAULT" : "DEVELOPER"
+    source_arn             = var.ses_source_arn
+    from_email_address     = var.ses_from_email_address
+    reply_to_email_address = var.ses_reply_to_email_address
   }
 
   # Schema: standard `email`. We could add custom attributes here (e.g.
@@ -159,6 +157,43 @@ resource "aws_cognito_user_pool" "this" {
 resource "aws_cognito_user_pool_domain" "this" {
   domain       = "${local.name}-${random_id.domain_suffix.hex}"
   user_pool_id = aws_cognito_user_pool.this.id
+  # 2 = Managed Login (modern hosted UI with passkey-at-sign-in,
+  # visual branding designer). 1 = classic. The matching
+  # `aws_cognito_managed_login_branding` resource below configures
+  # the visual asset bundle; without that, Managed Login falls back
+  # to the Cognito-provided defaults.
+  managed_login_version = 2
+}
+
+# Managed Login branding for the app client.
+#
+# Bootstrap step — run once after first apply (the terraform AWS provider
+# doesn't yet wrap `aws_cognito_managed_login_branding`; tracked upstream
+# in hashicorp/terraform-provider-aws #40677):
+#
+#   aws cognito-idp create-managed-login-branding \
+#     --user-pool-id <user_pool_id> \
+#     --client-id <client_id> \
+#     --use-cognito-provided-values \
+#     --region eu-central-1
+#
+# Without that resource the client falls back to the classic hosted UI
+# even when `managed_login_version = 2` is set on the domain — the
+# branding's presence is what flips Managed Login on. Once the provider
+# wraps the resource, codify it here so the asset bundle (colors / logo /
+# fonts) becomes terraform-managed too.
+
+# Optional custom Cognito hosted-UI domain. WebAuthn passkeys are bound
+# to an RPID that must be a registrable suffix of the page origin —
+# without a custom domain on the same eTLD+1 as the app, passkeys
+# registered on the app can't be used at sign-in (the SecurityError
+# "RPID did not match the origin" we hit in prod).
+resource "aws_cognito_user_pool_domain" "custom" {
+  count           = var.custom_domain_name == null ? 0 : 1
+  domain          = var.custom_domain_name
+  certificate_arn = var.custom_domain_cert_arn
+  user_pool_id    = aws_cognito_user_pool.this.id
+  managed_login_version = 2
 }
 
 resource "random_id" "domain_suffix" {
@@ -204,7 +239,17 @@ resource "aws_cognito_user_pool_client" "app" {
   # PKCE is enforced for code flow (Auth.js handles the verifier/challenge).
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_flows_user_pool_client = true
-  allowed_oauth_scopes                 = ["email", "openid", "profile"]
+  # `aws.cognito.signin.user.admin` is required for the access token to
+  # call user-scoped cognito-idp APIs (ChangePassword, AssociateSoftwareToken,
+  # ListWebAuthnCredentials, etc.) from `/profile` self-service. Without
+  # it Cognito returns `NotAuthorizedException: Access Token does not have
+  # required scopes` on every self-service call.
+  allowed_oauth_scopes = [
+    "email",
+    "openid",
+    "profile",
+    "aws.cognito.signin.user.admin",
+  ]
   supported_identity_providers         = ["COGNITO"] # Microsoft Entra ID added later via aws_cognito_identity_provider
 
   callback_urls = var.callback_urls

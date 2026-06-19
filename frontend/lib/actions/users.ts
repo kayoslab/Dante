@@ -7,6 +7,7 @@ import { z } from "zod";
 import { db } from "@/lib/db/client";
 import { appUser, employeeCurrent } from "@/lib/db/schema";
 import { audit } from "@/lib/auth/audit";
+import { adminCreateCognitoUser } from "@/lib/auth/cognito-admin";
 import {
   ForbiddenError,
   invalidateDisabledCache,
@@ -86,11 +87,43 @@ export async function inviteUserAction(
     .where(sql`LOWER(${employeeCurrent.email}) = ${email.toLowerCase()}`)
     .limit(1);
 
-  // In dev mode we synthesize the cognito_sub. In prod this will be
-  // replaced by a call to Cognito's AdminCreateUser, then the row gets
-  // updated with the real sub. The temp-password email goes out from
-  // Cognito; the user signs in and changes it.
-  const cognito_sub = `dev:${email.toLowerCase()}`;
+  // Two paths:
+  //
+  //   - Dev mode: no Cognito to call. Synthesize a `dev:<email>` stub
+  //     `cognito_sub`. The dev Credentials provider matches on email so
+  //     the user can still sign in locally without round-tripping AWS.
+  //
+  //   - Prod: actually create the Cognito user via AdminCreateUser. Cognito
+  //     sends the temp-password email itself; the user signs in via the
+  //     hosted UI and is forced to set a permanent password (and enrol
+  //     MFA — `mfa_configuration = "ON"` on the pool). Persist the real
+  //     Cognito `sub` so the first-login `findOrCreateAppUser` match
+  //     happens by `cognito_sub` (cheaper, no fallback needed).
+  const isDev = process.env.AUTH_DEV_MODE === "true";
+  let cognito_sub: string;
+  if (isDev) {
+    cognito_sub = `dev:${email.toLowerCase()}`;
+  } else {
+    try {
+      const created = await adminCreateCognitoUser({ email, group: role });
+      cognito_sub = created.sub;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("UsernameExistsException")) {
+        return err(
+          "conflict",
+          `Cognito already has a user for ${email}. ` +
+            "If this is unexpected, an admin may have created the Cognito " +
+            "user out-of-band; reconcile via the AWS console first.",
+        );
+      }
+      return err(
+        "internal_error",
+        `Cognito AdminCreateUser failed: ${msg}`,
+      );
+    }
+  }
+
   const inserted = await db
     .insert(appUser)
     .values({

@@ -31,7 +31,7 @@ These were extracted from TECH_DEBT.md when it was closed out. They're the durab
 - **manager** — **C-level** (CEO, CFO, COO). Full-org visibility on everything financial: portfolio economics, salary bands, gender-gap analysis, per-employee economics. Three to five people in a 40-person org.
 - **admin** — usually one person; manages users + audit log + integrations. Disjoint from "manager" in practice but admins automatically inherit manager-level data access via `ROLE_RANK`.
 
-MFA is mandatory for every role — Cognito's hosted UI enforces it (TOTP or WebAuthn passkey). See [§ MFA (Cognito-managed)](#mfa-cognito-managed).
+MFA is mandatory for every role — Cognito's hosted UI enforces it (TOTP). See [§ MFA (Cognito-managed)](#mfa-cognito-managed).
 
 ### Per-role endpoint matrix
 
@@ -44,7 +44,7 @@ MFA is mandatory for every role — Cognito's hosted UI enforces it (TOTP or Web
 A C-level manager can read **any** employee's salary history, monthly economics, and (post-redaction) Personio attributes. There is **no team scoping** because there are no team-tier managers in this org — the manager role is by definition org-wide. This was flagged as H-001 in the pre-launch pen test and is **accepted as design**.
 
 Compensating controls:
-- **MFA mandatory for every user** (employee, manager, admin) — enforced by Cognito's hosted UI (`mfa_configuration = "ON"` on the user pool). TOTP or WebAuthn passkey, user's choice. By the time we see an OIDC token, MFA has already happened.
+- **MFA mandatory for every user** (employee, manager, admin) — enforced by Cognito's hosted UI (`mfa_configuration = "ON"` on the user pool, TOTP via any authenticator app). By the time we see an OIDC token, MFA has already happened.
 - **Audit log** on every sensitive read: `view_employee_detail`, `view_inspect_payload`, `view_salary_bands`, `view_gender_gap`, `view_salary`. Forensic queries: `SELECT actor_email, COUNT(*) FROM app_audit_log WHERE action IN ('view_inspect_payload','view_employee_detail') AND occurred_at > NOW() - INTERVAL '7 days' GROUP BY actor_email ORDER BY 2 DESC` highlights outliers.
 - **Personio payload redaction** in `/api/inspect/*` — IBAN / BIC / bank / tax_id / SSN / passport / national_id / health_insurance / religion / ethnicity attributes return `"[redacted]"`.
 - **CloudWatch alarm candidate**: spike in `view_inspect_payload` per actor over a 5-minute window. Not yet wired; would require shipping audit rows to CloudWatch via a sync-time export or a stream.
@@ -59,14 +59,10 @@ MFA is delegated to **Cognito's hosted UI**, configured via
 - `mfa_configuration = "ON"` — required for every user, no opt-out.
 - `software_token_mfa_configuration { enabled = true }` — TOTP via any
   authenticator app (Google Authenticator, 1Password, Authy, …).
-- `web_authn_configuration { relying_party_id = <domain>, user_verification = "required" }`
-  — WebAuthn passkeys. Passkeys with user-verification *required* count
-  as a strong second factor on their own; Cognito will accept either a
-  TOTP code or a passkey at the challenge step.
 
-On first sign-in the hosted UI walks the user through enrollment (pick
-TOTP, passkey, or both). On every subsequent sign-in Cognito presents
-the challenge before redirecting back to `/api/auth/callback/cognito`.
+On first sign-in the hosted UI walks the user through TOTP enrollment.
+On every subsequent sign-in Cognito presents the challenge before
+redirecting back to `/api/auth/callback/cognito`.
 By the time Auth.js's jwt callback runs, MFA has already happened — no
 app-side gate, no app-side state to track. The retired in-app TOTP
 layer (migration 0012 dropped `mfa_secret` + `mfa_enrolled_at`) lived
@@ -86,27 +82,16 @@ if `NODE_ENV=production`).
 
 ## Profile self-service
 
-The `/profile` page surfaces three Cognito-backed self-service flows.
-All three call `cognito-idp` via the user's own OAuth access token,
-so the SDK enforces "users can only mutate their own account".
+The `/profile` page surfaces two Cognito-backed self-service flows.
+Both call `cognito-idp` via the user's own OAuth access token, so the
+SDK enforces "users can only mutate their own account".
 
 - **Change password** — `ChangePasswordCommand`, requires the user to
   enter the current password. Backed by `changePasswordAction`.
-- **Passkeys** — list / add / remove. The add path runs the WebAuthn
-  registration ceremony in the browser
-  (`navigator.credentials.create()`); both ends of the trip
-  (`StartWebAuthnRegistrationCommand` →
-  `CompleteWebAuthnRegistrationCommand`) go through the action layer.
-  Passkeys are scoped to the relying-party ID set in
-  `web_authn_configuration.relying_party_id` (the public domain), so a
-  credential can't be replayed at another site.
-- **Authenticator app (TOTP)** — enroll / disable via
-  `AssociateSoftwareToken`, `VerifySoftwareToken`,
-  `SetUserMFAPreference`. Cognito rejects "disable TOTP" if it would
-  leave the user with no MFA factor at all (pool is
-  `mfa_configuration = "ON"`), so the user must have a passkey
-  registered before they can drop TOTP — the API error surfaces in
-  the UI as-is.
+- **Authenticator app (TOTP)** — enroll via `AssociateSoftwareToken`,
+  `VerifySoftwareToken`, `SetUserMFAPreference`. TOTP is the only
+  enabled MFA factor and the pool is `mfa_configuration = "ON"`, so
+  disabling it is not exposed (Cognito would reject the call anyway).
 
 The forgot-password flow on `/login` redirects to Cognito's hosted UI
 at `<COGNITO_HOSTED_UI_URL>/forgotPassword?...`. The hosted UI handles
@@ -134,8 +119,8 @@ those fields strictly server-side.
 
 ### Admin reset (lost device / no factors left)
 
-If a user loses their phone AND their passkey hardware, they can't get
-in. Admin recovery is still out-of-band via the AWS console / CLI:
+If a user loses access to their TOTP authenticator they can't get in.
+Admin recovery is out-of-band via the AWS console / CLI:
 
     aws cognito-idp admin-set-user-mfa-preference \
       --user-pool-id <id> --username <email> \
@@ -230,7 +215,7 @@ Order matters — Terraform creates empty secret containers, but the operator wr
 
 5. **Confirm SNS subscription emails** — the sync Lambda's alarm topic and any others land in `admin@example.com`. Click the confirm link or alarms won't fire.
 
-6. **First sign-in** — Cognito sends a temp-password email to seed admins; you complete first sign-in, set a permanent password, then Cognito's hosted UI prompts for TOTP enrollment and/or passkey registration. After that the user redirects back to `/` already MFA-verified.
+6. **First sign-in** — Cognito sends a temp-password email to seed admins; you complete first sign-in, set a permanent password, then Cognito's hosted UI prompts for TOTP enrollment. After that the user redirects back to `/` already MFA-verified.
 
 For ongoing redeploys (image rebuild + new SHA), step 3 + step 4 are enough — the rest is one-time.
 

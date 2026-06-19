@@ -39,6 +39,24 @@ provider "aws" {
   }
 }
 
+# Cognito requires ACM certs for custom user-pool domains to live in
+# us-east-1 specifically (no exceptions, regardless of where the pool
+# itself is). Only used for the `auth.dante.example.com` cert below
+# — every other resource stays in eu-central-1.
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+
+  default_tags {
+    tags = {
+      App         = "dante"
+      Environment = "prod"
+      ManagedBy   = "terraform"
+      DataClass   = "gdpr-personal"
+    }
+  }
+}
+
 module "vpc" {
   source = "../../modules/vpc"
 
@@ -97,6 +115,105 @@ module "cognito" {
   logout_urls = [
     "https://${var.domain}",
   ]
+
+  # Custom Cognito hosted-UI domain. WebAuthn passkeys are bound to an
+  # RPID (relying party ID) that must be a registrable suffix of the
+  # browser's current page origin. Passkeys registered against the app
+  # at `dante.example.com` can only be used at sign-in if the hosted
+  # UI lives on the same eTLD+1. The default `*.amazoncognito.com`
+  # domain is on a different eTLD+1 and breaks WebAuthn.
+  custom_domain_name = "auth.${var.domain}"
+  custom_domain_cert_arn = aws_acm_certificate_validation.cognito_custom.certificate_arn
+
+  # SES sender. Without this Cognito falls back to its default sender
+  # (`no-reply@verificationemail.com`), which is rate-limited to ~50/day
+  # and routinely spam-filtered by corporate inboxes — invite + reset
+  # mails just don't arrive. We send from `noreply@<var.domain>` so
+  # DKIM + DMARC align with a domain we control.
+  ses_source_arn         = aws_sesv2_email_identity.dante.arn
+  ses_from_email_address = "Dante <noreply@${var.domain}>"
+}
+
+# SES sender identity for Cognito invitation / reset / verification
+# emails. Domain identity (covers any address on the domain). Cognito
+# is regional, so SES must be in the same region as the user pool.
+resource "aws_sesv2_email_identity" "dante" {
+  email_identity = var.domain
+  dkim_signing_attributes {
+    next_signing_key_length = "RSA_2048_BIT"
+  }
+}
+
+# Easy-DKIM CNAMEs. SES generates exactly 3 selector tokens per identity;
+# each needs a CNAME pointing into amazonses.com. Without these, SES
+# refuses to send because the identity stays in "Pending" verification.
+# count=3 is hard-coded because the token list is apply-time-only —
+# for_each can't enumerate it. The selector count is a stable SES API
+# contract (RSA_2048 always emits 3).
+resource "aws_route53_record" "ses_dkim" {
+  count   = 3
+  zone_id = var.hosted_zone_id
+  name    = "${aws_sesv2_email_identity.dante.dkim_signing_attributes[0].tokens[count.index]}._domainkey.${var.domain}"
+  type    = "CNAME"
+  ttl     = 600
+  records = ["${aws_sesv2_email_identity.dante.dkim_signing_attributes[0].tokens[count.index]}.dkim.amazonses.com"]
+}
+
+# ACM cert for the Cognito custom domain. MUST be in us-east-1
+# regardless of the rest of the stack's region (Cognito requirement).
+resource "aws_acm_certificate" "cognito_custom" {
+  provider          = aws.us_east_1
+  domain_name       = "auth.${var.domain}"
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = {
+    Name = "auth.${var.domain}"
+  }
+}
+
+# DNS validation records for the ACM cert. Route 53 is global, so the
+# default (eu-central-1) provider works for these zone writes.
+resource "aws_route53_record" "cognito_custom_cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.cognito_custom.domain_validation_options :
+    dvo.domain_name => {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      record = dvo.resource_record_value
+    }
+  }
+
+  zone_id         = var.hosted_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
+  ttl             = 60
+  allow_overwrite = true
+}
+
+resource "aws_acm_certificate_validation" "cognito_custom" {
+  provider                = aws.us_east_1
+  certificate_arn         = aws_acm_certificate.cognito_custom.arn
+  validation_record_fqdns = [for r in aws_route53_record.cognito_custom_cert_validation : r.fqdn]
+}
+
+# Route 53 A-alias for the custom Cognito domain → its CloudFront
+# distribution. The Cognito module exposes the CloudFront distribution
+# domain as an output (`custom_domain_cloudfront_distribution`).
+resource "aws_route53_record" "cognito_custom" {
+  zone_id = var.hosted_zone_id
+  name    = "auth.${var.domain}"
+  type    = "A"
+
+  alias {
+    name                   = module.cognito.custom_domain_cloudfront_distribution
+    zone_id                = "Z2FDTNDATAQYW2" # Cognito's CloudFront — fixed AWS value
+    evaluate_target_health = false
+  }
 }
 
 module "secrets" {
@@ -240,6 +357,14 @@ module "alb" {
   certificate_arn   = module.dns.certificate_arn
 
   deletion_protection = true
+
+  # Bumped from the 60s default so the in-process /settings Sync action
+  # can complete without the ALB cutting the connection mid-flight. A
+  # full Personio + awork sync takes a few minutes when there are many
+  # records. Long-term fix: move the sync to async Lambda invocation
+  # so the HTTP request returns immediately and the browser polls for
+  # progress.
+  idle_timeout_seconds = 900
 }
 
 module "dns" {
@@ -301,9 +426,12 @@ module "app" {
     DANTE_DATABASE_NAME     = module.rds.database_name
 
     # Auth.js — Cognito pointers; CLIENT_SECRET + AUTH_SECRET arrive via `secrets:` below.
-    AUTH_TRUST_HOST   = "true"
-    COGNITO_CLIENT_ID = module.cognito.client_id
-    COGNITO_ISSUER    = module.cognito.issuer_url
+    AUTH_TRUST_HOST      = "true"
+    COGNITO_CLIENT_ID    = module.cognito.client_id
+    COGNITO_ISSUER       = module.cognito.issuer_url
+    # Used by admin-side calls (e.g. AdminCreateUser from /settings/users)
+    # via `lib/auth/cognito-admin.ts`.
+    COGNITO_USER_POOL_ID = module.cognito.user_pool_id
     # Cognito hosted UI base URL — `/login`'s "Forgot password?" link
     # composes a redirect to <hosted-ui>/forgotPassword?...
     COGNITO_HOSTED_UI_URL = module.cognito.oauth_endpoint
@@ -348,6 +476,11 @@ module "app" {
     # access to per-employee salary / Personio data, which is more
     # sensitive than awork API tokens.
     module.secrets.awork_tokens_secret_arn,
+    # The /settings sync button triggers an in-process sync via
+    # `runSyncAction`, which loads Personio credentials at call time.
+    # The sync Lambda has its own grant for this; the web-app task role
+    # needs the same one so the on-demand sync works.
+    module.secrets.personio_secret_arn,
   ]
 
   # awork OAuth tokens (WRITE): the callback writes the rotated tokens
@@ -356,6 +489,30 @@ module "app" {
   additional_secret_arns_writable = [
     module.secrets.awork_tokens_secret_arn,
   ]
+}
+
+# Grant the web-app task role the Cognito admin permissions used by the
+# /settings/users invite flow. The invite action calls AdminCreateUser to
+# materialize a Cognito user (which triggers the temp-password email)
+# and AdminAddUserToGroup to grant the requested role. Scoped to this
+# pool's ARN only.
+resource "aws_iam_role_policy" "app_cognito_admin" {
+  name = "${module.app.task_role_name}-cognito-admin"
+  role = module.app.task_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminAddUserToGroup",
+        "cognito-idp:AdminRemoveUserFromGroup",
+        "cognito-idp:AdminGetUser",
+      ]
+      Resource = module.cognito.user_pool_arn
+    }]
+  })
 }
 
 module "waf" {

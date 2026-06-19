@@ -102,10 +102,9 @@ version of this is wrong. That's why this exists.
   30 days. Failures land in an SQS DLQ; CloudWatch alarms publish to
   an SNS topic.
 - **Auth:** AWS Cognito user pool with hosted UI. MFA is mandatory for
-  every user (`mfa_configuration = "ON"`); the user pool offers both
-  TOTP (any authenticator app) and WebAuthn passkeys, scoped to the
-  app's domain as the relying party. Auth.js receives the OIDC token
-  after Cognito has already enforced the factor.
+  every user (`mfa_configuration = "ON"`); TOTP via any authenticator
+  app. Auth.js receives the OIDC token after Cognito has already
+  enforced the factor.
 - **Secrets:** AWS Secrets Manager for Personio creds, awork OAuth client
   + rotating tokens, the Auth.js JWT signing key, and the RDS master
   credential. The app composes connection strings at boot from the

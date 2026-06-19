@@ -28,6 +28,11 @@ output "task_role_arn" {
   value       = aws_iam_role.task.arn
 }
 
+output "task_role_name" {
+  description = "Task role name — pass into an `aws_iam_role_policy` from the env when granting extra permissions."
+  value       = aws_iam_role.task.name
+}
+
 output "execution_role_arn" {
   description = "ECS execution role ARN."
   value       = aws_iam_role.execution.arn

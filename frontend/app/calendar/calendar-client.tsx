@@ -38,7 +38,7 @@ type Selection = {
   date: string;
 };
 
-export function CalendarClient() {
+export function CalendarClient({ canAllocate }: { canAllocate: boolean }) {
   const [anchor, setAnchor] = useState<Date>(() => startOfMonth(new Date()));
   const [includeNonContrib, setIncludeNonContrib] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -78,7 +78,7 @@ export function CalendarClient() {
         isLoading={query.isLoading}
         isError={query.isError}
         error={query.error}
-        onCellClick={onCellClick}
+        onCellClick={canAllocate ? onCellClick : undefined}
       />
 
       {selection && (

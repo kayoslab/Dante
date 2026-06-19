@@ -95,7 +95,7 @@ EXPOSE 3000
 # before it finishes JIT-compiling route handlers; the first request to
 # /api/auth/csrf (which loads Auth.js) can take 5-10s on a cold start.
 HEALTHCHECK --interval=30s --timeout=15s --start-period=90s --retries=5 \
-  CMD wget -q -O- --timeout=10 http://localhost:3000/api/auth/csrf || exit 1
+  CMD wget -q -O- -T 10 http://localhost:3000/api/auth/csrf || exit 1
 
 ENTRYPOINT ["./entrypoint.sh"]
 CMD ["node", "server.js"]

@@ -35,8 +35,13 @@ output "issuer_url" {
 }
 
 output "oauth_endpoint" {
-  description = "Base OAuth URL on the Cognito domain (e.g. https://dante-dev-abc123.auth.eu-central-1.amazoncognito.com)."
-  value       = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+  description = "Base OAuth URL — the custom domain when configured, otherwise the default Cognito-hosted one."
+  value = var.custom_domain_name != null ? "https://${var.custom_domain_name}" : "https://${aws_cognito_user_pool_domain.this.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+}
+
+output "custom_domain_cloudfront_distribution" {
+  description = "CloudFront distribution domain for the custom Cognito hosted-UI domain. Use as the A-alias target in Route 53. Null when no custom domain is configured."
+  value       = var.custom_domain_name == null ? null : aws_cognito_user_pool_domain.custom[0].cloudfront_distribution
 }
 
 data "aws_region" "current" {}

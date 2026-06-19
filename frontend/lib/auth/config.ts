@@ -31,10 +31,10 @@ declare module "@auth/core/jwt" {
     role: Role;
     employee_id: number | null;
     /** OAuth tokens from Cognito. Stored on the JWT so server actions can
-     * call Cognito's self-service APIs (ChangePassword, WebAuthn registration,
-     * etc.) on behalf of the user. Read server-side only — NEVER surface
-     * these via the session callback; XSS that reaches /api/auth/session
-     * must not pick them up. */
+     * call Cognito's self-service APIs (ChangePassword, TOTP setup, etc.)
+     * on behalf of the user. Read server-side only — NEVER surface these
+     * via the session callback; XSS that reaches /api/auth/session must
+     * not pick them up. */
     cognito_access_token?: string;
     cognito_refresh_token?: string;
     /** Unix seconds. Used to refresh proactively a few seconds before
@@ -188,6 +188,21 @@ export const authConfig = {
           clientId: process.env.COGNITO_CLIENT_ID,
           clientSecret: process.env.COGNITO_CLIENT_SECRET,
           issuer: process.env.COGNITO_ISSUER,
+          // Explicitly request `aws.cognito.signin.user.admin` so the
+          // access token can call the user-scoped cognito-idp APIs
+          // (ChangePassword, AssociateSoftwareToken, VerifySoftwareToken,
+          // SetUserMFAPreference) used by `/profile` self-service.
+          // Auth.js's default Cognito provider asks only
+          // `openid profile email`; without this override, every /profile
+          // request hits `NotAuthorizedException: Access Token does not
+          // have required scopes`. The same scope must also be in the
+          // user-pool client's `allowed_oauth_scopes` (see
+          // terraform/modules/cognito).
+          authorization: {
+            params: {
+              scope: "openid profile email aws.cognito.signin.user.admin",
+            },
+          },
         }),
       ],
 
@@ -223,7 +238,7 @@ export const authConfig = {
       }
       // Capture Cognito OAuth tokens on initial sign-in. Server actions
       // in `lib/auth/cognito-self-service.ts` use the access token to
-      // call ChangePassword / WebAuthn-* / SetUserMFAPreference on the
+      // call ChangePassword / TOTP / SetUserMFAPreference on the
       // signed-in user's behalf.
       if (account?.provider === "cognito") {
         token.cognito_access_token = account.access_token;

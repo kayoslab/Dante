@@ -7,8 +7,8 @@
  *   - throws a 403 Forbidden if the user lacks the minimum role
  *   - returns a typed `SessionContext` for the page/action body
  *
- * MFA is handled by Cognito's hosted UI in prod (TOTP + WebAuthn passkeys
- * with `mfa_configuration = "ON"` on the user pool, see
+ * MFA is handled by Cognito's hosted UI in prod (TOTP with
+ * `mfa_configuration = "ON"` on the user pool, see
  * `terraform/modules/cognito`). The in-app TOTP layer that used to live
  * here was retired in migration 0012 — there's no app-side MFA gate
  * because the IdP enforces it before we ever see a token. Dev mode

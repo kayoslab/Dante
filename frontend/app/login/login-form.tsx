@@ -81,22 +81,19 @@ export function LoginForm({
             Sign in
           </Button>
         </form>
-      ) : (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          The username/password form is disabled in production. Use the
-          identity provider below.
-        </div>
-      )}
+      ) : null}
 
       {cognitoEnabled && (
         <>
-          <div className="flex items-center gap-3 py-1">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-xs uppercase tracking-wider text-muted-foreground">
-              or
-            </span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
+          {devMode && (
+            <div className="flex items-center gap-3 py-1">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                or
+              </span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+          )}
           <Button
             type="button"
             variant="outline"

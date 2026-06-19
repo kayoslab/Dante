@@ -46,7 +46,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const { verifier, challenge } = genPkcePair();
   const state = b64url(crypto.randomBytes(24));
-  const redirect_uri = new URL("/auth/awork/callback", req.nextUrl.origin).toString();
+  // Behind the ALB, `req.nextUrl.origin` reflects the ECS task's internal
+  // `http://...:3000` URL (the ALB terminates TLS and forwards plain HTTP),
+  // so building the redirect URI from it produces an `http://` value that
+  // awork rejects because it doesn't match the registered `https://` one.
+  // NEXTAUTH_URL is the canonical public origin and matches both Cognito's
+  // callback registration and awork's. Fall back to the request origin in
+  // dev where NEXTAUTH_URL may be unset.
+  const publicOrigin = process.env.NEXTAUTH_URL ?? req.nextUrl.origin;
+  const redirect_uri = new URL("/auth/awork/callback", publicOrigin).toString();
 
   const authorizeUrl = await buildAuthorizeUrl({
     redirect_uri,

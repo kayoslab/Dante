@@ -9,10 +9,7 @@ import { assignment, customer, project } from "@/lib/db/schema";
 import { getEmployeeDetail } from "@/lib/db/queries/employee";
 import { hasRole, requireSession } from "@/lib/auth/session";
 import { hasCognitoSession } from "@/lib/auth/cognito-tokens";
-import {
-  getTotpEnabled,
-  listPasskeys,
-} from "@/lib/auth/cognito-self-service";
+import { getTotpEnabled } from "@/lib/auth/cognito-self-service";
 
 export const metadata = { title: "Profile — Dante" };
 
@@ -83,23 +80,9 @@ export default async function ProfilePage() {
 
   const canLinkProjects = hasRole(ctx, "manager");
 
-  // The Security card only renders when there's a Cognito access token to
-  // call the self-service APIs with. In dev mode (Credentials provider)
-  // there isn't one and we'd just show error toasts on every action.
-  let securityProps: {
-    initialPasskeys: Awaited<ReturnType<typeof listPasskeys>>;
-    initialTotpEnabled: boolean;
-  } | null = null;
+  let securityProps: { initialTotpEnabled: boolean } | null = null;
   if (await hasCognitoSession()) {
-    // Both calls hit Cognito; in parallel to keep the page fast.
-    const [passkeys, totp] = await Promise.all([
-      listPasskeys(),
-      getTotpEnabled(),
-    ]);
-    securityProps = {
-      initialPasskeys: passkeys,
-      initialTotpEnabled: totp,
-    };
+    securityProps = { initialTotpEnabled: await getTotpEnabled() };
   }
 
   return (
@@ -146,10 +129,7 @@ export default async function ProfilePage() {
       </Card>
 
       {securityProps && (
-        <SecurityCard
-          initialPasskeys={securityProps.initialPasskeys}
-          initialTotpEnabled={securityProps.initialTotpEnabled}
-        />
+        <SecurityCard initialTotpEnabled={securityProps.initialTotpEnabled} />
       )}
 
       <Card>

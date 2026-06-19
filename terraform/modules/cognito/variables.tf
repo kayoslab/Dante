@@ -43,3 +43,33 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "custom_domain_name" {
+  description = "Optional custom domain for the Cognito hosted UI (e.g. auth.dante.example.com). Must share an eTLD+1 with `domain_name` so WebAuthn passkeys registered on the app domain also work at sign-in. Leave null to use the default `*.amazoncognito.com` Cognito domain only."
+  type        = string
+  default     = null
+}
+
+variable "custom_domain_cert_arn" {
+  description = "ACM certificate ARN for `custom_domain_name`. The cert MUST be in us-east-1 (Cognito requirement). Required when custom_domain_name is set."
+  type        = string
+  default     = null
+}
+
+variable "ses_source_arn" {
+  description = "ARN of a verified SES email identity (domain or address). When set, Cognito sends invitation / forgot-password / MFA-setup emails through SES instead of its default sender. Required for production — the default sender is rate-limited to 50/day and frequently spam-filtered. Leave null to keep Cognito's default sender."
+  type        = string
+  default     = null
+}
+
+variable "ses_from_email_address" {
+  description = "FROM address Cognito uses when sending via SES. Format: `Friendly Name <noreply@example.com>` or bare `noreply@example.com`. Must be covered by `ses_source_arn` (a domain identity covers any address on that domain). Ignored when `ses_source_arn` is null."
+  type        = string
+  default     = null
+}
+
+variable "ses_reply_to_email_address" {
+  description = "Optional Reply-To set on Cognito-generated emails. Users hitting reply land here instead of bouncing off the FROM address. Ignored when `ses_source_arn` is null."
+  type        = string
+  default     = null
+}
