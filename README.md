@@ -201,21 +201,6 @@ functionality is degraded or missing from production:
   gone. **Do not load real employee or salary data into prod until
   this is restored.**
 
-**Email deliverability**
-- **Most invitation, password-reset, and MFA-setup emails do not
-  arrive.** SES is in sandbox, so it will only deliver to addresses
-  that have been individually pre-verified as SES identities. Only
-  `admin@example.com` and `colleague@example.com` are verified
-  today; any user invited via `/settings/users` who is not in that
-  short list will not receive their Cognito invitation email even
-  though the action succeeds from the admin's perspective. The
-  workaround is to verify each new email address in the SES console
-  before inviting — or, properly, to get SES production access
-  approved.
-- The Resend-invitation and Reset-password buttons in
-  `/settings/users` *succeed at the API level* but mail still won't
-  arrive unless the recipient is verified or sandbox is lifted.
-
 **Runtime safety nets**
 - **No concurrency cap on the sync Lambda**
   (`reserved_concurrent_executions = -1`). The Free Plan caps
@@ -244,10 +229,6 @@ functionality is degraded or missing from production:
   `terraform/envs/prod/main.tf` or carry long-form notes in the deploy
   workflow. Flipping each back is mechanical once IT upgrades the
   billing tier — see the inline comments for the exact recipes.
-- SES production access is requested via the SES console
-  (Account dashboard → Request production access). Typically approved
-  within a few hours during EU business hours. Once granted, every
-  invited address receives mail without per-address pre-verification.
 
 ---
 
