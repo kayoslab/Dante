@@ -167,15 +167,17 @@ data "aws_iam_policy_document" "deploy" {
     resources = [var.ecr_repository_arn]
   }
 
-  # ECS — register new task definition revisions and force-roll services.
+  # ECS — register new task definition revisions, deregister old ones
+  # (terraform rotates them every apply), and force-roll services.
   statement {
     effect = "Allow"
     actions = [
       "ecs:RegisterTaskDefinition",
+      "ecs:DeregisterTaskDefinition",
       "ecs:DescribeTaskDefinition",
       "ecs:ListTaskDefinitions",
     ]
-    resources = ["*"] # RegisterTaskDefinition has no resource-level support
+    resources = ["*"] # task-def actions have no resource-level support
   }
 
   statement {
@@ -203,15 +205,20 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
-  # Lambda — update sync Lambda's code from the rebuilt zip.
+  # Lambda — update sync Lambda's code from the rebuilt zip and let
+  # terraform reconcile tags / config drift on every apply.
   dynamic "statement" {
     for_each = length(var.lambda_function_arns) == 0 ? [] : [1]
     content {
       effect = "Allow"
       actions = [
         "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
         "lambda:GetFunction",
         "lambda:GetFunctionConfiguration",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:ListTags",
       ]
       resources = var.lambda_function_arns
     }
