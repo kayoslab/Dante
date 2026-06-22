@@ -206,7 +206,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: sync-lambda
-          path: ../../../frontend/dist/lambda
+          # download-artifact's `path:` is resolved relative to
+          # GITHUB_WORKSPACE, NOT to the job's working-directory. So we
+          # need the workspace-relative path here even though the
+          # terraform variable that points at this file is the
+          # three-up `../../../frontend/dist/lambda/...` from inside
+          # `terraform/envs/prod/`. Both paths land at the same file.
+          path: frontend/dist/lambda
 
       - name: terraform init
         run: terraform init
@@ -286,7 +292,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: sync-lambda
-          path: ../../../frontend/dist/lambda
+          # download-artifact's `path:` is resolved relative to
+          # GITHUB_WORKSPACE, NOT to the job's working-directory. So we
+          # need the workspace-relative path here even though the
+          # terraform variable that points at this file is the
+          # three-up `../../../frontend/dist/lambda/...` from inside
+          # `terraform/envs/prod/`. Both paths land at the same file.
+          path: frontend/dist/lambda
 
       - name: Download terraform plan
         uses: actions/download-artifact@v4

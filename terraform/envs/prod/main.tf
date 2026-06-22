@@ -603,4 +603,11 @@ module "github_oidc" {
   lambda_function_arns = [
     "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${module.sync_lambda.function_name}",
   ]
+
+  # Remote state lives in S3 (bucket + DynamoDB lock table created by
+  # terraform/envs/bootstrap-state). GH Actions needs read+write on
+  # both to run `terraform plan/apply` against the same state file the
+  # operator uses locally.
+  terraform_state_bucket_arn     = "arn:aws:s3:::dante-tfstate"
+  terraform_state_lock_table_arn = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/dante-tfstate-lock"
 }

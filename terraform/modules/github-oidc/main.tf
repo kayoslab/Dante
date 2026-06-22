@@ -238,3 +238,15 @@ resource "aws_iam_role_policy" "deploy" {
   role   = aws_iam_role.deploy.id
   policy = data.aws_iam_policy_document.deploy.json
 }
+
+# Attach the AWS-managed `ReadOnlyAccess` so `terraform plan`'s refresh
+# pass can call Describe/Get on every resource in the state. Without
+# this we'd have to enumerate every service the modules touch (ec2,
+# rds, ecs, cognito, alb, route53, acm, waf, kms, sns, sqs, ecr,
+# logs, secretsmanager, lambda, iam, sesv2, …) and keep the list in
+# sync forever. The write paths above stay narrowly scoped — read
+# breadth is the only thing this expands.
+resource "aws_iam_role_policy_attachment" "deploy_read_only" {
+  role       = aws_iam_role.deploy.id
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
