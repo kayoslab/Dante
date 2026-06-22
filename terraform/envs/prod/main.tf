@@ -553,6 +553,83 @@ module "app" {
 # materialize a Cognito user (which triggers the temp-password email)
 # and AdminAddUserToGroup to grant the requested role. Scoped to this
 # pool's ARN only.
+# CloudWatch metric filter on the app log group: counts every audit
+# event of kind `view_inspect_payload`. The audit helper now emits
+# each row to stdout as an `audit_event` log line in addition to
+# the DB write, so the metric filter sees them in near-real-time.
+#
+# Alarm fires when one or more inspect payload reads happen in 5 min
+# AND the cumulative count exceeds the threshold. The threshold is
+# generous (50 reads / 5 min ≈ scanning 10 employees per minute) to
+# avoid false positives from a manager doing focused investigation,
+# while still catching a scrape attempt.
+#
+# Per-actor detection would need a stats-by-user_id query via
+# CloudWatch Logs Insights or a scheduled Lambda — out of scope here.
+# This alarm is the canary; the audit log in Postgres is the
+# forensic source of truth.
+resource "aws_cloudwatch_log_metric_filter" "view_inspect_payload" {
+  name           = "${module.app.cluster_name}-view-inspect-payload"
+  log_group_name = module.app.log_group_name
+  pattern        = "{ $.event = \"audit_event\" && $.action = \"view_inspect_payload\" }"
+
+  metric_transformation {
+    name          = "ViewInspectPayloadCount"
+    namespace     = "Dante/Audit"
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "view_inspect_payload_spike" {
+  alarm_name          = "${module.app.cluster_name}-view-inspect-payload-spike"
+  alarm_description   = "Spike in /api/inspect/* reads — possible Personio-payload scrape attempt. Investigate via `SELECT user_id, COUNT(*) FROM app_audit_log WHERE action = 'view_inspect_payload' AND occurred_at > NOW() - INTERVAL '15 minutes' GROUP BY user_id ORDER BY 2 DESC`."
+  namespace           = "Dante/Audit"
+  metric_name         = "ViewInspectPayloadCount"
+  statistic           = "Sum"
+  period              = 300 # 5 min
+  evaluation_periods  = 1
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 50
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [module.sync_lambda.alarm_topic_arn]
+  ok_actions          = [module.sync_lambda.alarm_topic_arn]
+}
+
+# Same shape for `view_salary` — the other most-sensitive read. The
+# threshold is slightly lower because the universe of legitimate
+# callers is tighter (only managers + admins, and salary deep-dive
+# isn't a daily activity).
+resource "aws_cloudwatch_log_metric_filter" "view_salary" {
+  name           = "${module.app.cluster_name}-view-salary"
+  log_group_name = module.app.log_group_name
+  pattern        = "{ $.event = \"audit_event\" && $.action = \"view_salary\" }"
+
+  metric_transformation {
+    name          = "ViewSalaryCount"
+    namespace     = "Dante/Audit"
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "view_salary_spike" {
+  alarm_name          = "${module.app.cluster_name}-view-salary-spike"
+  alarm_description   = "Spike in salary-history / salary-trajectory reads — possible comp-data scrape. Investigate via `SELECT user_id, COUNT(*) FROM app_audit_log WHERE action = 'view_salary' AND occurred_at > NOW() - INTERVAL '15 minutes' GROUP BY user_id ORDER BY 2 DESC`."
+  namespace           = "Dante/Audit"
+  metric_name         = "ViewSalaryCount"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 30
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [module.sync_lambda.alarm_topic_arn]
+  ok_actions          = [module.sync_lambda.alarm_topic_arn]
+}
+
 resource "aws_iam_role_policy" "app_cognito_admin" {
   name = "${module.app.task_role_name}-cognito-admin"
   role = module.app.task_role_name
@@ -647,11 +724,20 @@ module "github_oidc" {
   terraform_state_bucket_arn     = "arn:aws:s3:::dante-tfstate"
   terraform_state_lock_table_arn = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/dante-tfstate-lock"
 
-  # Terraform-managed secrets the deploy role must be able to refresh
-  # + write. Scoped to the `dante/prod/` name prefix; the wildcard
-  # appended by the module's policy template covers the random suffix
-  # Secrets Manager appends to every secret ARN.
-  secret_arn_prefixes = [
-    "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:dante/prod/",
+  # Cognito client secret is the only secret VALUE terraform manages —
+  # CI needs Get + Put on its specific ARN. Every other prod credential
+  # (Personio, awork client/tokens, AUTH_SECRET) has its container
+  # created by terraform but the value is written out-of-band; CI only
+  # needs DescribeSecret on those, NOT GetSecretValue. Was previously
+  # bundled into a wildcard `dante/prod/*` grant which let CI read
+  # every secret in prod (T2.2 split).
+  secret_arns_read_write = [
+    module.secrets.cognito_client_secret_arn,
+  ]
+  secret_arns_describe_only = [
+    module.secrets.personio_secret_arn,
+    module.secrets.awork_client_secret_arn,
+    module.secrets.awork_tokens_secret_arn,
+    module.secrets.auth_secret_arn,
   ]
 }

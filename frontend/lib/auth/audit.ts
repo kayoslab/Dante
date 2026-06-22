@@ -50,6 +50,22 @@ export async function audit(
       ip_address,
       user_agent,
     });
+
+    // Also emit the audit row as a CloudWatch log line so metric
+    // filters can alarm on suspicious spikes (e.g. one actor scraping
+    // /api/inspect/* en masse). The DB is the canonical archive;
+    // CloudWatch is the realtime detection surface.
+    log.info("audit_event", {
+      user_id: ctx?.user_id ?? null,
+      actor_email: ctx?.email ?? null,
+      action: payload.action,
+      target_type: payload.target_type,
+      target_id:
+        payload.target_id === null || payload.target_id === undefined
+          ? null
+          : String(payload.target_id),
+      ip_address,
+    });
   } catch (err) {
     // Don't crash a page render because the audit write failed. Surface to
     // stderr (CloudWatch in prod) for operator visibility.

@@ -100,6 +100,34 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
+# Refuse any request that isn't over TLS. AWS allows S3 reads/writes
+# over plain HTTP by default — for a bucket holding every secret ARN
+# and RDS endpoint in the prod stack, an in-region attacker on the
+# same VPC could otherwise observe the state file in transit. Block
+# explicitly with an `aws:SecureTransport=false` deny.
+resource "aws_s3_bucket_policy" "state_tls_only" {
+  bucket = aws_s3_bucket.state.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource = [
+        aws_s3_bucket.state.arn,
+        "${aws_s3_bucket.state.arn}/*",
+      ]
+      Condition = {
+        Bool = {
+          "aws:SecureTransport" = "false"
+        }
+      }
+    }]
+  })
+}
+
 # Lifecycle: keep current versions forever, expire prior versions after
 # 90 days. State file changes ~every deploy and old versions accumulate
 # fast otherwise.

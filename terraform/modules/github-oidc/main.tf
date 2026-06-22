@@ -229,14 +229,26 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
-  # Secrets Manager — terraform refreshes secret_version resources
-  # during plan (needs GetSecretValue) and rewrites them on apply
-  # (needs PutSecretValue). AWS's managed ReadOnlyAccess deliberately
-  # excludes GetSecretValue, so it has to be granted explicitly.
-  # Scoped to `dante/<env>/*` so a compromised CI token can't pull
-  # secrets from elsewhere in the account.
+  # Secrets Manager — narrowly scoped. Two tiers, deliberately split
+  # so a compromised GitHub OIDC token can't walk away with every
+  # prod credential:
+  #
+  # 1. `secret_arns_read_write` — secrets where terraform manages the
+  #    VALUE (i.e. has an `aws_secretsmanager_secret_version`
+  #    resource). Plan needs GetSecretValue to refresh-compare; apply
+  #    needs PutSecretValue. In practice this is just the
+  #    cognito_client_secret, which terraform writes from the Cognito
+  #    module's output.
+  #
+  # 2. `secret_arns_describe_only` — secrets where terraform only
+  #    creates the container (`aws_secretsmanager_secret`) and the
+  #    operator / app writes the value out-of-band. Plan only needs
+  #    DescribeSecret; deploy must NOT have GetSecretValue here. Was
+  #    previously bundled into a wildcard grant on `dante/<env>/*`
+  #    which let CI read Personio + awork tokens + AUTH_SECRET — none
+  #    of which CI ever writes (T2.2 split).
   dynamic "statement" {
-    for_each = length(var.secret_arn_prefixes) == 0 ? [] : [1]
+    for_each = length(var.secret_arns_read_write) == 0 ? [] : [1]
     content {
       effect = "Allow"
       actions = [
@@ -248,7 +260,19 @@ data "aws_iam_policy_document" "deploy" {
         "secretsmanager:TagResource",
         "secretsmanager:UntagResource",
       ]
-      resources = [for p in var.secret_arn_prefixes : "${p}*"]
+      resources = var.secret_arns_read_write
+    }
+  }
+  dynamic "statement" {
+    for_each = length(var.secret_arns_describe_only) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource",
+      ]
+      resources = var.secret_arns_describe_only
     }
   }
 

@@ -71,8 +71,14 @@ variable "terraform_state_lock_table_arn" {
   default     = null
 }
 
-variable "secret_arn_prefixes" {
-  description = "List of Secrets Manager ARN prefixes the deploy role may read + write. Used to scope `secretsmanager:GetSecretValue` / `PutSecretValue` so terraform can refresh + update the secret_version resources it manages. Each entry should end in the secret name prefix without the random suffix Secrets Manager appends (e.g. `arn:aws:secretsmanager:eu-central-1:<account>:secret:dante/prod/` — the trailing wildcard is added by the policy). Empty list disables the statement entirely."
+variable "secret_arns_read_write" {
+  description = "Secret ARNs whose VALUE terraform manages (i.e. has a matching `aws_secretsmanager_secret_version` resource). CI gets `secretsmanager:GetSecretValue` + `PutSecretValue` on these so plan can refresh-compare and apply can rewrite. In practice this is just the cognito_client_secret. Other secrets where terraform only creates the container go to `secret_arns_describe_only` instead — keeping `GetSecretValue` off them stops a compromised CI token from walking away with every prod credential."
+  type        = list(string)
+  default     = []
+}
+
+variable "secret_arns_describe_only" {
+  description = "Secret ARNs whose container terraform creates but whose VALUE is written out-of-band (by the operator, OAuth callback, RDS rotation, etc.). CI gets `DescribeSecret` + tag actions only; no `GetSecretValue`. Use for everything that's not in `secret_arns_read_write`."
   type        = list(string)
   default     = []
 }

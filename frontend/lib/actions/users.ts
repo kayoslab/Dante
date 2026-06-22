@@ -193,50 +193,66 @@ export async function setUserRoleAction(
   const demotingSelf =
     parsed.data.user_id === ctx.user_id && parsed.data.role !== "admin";
 
-  let result: { user_id: string; role: "admin" | "manager" | "employee"; email: string; cognito_sub: string; previous_role: "admin" | "manager" | "employee" } | null = null;
-  let conflictReason: string | null = null;
+  type RoleChange = {
+    user_id: string;
+    role: "admin" | "manager" | "employee";
+    email: string;
+    cognito_sub: string;
+    previous_role: "admin" | "manager" | "employee";
+  };
+  type TxOutcome =
+    | { kind: "ok"; data: RoleChange }
+    | { kind: "last_admin_guard" }
+    | { kind: "not_found" };
 
-  await db.transaction(async (tx) => {
-    if (demotingSelf) {
-      const admins = await tx
-        .select({ user_id: appUser.user_id })
-        .from(appUser)
-        .where(eq(appUser.role, "admin"))
-        .for("update");
-      if (admins.length <= 1) {
-        conflictReason = "last_admin_guard";
-        return;
+  // Return the outcome from the transaction directly so TypeScript can
+  // narrow on a discriminated union. Reassigning a `let` inside the
+  // callback breaks TS flow analysis after the await (sees only the
+  // initializer, infers `never` after the null-check).
+  const txOutcome: TxOutcome = await db.transaction(
+    async (tx): Promise<TxOutcome> => {
+      if (demotingSelf) {
+        const admins = await tx
+          .select({ user_id: appUser.user_id })
+          .from(appUser)
+          .where(eq(appUser.role, "admin"))
+          .for("update");
+        if (admins.length <= 1) return { kind: "last_admin_guard" };
       }
-    }
-    // Capture current state before the update so we can sync Cognito
-    // groups afterwards (need the OLD role for AdminRemoveUserFromGroup
-    // + the email for both group calls + the cognito_sub to know whether
-    // to skip the Cognito hop in dev mode).
-    const before = await tx
-      .select({
-        email: appUser.email,
-        role: appUser.role,
-        cognito_sub: appUser.cognito_sub,
-      })
-      .from(appUser)
-      .where(eq(appUser.user_id, parsed.data.user_id))
-      .limit(1);
-    if (!before[0]) return;
-    const updated = await tx
-      .update(appUser)
-      .set(updates)
-      .where(eq(appUser.user_id, parsed.data.user_id))
-      .returning({ user_id: appUser.user_id, role: appUser.role });
-    if (!updated[0]) return;
-    result = {
-      ...updated[0],
-      email: before[0].email,
-      cognito_sub: before[0].cognito_sub,
-      previous_role: before[0].role,
-    };
-  });
+      // Capture current state before the update so we can sync Cognito
+      // groups afterwards (need the OLD role for
+      // AdminRemoveUserFromGroup + the email for both group calls +
+      // the cognito_sub to know whether to skip the Cognito hop in
+      // dev mode).
+      const before = await tx
+        .select({
+          email: appUser.email,
+          role: appUser.role,
+          cognito_sub: appUser.cognito_sub,
+        })
+        .from(appUser)
+        .where(eq(appUser.user_id, parsed.data.user_id))
+        .limit(1);
+      if (!before[0]) return { kind: "not_found" };
+      const updated = await tx
+        .update(appUser)
+        .set(updates)
+        .where(eq(appUser.user_id, parsed.data.user_id))
+        .returning({ user_id: appUser.user_id, role: appUser.role });
+      if (!updated[0]) return { kind: "not_found" };
+      return {
+        kind: "ok",
+        data: {
+          ...updated[0],
+          email: before[0].email,
+          cognito_sub: before[0].cognito_sub,
+          previous_role: before[0].role,
+        },
+      };
+    },
+  );
 
-  if (conflictReason === "last_admin_guard") {
+  if (txOutcome.kind === "last_admin_guard") {
     // Audit the *attempt* — without this, repeated probing of
     // privilege-escalation endpoints leaves no trail (was H-006).
     await audit(ctx, {
@@ -249,7 +265,7 @@ export async function setUserRoleAction(
       "Refusing to demote the last remaining admin. Promote another user first.",
     );
   }
-  if (!result) {
+  if (txOutcome.kind === "not_found") {
     await audit(ctx, {
       action: "user_role_change_denied",
       target_type: "app_user",
@@ -257,6 +273,8 @@ export async function setUserRoleAction(
     });
     return err("not_found", "User not found.");
   }
+
+  const r = txOutcome.data;
 
   await audit(ctx, {
     action: "user_role_changed",
@@ -277,15 +295,15 @@ export async function setUserRoleAction(
   //
   // Dev-mode stub users have no Cognito presence — skip both calls.
   const isDev = process.env.AUTH_DEV_MODE === "true";
-  const isDevStub = result.cognito_sub.startsWith("dev:");
-  if (!isDev && !isDevStub && result.previous_role !== result.role) {
+  const isDevStub = r.cognito_sub.startsWith("dev:");
+  if (!isDev && !isDevStub && r.previous_role !== r.role) {
     try {
       await adminUpdateUserGroup(
-        result.email,
-        result.previous_role,
-        result.role,
+        r.email,
+        r.previous_role,
+        r.role,
       );
-      await adminGlobalSignOut(result.email);
+      await adminGlobalSignOut(r.email);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       // The DB is already updated. Surface the Cognito-side failure so
@@ -299,7 +317,7 @@ export async function setUserRoleAction(
   }
 
   revalidatePath("/settings/users");
-  return ok({ user_id: result.user_id, role: result.role });
+  return ok({ user_id: r.user_id, role: r.role });
 }
 
 /* ---------- disable / enable ---------- */

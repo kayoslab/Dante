@@ -97,7 +97,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     });
     await storeAworkTokens(tokens);
   } catch (err) {
-    log.error("awork_oauth_exchange_failed", { err });
+    // Don't log the raw error: awork's 4xx response bodies echo the
+    // submitted form params (including the PKCE `code_verifier`). The
+    // verifier is single-use and bounded, but there's no reason to
+    // CloudWatch-archive it. Log only the error class and a short
+    // generic message.
+    const name = err instanceof Error ? err.name : "Error";
+    log.error("awork_oauth_exchange_failed", { name });
     return fail(req, "exchange_failed");
   }
 
