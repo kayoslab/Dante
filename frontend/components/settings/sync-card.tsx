@@ -74,12 +74,6 @@ export function SyncCard() {
         <CardTitle>Run sync</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">
-          Pulls fresh Personio + awork data into Postgres. Runs the same code
-          path as <code>npm run sync</code>. Cron will replace this manual
-          trigger in production.
-        </p>
-
         <div className="flex flex-wrap gap-2">
           {(["all", "personio", "awork"] as const).map((source) => {
             const thisIsRunning = runningSource === source;

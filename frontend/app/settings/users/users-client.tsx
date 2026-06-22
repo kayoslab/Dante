@@ -11,7 +11,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -286,11 +285,6 @@ function InviteDialog() {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Invite a user</DialogTitle>
-          <DialogDescription>
-            In dev mode this just creates an <code>app_user</code> row. In
-            production it will issue a Cognito <code>AdminCreateUser</code>{" "}
-            call and Cognito will email the user a temp password.
-          </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-1">
