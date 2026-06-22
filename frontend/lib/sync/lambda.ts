@@ -29,14 +29,12 @@ export type SyncEvent = Partial<SyncOptions> & {
 };
 
 export type SyncResult = {
-  ok: boolean;
   duration_ms: number;
   source: SyncOptions["source"];
   /** Number of log lines emitted to CloudWatch during the run. The
    * lines themselves are not returned — query CloudWatch Logs Insights
    * by `request_id` to retrieve them. */
   log_lines: number;
-  error?: { name: string; message: string };
 };
 
 export async function handler(
@@ -77,7 +75,6 @@ export async function handler(
     const duration_ms = Date.now() - started_at;
     logger.info("sync_complete", { request_id, duration_ms, log_lines });
     return {
-      ok: true,
       duration_ms,
       source: opts.source ?? "all",
       log_lines,
@@ -87,12 +84,12 @@ export async function handler(
     const message = err instanceof Error ? err.message : String(err);
     const duration_ms = Date.now() - started_at;
     logger.error("sync_failed", { request_id, duration_ms, name, message });
-    return {
-      ok: false,
-      duration_ms,
-      source: opts.source ?? "all",
-      log_lines,
-      error: { name, message },
-    };
+    // Re-throw so AWS sees the invocation as a failure. Without this
+    // the handler returns normally and Lambda increments Invocations
+    // without touching Errors / Throttles — the DLQ stays empty and
+    // every alarm (`sync-errors`, `sync-dlq-not-empty`) stays OK while
+    // syncs silently fail day after day (was the case from bring-up
+    // through 2026-06-22).
+    throw err;
   }
 }
