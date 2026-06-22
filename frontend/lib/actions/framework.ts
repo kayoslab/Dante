@@ -28,6 +28,7 @@ import {
   type FrameworkDetail,
   type FrameworkRate,
 } from "@/lib/db/queries/framework";
+import { audit } from "@/lib/auth/audit";
 
 import {
   err,
@@ -36,6 +37,15 @@ import {
   requireActionRole,
   type ActionResult,
 } from "./_action-helpers";
+
+/** Audit target_id shape for framework_rate: `<framework_id>:<profile>:<valid_from>`. */
+function rateTargetId(
+  framework_id: number,
+  profile: string,
+  valid_from: string,
+): string {
+  return `${framework_id}:${profile}:${valid_from}`;
+}
 
 // ----------------------------------------------------------------------------
 // Schemas
@@ -79,22 +89,40 @@ export async function createFrameworkAction(
 ): Promise<ActionResult<FrameworkDetail>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   const parsed = CreateFrameworkSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
   if (!(await customerExistsForFramework(parsed.data.customer_id))) {
+    await audit(ctx, {
+      action: "framework_created_denied",
+      target_type: "framework",
+      target_id: null,
+    });
     return err("not_found", `customer not found: ${parsed.data.customer_id}`);
   }
 
   const name = parsed.data.name.trim();
-  if (!name) return err("conflict", "framework name cannot be empty");
+  if (!name) {
+    await audit(ctx, {
+      action: "framework_created_denied",
+      target_type: "framework",
+      target_id: null,
+    });
+    return err("conflict", "framework name cannot be empty");
+  }
 
   const dup = await findFrameworkByCustomerAndName(
     parsed.data.customer_id,
     name,
   );
   if (dup !== null) {
+    await audit(ctx, {
+      action: "framework_created_denied",
+      target_type: "framework",
+      target_id: null,
+    });
     return err(
       "conflict",
       `framework '${name}' already exists for this customer`,
@@ -111,6 +139,13 @@ export async function createFrameworkAction(
 
   const detail = await getFrameworkDetail(framework_id);
   if (!detail) return err("internal_error", "created framework not found");
+
+  await audit(ctx, {
+    action: "framework_created",
+    target_type: "framework",
+    target_id: framework_id,
+  });
+
   return ok(detail);
 }
 
@@ -120,6 +155,7 @@ export async function updateFrameworkAction(
 ): Promise<ActionResult<FrameworkDetail>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(framework_id)) {
     return err("validation_error", `invalid framework id: ${framework_id}`);
@@ -128,6 +164,11 @@ export async function updateFrameworkAction(
   if (!parsed.success) return fromZod(parsed.error);
 
   if (!(await frameworkExists(framework_id))) {
+    await audit(ctx, {
+      action: "framework_updated_denied",
+      target_type: "framework",
+      target_id: framework_id,
+    });
     return err("not_found", `framework not found: ${framework_id}`);
   }
 
@@ -146,7 +187,14 @@ export async function updateFrameworkAction(
   }
   if (Object.keys(updates).length === 0) {
     const d = await getFrameworkDetail(framework_id);
-    if (!d) return err("not_found", `framework not found: ${framework_id}`);
+    if (!d) {
+      await audit(ctx, {
+        action: "framework_updated_denied",
+        target_type: "framework",
+        target_id: framework_id,
+      });
+      return err("not_found", `framework not found: ${framework_id}`);
+    }
     return ok(d);
   }
 
@@ -154,13 +202,32 @@ export async function updateFrameworkAction(
     await updateFramework(framework_id, updates);
   } catch (e) {
     if (isUniqueViolation(e)) {
+      await audit(ctx, {
+        action: "framework_updated_denied",
+        target_type: "framework",
+        target_id: framework_id,
+      });
       return err("conflict", "framework name already exists for this customer");
     }
     throw e;
   }
 
   const detail = await getFrameworkDetail(framework_id);
-  if (!detail) return err("not_found", `framework not found: ${framework_id}`);
+  if (!detail) {
+    await audit(ctx, {
+      action: "framework_updated_denied",
+      target_type: "framework",
+      target_id: framework_id,
+    });
+    return err("not_found", `framework not found: ${framework_id}`);
+  }
+
+  await audit(ctx, {
+    action: "framework_updated",
+    target_type: "framework",
+    target_id: framework_id,
+  });
+
   return ok(detail);
 }
 
@@ -170,6 +237,7 @@ export async function deleteFrameworkAction(
 ): Promise<ActionResult<null>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(framework_id)) {
     return err("validation_error", `invalid framework id: ${framework_id}`);
@@ -177,16 +245,34 @@ export async function deleteFrameworkAction(
 
   const name = await getFrameworkName(framework_id);
   if (name === null) {
+    await audit(ctx, {
+      action: "framework_deleted_denied",
+      target_type: "framework",
+      target_id: framework_id,
+    });
     return err("not_found", `framework not found: ${framework_id}`);
   }
 
   const { n_rates, n_proj } = await countFrameworkChildren(framework_id);
   if ((n_rates > 0 || n_proj > 0) && !force) {
+    await audit(ctx, {
+      action: "framework_deleted_denied",
+      target_type: "framework",
+      target_id: framework_id,
+    });
     return err(
       "has_children",
       `framework '${name}' has ${n_rates} rate(s) and ${n_proj} project(s) linked. Pass force=true to cascade (rates removed, projects unlinked).`,
     );
   }
+
+  // Audit BEFORE deleting so the target_id is captured while the row
+  // still exists.
+  await audit(ctx, {
+    action: "framework_deleted",
+    target_type: "framework",
+    target_id: framework_id,
+  });
 
   await deleteFrameworkCascading(framework_id, force);
   return ok(null);
@@ -202,6 +288,7 @@ export async function addFrameworkRateAction(
 ): Promise<ActionResult<FrameworkRate>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(framework_id)) {
     return err("validation_error", `invalid framework id: ${framework_id}`);
@@ -210,16 +297,33 @@ export async function addFrameworkRateAction(
   if (!parsed.success) return fromZod(parsed.error);
 
   if (!(await frameworkExists(framework_id))) {
+    await audit(ctx, {
+      action: "framework_rate_created_denied",
+      target_type: "framework_rate",
+      target_id: framework_id,
+    });
     return err("not_found", `framework not found: ${framework_id}`);
   }
 
   const profile = parsed.data.profile.trim();
-  if (!profile) return err("conflict", "rate profile cannot be empty");
+  if (!profile) {
+    await audit(ctx, {
+      action: "framework_rate_created_denied",
+      target_type: "framework_rate",
+      target_id: framework_id,
+    });
+    return err("conflict", "rate profile cannot be empty");
+  }
   const valid_from =
     parsed.data.valid_from ?? (await defaultFrameworkRateValidFrom(framework_id));
 
   const dup = await findFrameworkRate(framework_id, profile, valid_from);
   if (dup !== null) {
+    await audit(ctx, {
+      action: "framework_rate_created_denied",
+      target_type: "framework_rate",
+      target_id: rateTargetId(framework_id, profile, valid_from),
+    });
     return err(
       "conflict",
       `rate for profile '${profile}' on this framework effective ${valid_from} already exists (€${dup.daily_rate_eur}/day)`,
@@ -232,6 +336,12 @@ export async function addFrameworkRateAction(
     profile,
     valid_from,
     daily_rate_eur: String(parsed.data.daily_rate_eur),
+  });
+
+  await audit(ctx, {
+    action: "framework_rate_created",
+    target_type: "framework_rate",
+    target_id: rateTargetId(framework_id, profile, valid_from),
   });
 
   return ok({
@@ -249,6 +359,7 @@ export async function updateFrameworkRateAction(
 ): Promise<ActionResult<FrameworkRate>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(framework_id)) {
     return err("validation_error", `invalid framework id: ${framework_id}`);
@@ -261,6 +372,11 @@ export async function updateFrameworkRateAction(
 
   const existing = await findFrameworkRate(framework_id, profile, valid_from);
   if (existing === null) {
+    await audit(ctx, {
+      action: "framework_rate_updated_denied",
+      target_type: "framework_rate",
+      target_id: rateTargetId(framework_id, profile, valid_from),
+    });
     return err(
       "not_found",
       `no rate for profile '${profile}' on framework ${framework_id} with valid_from ${valid_from}`,
@@ -273,6 +389,13 @@ export async function updateFrameworkRateAction(
     valid_from,
     String(parsed.data.daily_rate_eur),
   );
+
+  await audit(ctx, {
+    action: "framework_rate_updated",
+    target_type: "framework_rate",
+    target_id: rateTargetId(framework_id, profile, valid_from),
+  });
+
   return ok({
     profile,
     valid_from,
@@ -287,6 +410,7 @@ export async function deleteFrameworkRateAction(
 ): Promise<ActionResult<null>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(framework_id)) {
     return err("validation_error", `invalid framework id: ${framework_id}`);
@@ -296,11 +420,24 @@ export async function deleteFrameworkRateAction(
   }
   const existing = await findFrameworkRate(framework_id, profile, valid_from);
   if (existing === null) {
+    await audit(ctx, {
+      action: "framework_rate_deleted_denied",
+      target_type: "framework_rate",
+      target_id: rateTargetId(framework_id, profile, valid_from),
+    });
     return err(
       "not_found",
       `no rate for profile '${profile}' on framework ${framework_id} with valid_from ${valid_from}`,
     );
   }
+
+  // Audit BEFORE deleting so the target_id is captured.
+  await audit(ctx, {
+    action: "framework_rate_deleted",
+    target_type: "framework_rate",
+    target_id: rateTargetId(framework_id, profile, valid_from),
+  });
+
   await deleteFrameworkRate(framework_id, profile, valid_from);
   return ok(null);
 }

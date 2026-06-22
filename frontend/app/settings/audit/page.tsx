@@ -1,9 +1,7 @@
 import Link from "next/link";
 import { forbidden } from "next/navigation";
-import { desc, eq, lt } from "drizzle-orm";
 
-import { db } from "@/lib/db/client";
-import { appAuditLog, appUser } from "@/lib/db/schema";
+import { listAuditLog } from "@/lib/db/queries/audit";
 import { audit } from "@/lib/auth/audit";
 import { hasRole, requireSession } from "@/lib/auth/session";
 
@@ -32,22 +30,7 @@ export default async function AuditPage({
   // Cursor-style pagination — show PAGE_SIZE, keep the (N+1)-th as a
   // sentinel for "more available." occurred_at is monotonic-enough for
   // this purpose since the table is append-only.
-  const rows = await db
-    .select({
-      audit_id: appAuditLog.audit_id,
-      action: appAuditLog.action,
-      target_type: appAuditLog.target_type,
-      target_id: appAuditLog.target_id,
-      occurred_at: appAuditLog.occurred_at,
-      ip_address: appAuditLog.ip_address,
-      actor_email: appUser.email,
-      actor_role: appUser.role,
-    })
-    .from(appAuditLog)
-    .leftJoin(appUser, eq(appUser.user_id, appAuditLog.user_id))
-    .where(cursor ? lt(appAuditLog.occurred_at, cursor) : undefined)
-    .orderBy(desc(appAuditLog.occurred_at))
-    .limit(PAGE_SIZE + 1);
+  const rows = await listAuditLog({ cursor, limit: PAGE_SIZE });
 
   const truncated = rows.length > PAGE_SIZE;
   const visible = rows.slice(0, PAGE_SIZE);

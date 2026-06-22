@@ -1,7 +1,46 @@
 import { eq, sql } from "drizzle-orm";
 
 import { db } from "../client";
-import { assignment } from "../schema";
+import { assignment, customer, project } from "../schema";
+
+/** Row shape for the profile-page "Assignments" table. No rates / no
+ * cost — the profile view is for the employee themselves and any role
+ * (employee+) can land on /profile. Manager+ get the project linked. */
+export type MyAssignmentRow = {
+  assignment_id: number;
+  project_id: number;
+  project_name: string;
+  customer_name: string;
+  profile: string | null;
+  allocation_pct: string;
+  start_date: string | null;
+  end_date: string | null;
+};
+
+/** Assignments for one employee, joined to project + customer for the
+ * profile-page table. Ordered start_date DESC so the most recent is on
+ * top. */
+export async function listMyAssignments(
+  employee_id: number,
+): Promise<MyAssignmentRow[]> {
+  const rows = await db
+    .select({
+      assignment_id: assignment.assignment_id,
+      project_id: assignment.project_id,
+      project_name: project.name,
+      customer_name: customer.name,
+      profile: assignment.profile,
+      allocation_pct: assignment.allocation_pct,
+      start_date: assignment.start_date,
+      end_date: assignment.end_date,
+    })
+    .from(assignment)
+    .innerJoin(project, eq(project.project_id, assignment.project_id))
+    .innerJoin(customer, eq(customer.customer_id, project.customer_id))
+    .where(eq(assignment.employee_id, employee_id))
+    .orderBy(sql`${assignment.start_date} DESC`);
+  return rows;
+}
 
 export type AssignmentDetail = {
   assignment_id: number;

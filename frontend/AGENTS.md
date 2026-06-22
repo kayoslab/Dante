@@ -14,6 +14,15 @@ These were extracted from TECH_DEBT.md when it was closed out. They're the durab
 - **`{ detail, code }` error envelope** for all `/api/*` route handlers. Thrown via the `HTTPError` factories in `lib/api/_route-helpers.ts` and turned into JSON by `handle()`.
 - **Wire types live in `lib/api/types.ts`** as a flat module. The query-side types live in `lib/db/queries/*` next to their query. Don't try to merge the two — wire shape and query shape diverge per route.
 
+## DB locality
+
+- **All `db.*` calls live in `lib/db/`** — `lib/db/queries/<entity>.ts` for shaped reads and writes. API routes, Server Actions, and Server Component pages call named query functions; they never open `db.execute` / `db.select` / `db.insert` / `db.update` / `db.delete` / `db.transaction` directly.
+- **Routes / actions / pages don't import `@/lib/db/client` or `@/lib/db/schema`.** Both are infrastructure leaves — surfacing them outside `lib/db/` is the upstream signal that someone is about to write inline SQL.
+- **Transactions stay intact inside a single query function.** If a write touches several tables under one `BEGIN` (e.g. `mergeProjects`, last-admin guard), the whole transaction is one named export in `lib/db/queries/*`. The action returns the result; it doesn't compose multiple query calls into a transaction at the action layer.
+- **Cross-cutting allow-list:** `lib/auth/audit.ts`, `lib/auth/users.ts`, and `lib/auth/session.ts` are exempt — they are auth-bootstrap helpers that run *before* the regular DB pipeline (or are themselves the audit writer). New exemptions need a comment in `scripts/check-db-locality.ts` explaining why.
+- Enforced by **`npm run check:db-locality`** (wired into `npm run check`). Greps the codebase for `db.<verb>(` and the connection / schema imports outside `lib/db/`; fails the build on a violation.
+- **Server Actions follow the same rule.** Action layer is `validate → auth → call query → audit → revalidate → return envelope`. Cognito SDK calls, Lambda invocations, and pure-math helpers stay in the action; DB writes don't.
+
 ## Money & decimals
 
 - **Monetary `numeric()` columns stay as `string`** through the stack because the cost/revenue math uses `decimal.js` which consumes strings. Converting to `number` loses cents on big aggregates.
@@ -22,8 +31,11 @@ These were extracted from TECH_DEBT.md when it was closed out. They're the durab
 
 ## Roles + auth
 
-- **`requireSession({ minRole })`** at the top of every Server Component page / Server Action.
+- **`requireSession({ minRole })`** at the top of every Server Component page. Throws `ForbiddenError` on a role mismatch; redirects on no-session.
+- **`requireActionRole(minRole)`** at the top of every Server Action. Wraps `requireSession` and converts `ForbiddenError` into the discriminated-union `ActionAuth`, so the action returns the failure envelope cleanly instead of throwing. Self-service actions with no role gate (e.g. `lib/actions/profile.ts`) use `requireSession()` directly.
 - **`requireApiSession({ minRole })`** inside `handle()` on every `/api/*` route. The proxy enforces "signed in or not"; per-route role enforcement is on you.
+- **`requireProjectAccess(project_id)`** for actions scoped to a specific project — admin / manager pass automatically; SDM passes iff they hold a grant on that project (`project_sdm` row).
+- Both `requireApiSession` and `requireSession` apply the per-user global rate-limit ceiling (default 600/min) before the role check, so Server Actions and Server Components share the budget with `/api/*` calls.
 
 ### Who's who
 

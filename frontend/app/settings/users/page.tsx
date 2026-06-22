@@ -1,8 +1,6 @@
-import { desc, eq } from "drizzle-orm";
 import { forbidden } from "next/navigation";
 
-import { db } from "@/lib/db/client";
-import { appUser, employeeCurrent } from "@/lib/db/schema";
+import { listAppUsers } from "@/lib/db/queries/app-user";
 import { hasRole, requireSession } from "@/lib/auth/session";
 
 import { UsersClient } from "./users-client";
@@ -13,21 +11,7 @@ export default async function UsersPage() {
   const ctx = await requireSession();
   if (!hasRole(ctx, "admin")) forbidden();
 
-  const rows = await db
-    .select({
-      user_id: appUser.user_id,
-      email: appUser.email,
-      role: appUser.role,
-      is_disabled: appUser.is_disabled,
-      employee_id: appUser.employee_id,
-      employee_first_name: employeeCurrent.first_name,
-      employee_last_name: employeeCurrent.last_name,
-      created_at: appUser.created_at,
-      last_login_at: appUser.last_login_at,
-    })
-    .from(appUser)
-    .leftJoin(employeeCurrent, eq(employeeCurrent.employee_id, appUser.employee_id))
-    .orderBy(desc(appUser.created_at));
+  const rows = await listAppUsers();
 
   return (
     <UsersClient

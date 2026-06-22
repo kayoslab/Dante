@@ -1,7 +1,48 @@
-import { eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 
 import { db } from "../client";
 import { appUser, employeeCurrent } from "../schema";
+
+/* ------------------------------------------------------------------ */
+/* admin listing                                                       */
+/* ------------------------------------------------------------------ */
+
+export type AppUserListRow = {
+  user_id: string;
+  email: string;
+  role: "admin" | "manager" | "employee";
+  is_disabled: boolean;
+  employee_id: number | null;
+  employee_first_name: string | null;
+  employee_last_name: string | null;
+  created_at: Date;
+  last_login_at: Date | null;
+};
+
+/** All app_user rows joined to employee_current (for displaying real
+ * names alongside the email). Used by /settings/users — admin-only —
+ * to drive the user-management table. Ordered newest-first by
+ * `created_at` to surface freshly invited accounts. */
+export async function listAppUsers(): Promise<AppUserListRow[]> {
+  return await db
+    .select({
+      user_id: appUser.user_id,
+      email: appUser.email,
+      role: appUser.role,
+      is_disabled: appUser.is_disabled,
+      employee_id: appUser.employee_id,
+      employee_first_name: employeeCurrent.first_name,
+      employee_last_name: employeeCurrent.last_name,
+      created_at: appUser.created_at,
+      last_login_at: appUser.last_login_at,
+    })
+    .from(appUser)
+    .leftJoin(
+      employeeCurrent,
+      eq(employeeCurrent.employee_id, appUser.employee_id),
+    )
+    .orderBy(desc(appUser.created_at));
+}
 
 /* ------------------------------------------------------------------ */
 /* invite                                                              */

@@ -27,6 +27,7 @@ import {
   employeeExists,
   teamExists,
 } from "@/lib/db/queries/employee-annotation";
+import { audit } from "@/lib/auth/audit";
 
 import {
   err,
@@ -50,6 +51,7 @@ export async function updateEmployeeFlagsAction(
 ): Promise<ActionResult<EmployeeDetail>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(employee_id)) {
     return err("validation_error", `invalid employee id: ${employee_id}`);
@@ -58,6 +60,11 @@ export async function updateEmployeeFlagsAction(
   if (!parsed.success) return fromZod(parsed.error);
 
   if (!(await employeeExists(employee_id))) {
+    await audit(ctx, {
+      action: "employee_annotation_updated_denied",
+      target_type: "employee_annotation",
+      target_id: employee_id,
+    });
     return err("not_found", `employee not found: ${employee_id}`);
   }
 
@@ -95,6 +102,20 @@ export async function updateEmployeeFlagsAction(
   await applyEmployeeAnnotationUpdates(employee_id, updates);
 
   const detail = await getEmployeeDetail(employee_id);
-  if (!detail) return err("not_found", `employee not found: ${employee_id}`);
+  if (!detail) {
+    await audit(ctx, {
+      action: "employee_annotation_updated_denied",
+      target_type: "employee_annotation",
+      target_id: employee_id,
+    });
+    return err("not_found", `employee not found: ${employee_id}`);
+  }
+
+  await audit(ctx, {
+    action: "employee_annotation_updated",
+    target_type: "employee_annotation",
+    target_id: employee_id,
+  });
+
   return ok(detail);
 }

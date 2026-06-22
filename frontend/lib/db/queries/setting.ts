@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 
 import { db } from "../client";
 import { setting } from "../schema";
@@ -9,6 +9,20 @@ export type SettingRow = {
   description: string | null;
   updated_at: Date;
 };
+
+/** All setting rows ordered by key. Used by the admin /api/config GET
+ * to render the settings table. */
+export async function listSettings(): Promise<SettingRow[]> {
+  return await db
+    .select({
+      key: setting.key,
+      value: setting.value,
+      description: setting.description,
+      updated_at: setting.updated_at,
+    })
+    .from(setting)
+    .orderBy(asc(setting.key));
+}
 
 /** Look up the description on an existing setting row — used when the
  * caller does NOT pass a description in the upsert payload so we can

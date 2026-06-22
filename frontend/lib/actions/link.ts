@@ -31,6 +31,7 @@ import {
   getSettingDescription,
   upsertSetting,
 } from "@/lib/db/queries/setting";
+import { audit } from "@/lib/auth/audit";
 
 import {
   err,
@@ -64,17 +65,28 @@ export async function createPersonioLinkAction(
   }
   const auth = await requireProjectAccess(project_id);
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   const parsed = PersonioLinkCreateSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
   const personio_project_id = parsed.data.personio_project_id;
 
   if (!(await projectExists(project_id))) {
+    await audit(ctx, {
+      action: "project_personio_link_created_denied",
+      target_type: "project",
+      target_id: `${project_id}/${personio_project_id}`,
+    });
     return err("not_found", `project not found: ${project_id}`);
   }
 
   const pp_name = await getPersonioProjectName(personio_project_id);
   if (pp_name === null) {
+    await audit(ctx, {
+      action: "project_personio_link_created_denied",
+      target_type: "project",
+      target_id: `${project_id}/${personio_project_id}`,
+    });
     return err(
       "not_found",
       `personio project not found: ${personio_project_id}. Run \`dante sync\` to refresh the list.`,
@@ -84,11 +96,21 @@ export async function createPersonioLinkAction(
   const existingProjectId = await getPersonioLinkProjectId(personio_project_id);
   if (existingProjectId !== null) {
     if (existingProjectId !== project_id) {
+      await audit(ctx, {
+        action: "project_personio_link_created_denied",
+        target_type: "project",
+        target_id: `${project_id}/${personio_project_id}`,
+      });
       return err(
         "conflict",
         `personio project ${personio_project_id} '${pp_name}' is already linked to project ${existingProjectId}. Unlink it first.`,
       );
     }
+    await audit(ctx, {
+      action: "project_personio_link_created_denied",
+      target_type: "project",
+      target_id: `${project_id}/${personio_project_id}`,
+    });
     return err(
       "conflict",
       `personio project ${personio_project_id} already linked here`,
@@ -96,6 +118,11 @@ export async function createPersonioLinkAction(
   }
 
   await insertPersonioProjectLink({ personio_project_id, project_id });
+  await audit(ctx, {
+    action: "project_personio_link_created",
+    target_type: "project",
+    target_id: `${project_id}/${personio_project_id}`,
+  });
   return ok({
     personio_project_id,
     name: pp_name,
@@ -112,17 +139,28 @@ export async function deletePersonioLinkAction(
   }
   const auth = await requireProjectAccess(project_id);
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   const removed = await deletePersonioProjectLink(
     project_id,
     personio_project_id,
   );
   if (removed === 0) {
+    await audit(ctx, {
+      action: "project_personio_link_removed_denied",
+      target_type: "project",
+      target_id: `${project_id}/${personio_project_id}`,
+    });
     return err(
       "not_found",
       `no link from personio project ${personio_project_id} to project ${project_id}`,
     );
   }
+  await audit(ctx, {
+    action: "project_personio_link_removed",
+    target_type: "project",
+    target_id: `${project_id}/${personio_project_id}`,
+  });
   return ok(null);
 }
 
@@ -149,17 +187,28 @@ export async function createAworkProjectLinkAction(
   }
   const auth = await requireProjectAccess(project_id);
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   const parsed = AworkProjectLinkCreateSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
   const awork_project_id = parsed.data.awork_project_id;
 
   if (!(await projectExists(project_id))) {
+    await audit(ctx, {
+      action: "project_awork_link_created_denied",
+      target_type: "project",
+      target_id: `${project_id}/${awork_project_id}`,
+    });
     return err("not_found", `project not found: ${project_id}`);
   }
 
   const ap_name = await getAworkProjectName(awork_project_id);
   if (ap_name === null) {
+    await audit(ctx, {
+      action: "project_awork_link_created_denied",
+      target_type: "project",
+      target_id: `${project_id}/${awork_project_id}`,
+    });
     return err(
       "not_found",
       `awork project not found: ${awork_project_id}. Run \`dante awork sync\` to refresh the catalog.`,
@@ -169,15 +218,30 @@ export async function createAworkProjectLinkAction(
   const existingProjectId = await getAworkProjectLinkProjectId(awork_project_id);
   if (existingProjectId !== null) {
     if (existingProjectId !== project_id) {
+      await audit(ctx, {
+        action: "project_awork_link_created_denied",
+        target_type: "project",
+        target_id: `${project_id}/${awork_project_id}`,
+      });
       return err(
         "conflict",
         `awork project ${awork_project_id} '${ap_name ?? ""}' is already linked to project ${existingProjectId}. Unlink it first.`,
       );
     }
+    await audit(ctx, {
+      action: "project_awork_link_created_denied",
+      target_type: "project",
+      target_id: `${project_id}/${awork_project_id}`,
+    });
     return err("conflict", `awork project ${awork_project_id} already linked here`);
   }
 
   await insertAworkProjectLink({ awork_project_id, project_id });
+  await audit(ctx, {
+    action: "project_awork_link_created",
+    target_type: "project",
+    target_id: `${project_id}/${awork_project_id}`,
+  });
   return ok({
     awork_project_id,
     name: ap_name,
@@ -194,14 +258,25 @@ export async function deleteAworkProjectLinkAction(
   }
   const auth = await requireProjectAccess(project_id);
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   const removed = await deleteAworkProjectLink(project_id, awork_project_id);
   if (removed === 0) {
+    await audit(ctx, {
+      action: "project_awork_link_removed_denied",
+      target_type: "project",
+      target_id: `${project_id}/${awork_project_id}`,
+    });
     return err(
       "not_found",
       `no link from awork project ${awork_project_id} to project ${project_id}`,
     );
   }
+  await audit(ctx, {
+    action: "project_awork_link_removed",
+    target_type: "project",
+    target_id: `${project_id}/${awork_project_id}`,
+  });
   return ok(null);
 }
 
@@ -308,6 +383,7 @@ export async function createAworkCompanyLinkAction(
 ): Promise<ActionResult<AworkCompanyLinkItem>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(customer_id)) {
     return err("validation_error", `invalid customer id: ${customer_id}`);
@@ -317,24 +393,49 @@ export async function createAworkCompanyLinkAction(
   const awork_company_id = parsed.data.awork_company_id;
 
   if (!(await customerExists(customer_id))) {
+    await audit(ctx, {
+      action: "customer_awork_link_created_denied",
+      target_type: "customer",
+      target_id: `${customer_id}/${awork_company_id}`,
+    });
     return err("not_found", `customer not found: ${customer_id}`);
   }
   const co_name = await getAworkCompanyName(awork_company_id);
   if (co_name === null) {
+    await audit(ctx, {
+      action: "customer_awork_link_created_denied",
+      target_type: "customer",
+      target_id: `${customer_id}/${awork_company_id}`,
+    });
     return err("not_found", `awork company not found: ${awork_company_id}`);
   }
   const existingCustomerId =
     await getAworkCompanyLinkCustomerId(awork_company_id);
   if (existingCustomerId !== null) {
     if (existingCustomerId !== customer_id) {
+      await audit(ctx, {
+        action: "customer_awork_link_created_denied",
+        target_type: "customer",
+        target_id: `${customer_id}/${awork_company_id}`,
+      });
       return err(
         "conflict",
         `awork company ${awork_company_id} '${co_name ?? ""}' is already linked to customer ${existingCustomerId}`,
       );
     }
+    await audit(ctx, {
+      action: "customer_awork_link_created_denied",
+      target_type: "customer",
+      target_id: `${customer_id}/${awork_company_id}`,
+    });
     return err("conflict", "already linked here");
   }
   await insertAworkCompanyLink({ awork_company_id, customer_id });
+  await audit(ctx, {
+    action: "customer_awork_link_created",
+    target_type: "customer",
+    target_id: `${customer_id}/${awork_company_id}`,
+  });
   return ok({
     awork_company_id,
     name: co_name,
@@ -348,17 +449,28 @@ export async function deleteAworkCompanyLinkAction(
 ): Promise<ActionResult<null>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(customer_id)) {
     return err("validation_error", `invalid customer id: ${customer_id}`);
   }
   const removed = await deleteAworkCompanyLink(customer_id, awork_company_id);
   if (removed === 0) {
+    await audit(ctx, {
+      action: "customer_awork_link_removed_denied",
+      target_type: "customer",
+      target_id: `${customer_id}/${awork_company_id}`,
+    });
     return err(
       "not_found",
       `no link from awork company ${awork_company_id} to customer ${customer_id}`,
     );
   }
+  await audit(ctx, {
+    action: "customer_awork_link_removed",
+    target_type: "customer",
+    target_id: `${customer_id}/${awork_company_id}`,
+  });
   return ok(null);
 }
 

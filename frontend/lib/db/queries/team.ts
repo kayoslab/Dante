@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 
 import { db } from "../client";
 import { employeeAnnotation, team } from "../schema";
@@ -6,6 +6,29 @@ import { employeeAnnotation, team } from "../schema";
 /** Compact row returned by `getTeamItem` and friends. The action layer
  * uses this verbatim — keep the field shape stable. */
 export type TeamItem = { team_name: string; n_members: number };
+
+/** Full team listing with member counts. Used by `/api/teams` for
+ * the manager-facing team picker. Ordered by name for stable UI. */
+export async function listTeams(): Promise<TeamItem[]> {
+  const rows = await db
+    .select({
+      team_name: team.team_name,
+      n_members: sql<number>`COUNT(${employeeAnnotation.employee_id})::int`.as(
+        "n_members",
+      ),
+    })
+    .from(team)
+    .leftJoin(
+      employeeAnnotation,
+      eq(employeeAnnotation.team_user, team.team_name),
+    )
+    .groupBy(team.team_name)
+    .orderBy(asc(team.team_name));
+  return rows.map((r) => ({
+    team_name: r.team_name,
+    n_members: Number(r.n_members),
+  }));
+}
 
 /** Existence probe: does a team with this exact name exist? */
 export async function teamExists(team_name: string): Promise<boolean> {

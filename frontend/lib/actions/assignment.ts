@@ -50,6 +50,7 @@ import {
   ok,
   type ActionResult,
 } from "./_action-helpers";
+import { audit } from "@/lib/auth/audit";
 import { requireProjectAccess } from "@/lib/auth/project-capability";
 
 const WORKING_DAYS_PER_MONTH = 20;
@@ -335,29 +336,59 @@ export async function createAssignmentAction(
   } = parsed.data;
 
   if ((employee_id === null) === (freelancer_id === null)) {
+    await audit(auth.ctx, {
+      action: "assignment_created_denied",
+      target_type: "assignment",
+      target_id: project_id,
+    });
     return err(
       "validation_error",
       "exactly one of employee_id, freelancer_id must be provided",
     );
   }
   if (end_date !== null && end_date < start_date) {
+    await audit(auth.ctx, {
+      action: "assignment_created_denied",
+      target_type: "assignment",
+      target_id: project_id,
+    });
     return err("validation_error", "end_date must be on or after start_date");
   }
 
   if (!(await projectExists(project_id))) {
+    await audit(auth.ctx, {
+      action: "assignment_created_denied",
+      target_type: "assignment",
+      target_id: project_id,
+    });
     return err("not_found", `project not found: ${project_id}`);
   }
   if (employee_id !== null) {
     if (!(await employeeExists(employee_id))) {
+      await audit(auth.ctx, {
+        action: "assignment_created_denied",
+        target_type: "assignment",
+        target_id: project_id,
+      });
       return err("not_found", `employee not found: ${employee_id}`);
     }
   }
   if (freelancer_id !== null) {
     if (!(await freelancerExists(freelancer_id))) {
+      await audit(auth.ctx, {
+        action: "assignment_created_denied",
+        target_type: "assignment",
+        target_id: project_id,
+      });
       return err("not_found", `freelancer not found: ${freelancer_id}`);
     }
   }
   if (freelancer_id !== null && !profile) {
+    await audit(auth.ctx, {
+      action: "assignment_created_denied",
+      target_type: "assignment",
+      target_id: project_id,
+    });
     return err(
       "validation_error",
       "freelancer assignments require profile (no role_tier fallback)",
@@ -381,6 +412,12 @@ export async function createAssignmentAction(
 
   const detail = await getAssignmentDetail(inserted.assignment_id);
   if (!detail) return err("internal_error", "created assignment not found");
+
+  await audit(auth.ctx, {
+    action: "assignment_created",
+    target_type: "assignment",
+    target_id: inserted.assignment_id,
+  });
   return ok(detail);
 }
 
@@ -405,7 +442,14 @@ export async function updateAssignmentAction(
   if (!parsed.success) return fromZod(parsed.error);
 
   const guard = await ensureManualAssignment(assignment_id);
-  if (!guard.ok) return guard;
+  if (!guard.ok) {
+    await audit(auth.ctx, {
+      action: "assignment_updated_denied",
+      target_type: "assignment",
+      target_id: assignment_id,
+    });
+    return guard;
+  }
 
   const updates: Record<string, unknown> = {};
   if (parsed.data.profile !== undefined) updates.profile = parsed.data.profile;
@@ -434,14 +478,33 @@ export async function updateAssignmentAction(
 
   if (Object.keys(updates).length === 0) {
     const d = await getAssignmentDetail(assignment_id);
-    if (!d) return err("not_found", `assignment not found: ${assignment_id}`);
+    if (!d) {
+      await audit(auth.ctx, {
+        action: "assignment_updated_denied",
+        target_type: "assignment",
+        target_id: assignment_id,
+      });
+      return err("not_found", `assignment not found: ${assignment_id}`);
+    }
     return ok(d);
   }
   updates.updated_at = new Date();
   await updateAssignment(assignment_id, updates);
 
   const d = await getAssignmentDetail(assignment_id);
-  if (!d) return err("not_found", `assignment not found: ${assignment_id}`);
+  if (!d) {
+    await audit(auth.ctx, {
+      action: "assignment_updated_denied",
+      target_type: "assignment",
+      target_id: assignment_id,
+    });
+    return err("not_found", `assignment not found: ${assignment_id}`);
+  }
+  await audit(auth.ctx, {
+    action: "assignment_updated",
+    target_type: "assignment",
+    target_id: assignment_id,
+  });
   return ok(d);
 }
 
@@ -470,20 +533,49 @@ export async function endAssignmentAction(
   if (!parsed.success) return fromZod(parsed.error);
 
   const guard = await ensureManualAssignment(assignment_id);
-  if (!guard.ok) return guard;
+  if (!guard.ok) {
+    await audit(auth.ctx, {
+      action: "assignment_ended_denied",
+      target_type: "assignment",
+      target_id: assignment_id,
+    });
+    return guard;
+  }
 
   const existing = await getAssignmentStartDate(assignment_id);
   if (!existing) {
+    await audit(auth.ctx, {
+      action: "assignment_ended_denied",
+      target_type: "assignment",
+      target_id: assignment_id,
+    });
     return err("not_found", `assignment not found: ${assignment_id}`);
   }
   if (parsed.data.end_date < existing.start_date!) {
+    await audit(auth.ctx, {
+      action: "assignment_ended_denied",
+      target_type: "assignment",
+      target_id: assignment_id,
+    });
     return err("validation_error", "end_date must be on or after start_date");
   }
 
   await setAssignmentEndDate(assignment_id, parsed.data.end_date);
 
   const d = await getAssignmentDetail(assignment_id);
-  if (!d) return err("not_found", `assignment not found: ${assignment_id}`);
+  if (!d) {
+    await audit(auth.ctx, {
+      action: "assignment_ended_denied",
+      target_type: "assignment",
+      target_id: assignment_id,
+    });
+    return err("not_found", `assignment not found: ${assignment_id}`);
+  }
+  await audit(auth.ctx, {
+    action: "assignment_ended",
+    target_type: "assignment",
+    target_id: assignment_id,
+  });
   return ok(d);
 }
 
@@ -504,7 +596,19 @@ export async function deleteAssignmentAction(
   const auth = await requireProjectAccess(project_id);
   if (!auth.ok) return auth.result;
   const guard = await ensureManualAssignment(assignment_id);
-  if (!guard.ok) return guard;
+  if (!guard.ok) {
+    await audit(auth.ctx, {
+      action: "assignment_deleted_denied",
+      target_type: "assignment",
+      target_id: assignment_id,
+    });
+    return guard;
+  }
   await deleteAssignment(assignment_id);
+  await audit(auth.ctx, {
+    action: "assignment_deleted",
+    target_type: "assignment",
+    target_id: assignment_id,
+  });
   return ok(null);
 }

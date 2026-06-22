@@ -19,6 +19,7 @@ import {
   updateFreelancerById,
   type FreelancerDetail,
 } from "@/lib/db/queries/freelancer";
+import { audit } from "@/lib/auth/audit";
 
 import {
   err,
@@ -49,14 +50,27 @@ export async function createFreelancerAction(
 ): Promise<ActionResult<FreelancerDetail>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   const parsed = CreateFreelancerSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
   const name = parsed.data.name.trim();
-  if (!name) return err("conflict", "freelancer name cannot be empty");
+  if (!name) {
+    await audit(ctx, {
+      action: "freelancer_created_denied",
+      target_type: "freelancer",
+      target_id: null,
+    });
+    return err("conflict", "freelancer name cannot be empty");
+  }
 
   if ((await findFreelancerIdByName(name)) !== null) {
+    await audit(ctx, {
+      action: "freelancer_created_denied",
+      target_type: "freelancer",
+      target_id: null,
+    });
     return err("conflict", `freelancer already exists: ${name}`);
   }
 
@@ -74,6 +88,11 @@ export async function createFreelancerAction(
     });
   } catch (e) {
     if (isUniqueViolation(e)) {
+      await audit(ctx, {
+        action: "freelancer_created_denied",
+        target_type: "freelancer",
+        target_id: null,
+      });
       return err("conflict", `could not create freelancer (unique violation)`);
     }
     throw e;
@@ -81,6 +100,13 @@ export async function createFreelancerAction(
 
   const detail = await getFreelancerDetail(freelancer_id);
   if (!detail) return err("internal_error", "created freelancer not found");
+
+  await audit(ctx, {
+    action: "freelancer_created",
+    target_type: "freelancer",
+    target_id: freelancer_id,
+  });
+
   return ok(detail);
 }
 
@@ -90,6 +116,7 @@ export async function updateFreelancerAction(
 ): Promise<ActionResult<FreelancerDetail>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(freelancer_id)) {
     return err("validation_error", `invalid freelancer id: ${freelancer_id}`);
@@ -98,6 +125,11 @@ export async function updateFreelancerAction(
   if (!parsed.success) return fromZod(parsed.error);
 
   if (!(await freelancerExists(freelancer_id))) {
+    await audit(ctx, {
+      action: "freelancer_updated_denied",
+      target_type: "freelancer",
+      target_id: freelancer_id,
+    });
     return err("not_found", `freelancer not found: ${freelancer_id}`);
   }
 
@@ -114,7 +146,14 @@ export async function updateFreelancerAction(
 
   if (Object.keys(updates).length === 0) {
     const d = await getFreelancerDetail(freelancer_id);
-    if (!d) return err("not_found", `freelancer not found: ${freelancer_id}`);
+    if (!d) {
+      await audit(ctx, {
+        action: "freelancer_updated_denied",
+        target_type: "freelancer",
+        target_id: freelancer_id,
+      });
+      return err("not_found", `freelancer not found: ${freelancer_id}`);
+    }
     return ok(d);
   }
   updates.updated_at = new Date();
@@ -123,13 +162,32 @@ export async function updateFreelancerAction(
     await updateFreelancerById(freelancer_id, updates);
   } catch (e) {
     if (isUniqueViolation(e)) {
+      await audit(ctx, {
+        action: "freelancer_updated_denied",
+        target_type: "freelancer",
+        target_id: freelancer_id,
+      });
       return err("conflict", "freelancer name already exists");
     }
     throw e;
   }
 
   const detail = await getFreelancerDetail(freelancer_id);
-  if (!detail) return err("not_found", `freelancer not found: ${freelancer_id}`);
+  if (!detail) {
+    await audit(ctx, {
+      action: "freelancer_updated_denied",
+      target_type: "freelancer",
+      target_id: freelancer_id,
+    });
+    return err("not_found", `freelancer not found: ${freelancer_id}`);
+  }
+
+  await audit(ctx, {
+    action: "freelancer_updated",
+    target_type: "freelancer",
+    target_id: freelancer_id,
+  });
+
   return ok(detail);
 }
 
@@ -139,6 +197,7 @@ export async function deleteFreelancerAction(
 ): Promise<ActionResult<null>> {
   const auth = await requireActionRole("manager");
   if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
 
   if (!Number.isInteger(freelancer_id)) {
     return err("validation_error", `invalid freelancer id: ${freelancer_id}`);
@@ -146,17 +205,35 @@ export async function deleteFreelancerAction(
 
   const name = await getFreelancerName(freelancer_id);
   if (name === null) {
+    await audit(ctx, {
+      action: "freelancer_deleted_denied",
+      target_type: "freelancer",
+      target_id: freelancer_id,
+    });
     return err("not_found", `freelancer not found: ${freelancer_id}`);
   }
 
   const n_assignments = await countFreelancerAssignments(freelancer_id);
 
   if (n_assignments > 0 && !force) {
+    await audit(ctx, {
+      action: "freelancer_deleted_denied",
+      target_type: "freelancer",
+      target_id: freelancer_id,
+    });
     return err(
       "has_children",
       `freelancer '${name}' has ${n_assignments} assignment(s). Pass force=true to cascade.`,
     );
   }
+
+  // Audit BEFORE deleting — the audit_log target_id stays referentially
+  // intact because we only store the integer id, not an FK to freelancer.
+  await audit(ctx, {
+    action: "freelancer_deleted",
+    target_type: "freelancer",
+    target_id: freelancer_id,
+  });
 
   await deleteFreelancerCascading(freelancer_id, {
     cascadeAssignments: force && n_assignments > 0,

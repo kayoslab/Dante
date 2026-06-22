@@ -28,10 +28,10 @@
  *     cross project boundaries or are unrecoverably destructive.
  *   - The lookup query is a single PK probe on (project_id, user_id).
  */
-import { and, eq } from "drizzle-orm";
-
-import { db } from "@/lib/db/client";
-import { projectSdm } from "@/lib/db/schema";
+import {
+  hasSdmGrant,
+  listSdmProjectIdsForUser,
+} from "@/lib/db/queries/project-sdm";
 
 import {
   ForbiddenError,
@@ -53,17 +53,7 @@ export async function canManageProject(
 ): Promise<boolean> {
   if (ctx.role === "admin" || ctx.role === "manager") return true;
   // Employee — check for an SDM grant on this specific project.
-  const [row] = await db
-    .select({ project_id: projectSdm.project_id })
-    .from(projectSdm)
-    .where(
-      and(
-        eq(projectSdm.project_id, project_id),
-        eq(projectSdm.user_id, ctx.user_id),
-      ),
-    )
-    .limit(1);
-  return row !== undefined;
+  return await hasSdmGrant(ctx.user_id, project_id);
 }
 
 /** Server-action gate. Mirrors `requireActionRole` — returns the same
@@ -119,9 +109,5 @@ export async function getSdmProjectIds(
   ctx: SessionContext,
 ): Promise<number[]> {
   if (ctx.role !== "employee") return [];
-  const rows = await db
-    .select({ project_id: projectSdm.project_id })
-    .from(projectSdm)
-    .where(eq(projectSdm.user_id, ctx.user_id));
-  return rows.map((r) => r.project_id);
+  return await listSdmProjectIdsForUser(ctx.user_id);
 }

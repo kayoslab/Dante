@@ -1,11 +1,9 @@
 import Link from "next/link";
-import { eq, sql } from "drizzle-orm";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SecurityCard } from "@/components/profile/security-card";
-import { db } from "@/lib/db/client";
-import { assignment, customer, project } from "@/lib/db/schema";
+import { listMyAssignments } from "@/lib/db/queries/assignment";
 import { getEmployeeDetail } from "@/lib/db/queries/employee";
 import { hasRole, requireSession } from "@/lib/auth/session";
 import { hasCognitoSession } from "@/lib/auth/cognito-tokens";
@@ -61,22 +59,7 @@ export default async function ProfilePage() {
 
   // Assignments (no rates, no costs). Manager+ click through to projects;
   // employees see project names as plain text.
-  const assignmentRows = await db
-    .select({
-      assignment_id: assignment.assignment_id,
-      project_id: assignment.project_id,
-      project_name: project.name,
-      customer_name: customer.name,
-      profile: assignment.profile,
-      allocation_pct: assignment.allocation_pct,
-      start_date: assignment.start_date,
-      end_date: assignment.end_date,
-    })
-    .from(assignment)
-    .innerJoin(project, eq(project.project_id, assignment.project_id))
-    .innerJoin(customer, eq(customer.customer_id, project.customer_id))
-    .where(eq(assignment.employee_id, ctx.employee_id))
-    .orderBy(sql`${assignment.start_date} DESC`);
+  const assignmentRows = await listMyAssignments(ctx.employee_id);
 
   const canLinkProjects = hasRole(ctx, "manager");
 

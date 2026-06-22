@@ -39,6 +39,7 @@ import {
   requireActionRole,
   type ActionResult,
 } from "./_action-helpers";
+import { audit } from "@/lib/auth/audit";
 import { createCustomerAction } from "./customer";
 import { createProjectAction } from "./project";
 
@@ -147,11 +148,21 @@ export async function importProjectFromAworkAction(
   // Pull the awork side AND the company → customer link in one go.
   const row = await getAworkProjectImportContext(awork_project_id);
   if (!row) {
+    await audit(auth.ctx, {
+      action: "awork_project_imported_denied",
+      target_type: "project",
+      target_id: awork_project_id,
+    });
     return err("not_found", `awork project not found: ${awork_project_id}`);
   }
 
   const existingProjectId = await getAworkProjectLinkProjectId(awork_project_id);
   if (existingProjectId !== null) {
+    await audit(auth.ctx, {
+      action: "awork_project_imported_denied",
+      target_type: "project",
+      target_id: awork_project_id,
+    });
     return err(
       "conflict",
       `awork project already linked to project ${existingProjectId}`,
@@ -160,6 +171,11 @@ export async function importProjectFromAworkAction(
 
   const customer_id = customer_id_override ?? row.linked_customer_id ?? null;
   if (customer_id === null) {
+    await audit(auth.ctx, {
+      action: "awork_project_imported_denied",
+      target_type: "project",
+      target_id: awork_project_id,
+    });
     return err(
       "validation_error",
       `awork project's company (${row.ap_company_id}) is not linked to a customer. Import the company first, or pass customer_id_override.`,
@@ -168,6 +184,11 @@ export async function importProjectFromAworkAction(
 
   const billing_model = billing_model_override ?? "time_and_material";
   if (billing_model !== "time_and_material" && billing_model !== "fixed_price") {
+    await audit(auth.ctx, {
+      action: "awork_project_imported_denied",
+      target_type: "project",
+      target_id: awork_project_id,
+    });
     return err(
       "validation_error",
       `billing_model must be time_and_material or fixed_price (got ${JSON.stringify(billing_model)})`,
@@ -176,6 +197,11 @@ export async function importProjectFromAworkAction(
 
   const name = (name_override ?? row.ap_name ?? "").trim();
   if (!name) {
+    await audit(auth.ctx, {
+      action: "awork_project_imported_denied",
+      target_type: "project",
+      target_id: awork_project_id,
+    });
     return err(
       "validation_error",
       "awork project has no name and no override given",
@@ -199,7 +225,14 @@ export async function importProjectFromAworkAction(
     status: our_status,
     notes,
   });
-  if (!created.ok) return created;
+  if (!created.ok) {
+    await audit(auth.ctx, {
+      action: "awork_project_imported_denied",
+      target_type: "project",
+      target_id: awork_project_id,
+    });
+    return created;
+  }
 
   // time_budget_hours doesn't go through createProjectAction (it's a
   // Phase B.4 addition). Patch it inline after create.
@@ -225,5 +258,10 @@ export async function importProjectFromAworkAction(
   if (!detail) {
     return err("internal_error", "created project not found after import");
   }
+  await audit(auth.ctx, {
+    action: "awork_project_imported",
+    target_type: "project",
+    target_id: created.data.project_id,
+  });
   return ok(detail);
 }

@@ -8,6 +8,43 @@ import { and, asc, eq, isNotNull, notInArray } from "drizzle-orm";
 import { db } from "../client";
 import { appUser, employeeCurrent, projectSdm } from "../schema";
 
+/* ------------------------------------------------------------------ */
+/* membership probes — backing the project-capability auth helpers      */
+/* ------------------------------------------------------------------ */
+
+/** True iff the user has an SDM grant on this exact project. PK probe
+ * on (project_id, user_id). Used by `canManageProject` after the
+ * admin/manager short-circuit. */
+export async function hasSdmGrant(
+  user_id: string,
+  project_id: number,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ project_id: projectSdm.project_id })
+    .from(projectSdm)
+    .where(
+      and(
+        eq(projectSdm.project_id, project_id),
+        eq(projectSdm.user_id, user_id),
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+/** Every project_id this user has an explicit SDM grant on. Caller
+ * (project-capability.ts) handles the admin/manager short-circuit —
+ * this is a pure DB read. */
+export async function listSdmProjectIdsForUser(
+  user_id: string,
+): Promise<number[]> {
+  const rows = await db
+    .select({ project_id: projectSdm.project_id })
+    .from(projectSdm)
+    .where(eq(projectSdm.user_id, user_id));
+  return rows.map((r) => r.project_id);
+}
+
 export type ProjectSdmRow = {
   user_id: string;
   email: string;
