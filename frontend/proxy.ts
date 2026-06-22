@@ -80,10 +80,24 @@ function attachCsp(req: NextRequest, response: NextResponse): NextResponse {
     "form-action 'self'",
     "object-src 'none'",
     "upgrade-insecure-requests",
+    // Tell the browser where to POST violation reports. Legacy
+    // `report-uri` + modern `report-to` covers both old + new browsers
+    // (the modern Reporting API requires the `Report-To` response
+    // header set below). Reports land in CloudWatch via
+    // `/api/csp-report` so we can spot pentest probes or accidental
+    // CSP-blocking of a legitimate dependency.
+    "report-uri /api/csp-report",
+    "report-to csp-endpoint",
   ];
   const csp = directives.join("; ");
 
   response.headers.set("Content-Security-Policy", csp);
+  // Reporting API endpoint group — pairs with `report-to csp-endpoint`
+  // in the CSP directive above.
+  response.headers.set(
+    "Reporting-Endpoints",
+    'csp-endpoint="/api/csp-report"',
+  );
   // Forward the nonce so Server Components / <Script> tags can read it
   // via `headers().get('x-nonce')`. Next.js internal bootstrap scripts
   // pick it up automatically from the request header.

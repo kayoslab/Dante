@@ -61,17 +61,28 @@ resource "aws_db_parameter_group" "this" {
 
 # --- Security group --------------------------------------------------------
 
+data "aws_vpc" "this" {
+  id = var.vpc_id
+}
+
 resource "aws_security_group" "rds" {
   name        = "${local.identifier}-rds"
   description = "RDS Postgres for ${local.identifier}. Ingress 5432 from approved app SGs only."
   vpc_id      = var.vpc_id
 
+  # RDS is a managed service that does not initiate outbound connections
+  # — all replication, backups, and maintenance traffic stays inside
+  # AWS's RDS-internal network and doesn't traverse the customer SG.
+  # Restrict egress to the VPC CIDR so a pivoted attacker who managed
+  # to make RDS look like the source of an outbound connection can't
+  # reach the public internet. (RDS is in a private data subnet with
+  # no NAT route anyway — this is belt-and-braces.)
   egress {
-    description = "RDS does not initiate outbound, but the default allow-all egress keeps maintenance traffic (extensions, monitoring) from being blocked."
+    description = "Egress restricted to VPC CIDR. RDS itself never initiates outbound — this just denies the long-tail SG escape path."
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [data.aws_vpc.this.cidr_block]
   }
 
   tags = {

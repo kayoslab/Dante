@@ -91,3 +91,19 @@ export async function hasCognitoSession(): Promise<boolean> {
     return false;
   }
 }
+
+/** Read the Cognito refresh token off the encrypted JWT cookie. Used
+ * by the sign-out flow to call `RevokeToken` and kill the refresh
+ * token immediately, instead of letting it expire naturally (up to
+ * 7 days). Returns null in dev mode or when there's no Cognito
+ * session — sign-out should still proceed even if revocation can't
+ * happen. */
+export async function getCognitoRefreshToken(): Promise<string | null> {
+  const jwt = await readJwt();
+  if (!jwt) return null;
+  const refreshToken =
+    typeof jwt.cognito_refresh_token === "string"
+      ? jwt.cognito_refresh_token
+      : undefined;
+  return refreshToken ?? null;
+}

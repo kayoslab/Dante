@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
 import { db } from "@/lib/db/client";
-import { handle, requireApiSession } from "@/lib/api/_route-helpers";
+import { boundedSearchQuery, handle, requireApiSession } from "@/lib/api/_route-helpers";
 
 export async function GET(req: NextRequest) {
   return handle(async () => {
@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
     const mappedRaw = searchParams.get("mapped");
     const mapped =
       mappedRaw === null ? null : mappedRaw.toLowerCase() === "true";
-    const q = searchParams.get("q");
+    const q = boundedSearchQuery(searchParams.get("q"));
 
     const conditions = [sql`1=1`];
     if (mapped === true) {

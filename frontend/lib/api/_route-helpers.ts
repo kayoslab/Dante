@@ -39,6 +39,23 @@ export const Unauthorized = (message = "Sign in required") =>
 export const Forbidden = (message = "Forbidden") =>
   new HTTPError(message, 403, "forbidden");
 
+/** Bound a free-text search query string. Trims, rejects empties, caps
+ * at `MAX_SEARCH_Q_LENGTH` characters. Without this, an attacker can
+ * pass a 1 MB `q=...` and trigger a full-table LIKE scan capped only
+ * by the 15-second statement timeout — cheap to send, expensive to
+ * serve. SQL itself is parameterized (no injection), this is a DoS
+ * mitigation. */
+const MAX_SEARCH_Q_LENGTH = 100;
+export function boundedSearchQuery(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > MAX_SEARCH_Q_LENGTH) {
+    throw Validation(`q exceeds ${MAX_SEARCH_Q_LENGTH} characters`);
+  }
+  return trimmed;
+}
+
 /** Compatibility alias — historical name. Prefer `SessionContext` from
  * `@/lib/auth/session` in new code. */
 export type ApiSessionContext = SessionContext;

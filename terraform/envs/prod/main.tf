@@ -352,6 +352,11 @@ module "ecr" {
 
   environment = "prod"
   name_prefix = "dante"
+  # Pinned explicitly: a future variable override that flipped this to
+  # MUTABLE would let CI overwrite the SHA-tagged image of a known-good
+  # production release. Immutable tags make rollback as simple as
+  # pointing the task def at the previous SHA.
+  image_tag_mutability = "IMMUTABLE"
 }
 
 data "aws_caller_identity" "current" {}
