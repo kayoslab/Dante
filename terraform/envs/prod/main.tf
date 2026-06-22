@@ -590,6 +590,12 @@ module "github_oidc" {
   # on the protected branch (`main` by default).
   deploy_role_branch_filter = "main"
 
+  # The terraform_apply job in deploy.yml runs in the `production`
+  # GitHub Environment so the manual approval gate kicks in. GitHub
+  # re-scopes the OIDC sub for environment-scoped jobs, so we need
+  # to allow that subject shape in addition to `ref:refs/heads/main`.
+  deploy_role_environments = ["production"]
+
   ecr_repository_arn = module.ecr.repository_arn
   ecs_cluster_arn    = module.app.cluster_arn
   ecs_service_arns = [

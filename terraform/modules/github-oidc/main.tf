@@ -97,13 +97,21 @@ data "aws_iam_policy_document" "deploy_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values = [
-        # Scope to a single branch by default. Use `*` to allow any
-        # branch (NOT recommended for prod).
-        var.deploy_role_branch_filter == "*"
-        ? "repo:${var.github_repository}:*"
-        : "repo:${var.github_repository}:ref:refs/heads/${var.deploy_role_branch_filter}",
-      ]
+      values = concat(
+        # Branch-scoped sub for ordinary jobs (no `environment:` block
+        # in the workflow). Set deploy_role_branch_filter = "*" to
+        # allow any branch (NOT recommended for prod).
+        [
+          var.deploy_role_branch_filter == "*"
+          ? "repo:${var.github_repository}:*"
+          : "repo:${var.github_repository}:ref:refs/heads/${var.deploy_role_branch_filter}",
+        ],
+        # Environment-scoped sub for jobs that declare
+        # `environment: <name>` (GitHub re-issues the OIDC token with
+        # `:environment:<name>` instead of `:ref:refs/heads/<branch>`).
+        # Empty list = no environment-scoped jobs allowed.
+        [for env in var.deploy_role_environments : "repo:${var.github_repository}:environment:${env}"],
+      )
     }
   }
 }

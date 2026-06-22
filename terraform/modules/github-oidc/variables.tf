@@ -26,6 +26,12 @@ variable "deploy_role_branch_filter" {
   default     = "main"
 }
 
+variable "deploy_role_environments" {
+  description = "GitHub Actions Environment names that may also assume the deploy role. GitHub re-scopes the OIDC `sub` claim to `repo:<owner>/<repo>:environment:<name>` for any job that declares `environment: <name>` — workflows without an environment use the branch-shaped sub (`ref:refs/heads/<branch>`) controlled by `deploy_role_branch_filter`. Both shapes need to be allowed if a workflow has both kinds of jobs."
+  type        = list(string)
+  default     = []
+}
+
 variable "ecr_repository_arn" {
   description = "ECR repo the deploy role is allowed to push to."
   type        = string
