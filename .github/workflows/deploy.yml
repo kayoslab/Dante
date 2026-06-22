@@ -74,6 +74,13 @@ jobs:
           platforms: linux/arm64
           push: true
           tags: ${{ steps.tag.outputs.image_uri }}
+          # Push a flat single-arch image manifest, not an OCI image
+          # index. ECR's `scan_on_push` (basic scanning) only fires on
+          # plain image manifests — if buildx wraps the layer in an
+          # index, no scan starts and the wait-for-scan step below dies
+          # with `ScanNotFoundException`.
+          provenance: false
+          sbom: false
           # GHA cache speeds repeat builds from ~5 min to <1 min by
           # reusing the npm + Next.js build cache between commits.
           cache-from: type=gha
