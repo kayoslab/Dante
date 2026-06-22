@@ -213,13 +213,26 @@ jobs:
 
       - name: terraform plan
         run: |
+          # Stream plan output to the job log AND tee into plan.txt.
+          # set +e so the tail-into-step-summary line still runs when
+          # plan exits non-zero, then propagate the original exit code.
+          set +e
           terraform plan \
             -var "github_repository=${{ github.repository }}" \
             -var "hosted_zone_id=${{ vars.HOSTED_ZONE_ID }}" \
             -var "app_image_uri=${{ needs.build.outputs.image_uri }}" \
             -out=prod.tfplan \
-            -no-color > plan.txt 2>&1
-          tail -200 plan.txt >> "$GITHUB_STEP_SUMMARY"
+            -no-color 2>&1 | tee plan.txt
+          rc=${PIPESTATUS[0]}
+          {
+            echo '<details><summary>terraform plan (tail)</summary>'
+            echo
+            echo '```'
+            tail -200 plan.txt
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
 
       - name: Upload plan
         uses: actions/upload-artifact@v4
