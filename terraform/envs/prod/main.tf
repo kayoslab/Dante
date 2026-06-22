@@ -132,6 +132,13 @@ module "cognito" {
   # DKIM + DMARC align with a domain we control.
   ses_source_arn         = aws_sesv2_email_identity.dante.arn
   ses_from_email_address = "Dante <noreply@${var.domain}>"
+
+  # Cognito Plus tier — adaptive auth + compromised-creds detection.
+  # ~$2/mo at our scale, defensive in depth in front of the hosted UI
+  # (which is the only Cognito surface a pen-tester / attacker can hit).
+  # Threat Protection requires `user_pool_tier = PLUS`.
+  user_pool_tier         = "PLUS"
+  advanced_security_mode = "ENFORCED"
 }
 
 # SES sender identity for Cognito invitation / reset / verification
@@ -444,6 +451,11 @@ module "app" {
     DANTE_LOG_LEVEL           = "info"
     AWS_REGION                = var.aws_region
 
+    # Name of the sync Lambda that runSyncAction invokes. Non-sensitive
+    # (the IAM grant is scoped by ARN, so the function name alone is
+    # useless without the role).
+    DANTE_SYNC_LAMBDA_NAME = module.sync_lambda.function_name
+
     # Migration runner is bundled at /app/migrate.js, so its __dirname is
     # /app and the default fallback (`__dirname/../lib/db/migrations`)
     # resolves to /lib/db/migrations — which doesn't exist. The Dockerfile
@@ -506,18 +518,33 @@ module "app" {
     # access to per-employee salary / Personio data, which is more
     # sensitive than awork API tokens.
     module.secrets.awork_tokens_secret_arn,
-    # The /settings sync button triggers an in-process sync via
-    # `runSyncAction`, which loads Personio credentials at call time.
-    # The sync Lambda has its own grant for this; the web-app task role
-    # needs the same one so the on-demand sync works.
-    module.secrets.personio_secret_arn,
+    # NOTE: `module.secrets.personio_secret_arn` was previously here to
+    # support the in-process `/settings/sync` button. That button now
+    # invokes the sync Lambda (which has its own scoped grant), so the
+    # web-app task role no longer needs Personio credentials at all
+    # (pre-pentest T1.6).
   ]
 
   # awork OAuth tokens (WRITE): the callback writes the rotated tokens
   # after exchanging the authorization code; the sync Lambda reads them
   # back. Read access is also granted above for the status UI.
+  #
+  # KNOWN RISK (T1.6 partial): an app-level RCE can overwrite these
+  # tokens. The minimal fix would be to route the OAuth callback's
+  # token-write through the sync Lambda. Deferred — too invasive
+  # before pentest week. Compensating controls: the OAuth callback is
+  # admin-only + audited; tokens self-rotate on every sync; a poisoned
+  # token only affects future awork syncs (which surface as obvious
+  # 401s in CloudWatch).
   additional_secret_arns_writable = [
     module.secrets.awork_tokens_secret_arn,
+  ]
+
+  # Sync Lambda is invoked synchronously by `runSyncAction` for the
+  # /settings sync button. Scoped to this exact function ARN — the
+  # task role can't invoke anything else in the account.
+  additional_invokable_lambda_arns = [
+    "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${module.sync_lambda.function_name}",
   ]
 }
 
@@ -541,6 +568,9 @@ resource "aws_iam_role_policy" "app_cognito_admin" {
         "cognito-idp:AdminGetUser",
         "cognito-idp:AdminDeleteUser",
         "cognito-idp:AdminResetUserPassword",
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminEnableUser",
+        "cognito-idp:AdminUserGlobalSignOut",
       ]
       Resource = module.cognito.user_pool_arn
     }]

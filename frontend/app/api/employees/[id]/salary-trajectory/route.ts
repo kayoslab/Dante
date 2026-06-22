@@ -25,6 +25,12 @@ export async function GET(
       ORDER BY effective_date ASC, event_id ASC
     `);
 
+    await audit(ctx, {
+      action: "view_salary",
+      target_type: "employee",
+      target_id: employee_id,
+    });
+
     return (result.rows as Array<Record<string, unknown>>).map((r) => {
       const newV = r.new_annual_eur === null || r.new_annual_eur === undefined
         ? null
@@ -47,11 +53,5 @@ export async function GET(
         source: r.source,
       };
     });
-    await audit(ctx, {
-      action: "view_salary_trajectory",
-      target_type: "employee",
-      target_id: employee_id,
-    });
-
   });
 }

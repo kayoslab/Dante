@@ -44,6 +44,10 @@ locals {
 resource "aws_cognito_user_pool" "this" {
   name = "${local.name}-userpool"
 
+  # Pool pricing tier. PLUS is required to enable Threat Protection
+  # (advanced_security_mode below). ESSENTIALS is the prior default.
+  user_pool_tier = var.user_pool_tier
+
   # Email is the sign-in identifier. Username (the internal Cognito identifier)
   # is auto-generated and stable — we store it as `cognito_sub` on app_user.
   username_attributes      = ["email"]
@@ -111,6 +115,19 @@ resource "aws_cognito_user_pool" "this" {
     source_arn             = var.ses_source_arn
     from_email_address     = var.ses_from_email_address
     reply_to_email_address = var.ses_reply_to_email_address
+  }
+
+  # Cognito Advanced Security (now Plus tier feature) — adaptive auth,
+  # IP-based throttling, compromised-credentials detection, suspicious-
+  # activity events. Required when an account is allowed to use the
+  # hosted UI from anywhere on the internet (which is our case — the
+  # hosted UI domain is publicly resolvable). Without ASM, brute-force
+  # protection relies on Cognito's fixed 5-attempt lockout only.
+  # Cost: ~$0.05 per MAU (≈ $2/mo at 40 users); turn off if cost is an
+  # issue. The "AUDIT" level only logs risk events to CloudTrail
+  # without taking action — "ENFORCED" is the right default for prod.
+  user_pool_add_ons {
+    advanced_security_mode = var.advanced_security_mode
   }
 
   # Schema: standard `email`. We could add custom attributes here (e.g.

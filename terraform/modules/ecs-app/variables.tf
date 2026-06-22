@@ -127,3 +127,9 @@ variable "additional_kms_key_arns_decryptable" {
   type        = list(string)
   default     = []
 }
+
+variable "additional_invokable_lambda_arns" {
+  description = "Lambda function ARNs the task role can call `lambda:InvokeFunction` on. Use to keep the web-app task out of sensitive credential read paths by routing work through a Lambda with narrower IAM (e.g. the sync Lambda owns Personio + awork creds; the web app only invokes it). Each ARN should be fully-qualified including the function name."
+  type        = list(string)
+  default     = []
+}

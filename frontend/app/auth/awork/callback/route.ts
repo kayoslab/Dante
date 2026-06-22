@@ -16,7 +16,7 @@ import { timingSafeEqual } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
 
 import { audit } from "@/lib/auth/audit";
-import { getSession } from "@/lib/auth/session";
+import { ForbiddenError, requireSession } from "@/lib/auth/session";
 import { log } from "@/lib/logger";
 import { exchangeAuthorizationCode } from "@/lib/sync/awork/auth";
 import { storeAworkTokens } from "@/lib/sync/credentials";
@@ -34,15 +34,19 @@ function fail(req: NextRequest, slug: string): NextResponse {
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const ctx = await getSession();
-  if (!ctx) {
-    return NextResponse.redirect(new URL("/login", req.nextUrl));
-  }
-  if (ctx.role !== "admin") {
-    return NextResponse.json(
-      { detail: "Admin only", code: "forbidden" },
-      { status: 403 },
-    );
+  // `requireSession` enforces no-session, disabled-user (H-008), and
+  // admin role in one call. ForbiddenError → 403 JSON for non-admins.
+  let ctx;
+  try {
+    ctx = await requireSession({ minRole: "admin" });
+  } catch (e) {
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json(
+        { detail: "Admin only", code: "forbidden" },
+        { status: 403 },
+      );
+    }
+    throw e;
   }
 
   // Did the user cancel on awork's screen?

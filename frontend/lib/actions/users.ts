@@ -10,14 +10,19 @@ import { audit } from "@/lib/auth/audit";
 import {
   adminCreateCognitoUser,
   adminDeleteCognitoUser,
+  adminDisableCognitoUser,
+  adminEnableCognitoUser,
+  adminGlobalSignOut,
   adminResendInvitation,
   adminResetPassword,
+  adminUpdateUserGroup,
 } from "@/lib/auth/cognito-admin";
 import {
   ForbiddenError,
   invalidateDisabledCache,
   requireSession,
 } from "@/lib/auth/session";
+import { enforceRateLimit } from "@/lib/api/rate-limit";
 
 import {
   err,
@@ -188,7 +193,7 @@ export async function setUserRoleAction(
   const demotingSelf =
     parsed.data.user_id === ctx.user_id && parsed.data.role !== "admin";
 
-  let result: { user_id: string; role: "admin" | "manager" | "employee" } | null = null;
+  let result: { user_id: string; role: "admin" | "manager" | "employee"; email: string; cognito_sub: string; previous_role: "admin" | "manager" | "employee" } | null = null;
   let conflictReason: string | null = null;
 
   await db.transaction(async (tx) => {
@@ -203,12 +208,32 @@ export async function setUserRoleAction(
         return;
       }
     }
+    // Capture current state before the update so we can sync Cognito
+    // groups afterwards (need the OLD role for AdminRemoveUserFromGroup
+    // + the email for both group calls + the cognito_sub to know whether
+    // to skip the Cognito hop in dev mode).
+    const before = await tx
+      .select({
+        email: appUser.email,
+        role: appUser.role,
+        cognito_sub: appUser.cognito_sub,
+      })
+      .from(appUser)
+      .where(eq(appUser.user_id, parsed.data.user_id))
+      .limit(1);
+    if (!before[0]) return;
     const updated = await tx
       .update(appUser)
       .set(updates)
       .where(eq(appUser.user_id, parsed.data.user_id))
       .returning({ user_id: appUser.user_id, role: appUser.role });
-    result = updated[0] ?? null;
+    if (!updated[0]) return;
+    result = {
+      ...updated[0],
+      email: before[0].email,
+      cognito_sub: before[0].cognito_sub,
+      previous_role: before[0].role,
+    };
   });
 
   if (conflictReason === "last_admin_guard") {
@@ -239,8 +264,42 @@ export async function setUserRoleAction(
     target_id: parsed.data.user_id,
   });
 
+  // Sync Cognito groups so the user's NEXT sign-in lands on the new
+  // role. The JWT callback reads `cognito:groups` as the source of
+  // truth for token.role — without this update, a demoted admin
+  // re-elevates the moment they sign in again.
+  //
+  // Then global-sign-out so their CURRENT session gets invalidated;
+  // the user is bounced to /login and re-issued a token with the new
+  // groups claim. Without sign-out the token survives until expiry
+  // (up to 7 days) and `app_user.role` (in DB, which we just updated)
+  // diverges from `token.role` (cached at sign-in time).
+  //
+  // Dev-mode stub users have no Cognito presence — skip both calls.
+  const isDev = process.env.AUTH_DEV_MODE === "true";
+  const isDevStub = result.cognito_sub.startsWith("dev:");
+  if (!isDev && !isDevStub && result.previous_role !== result.role) {
+    try {
+      await adminUpdateUserGroup(
+        result.email,
+        result.previous_role,
+        result.role,
+      );
+      await adminGlobalSignOut(result.email);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // The DB is already updated. Surface the Cognito-side failure so
+      // the operator can manually reconcile (or retry the action),
+      // but the action did partially succeed.
+      return err(
+        "internal_error",
+        `Role updated in DB but Cognito sync failed: ${msg}. Retry the action or run: aws cognito-idp admin-remove-user-from-group / admin-add-user-to-group / admin-user-global-sign-out manually.`,
+      );
+    }
+  }
+
   revalidatePath("/settings/users");
-  return ok(result);
+  return ok({ user_id: result.user_id, role: result.role });
 }
 
 /* ---------- disable / enable ---------- */
@@ -273,6 +332,17 @@ export async function setUserDisabledAction(
     return err("conflict", "You can't disable your own account.");
   }
 
+  // Capture email + cognito_sub before the update so we can mirror the
+  // change in Cognito (AdminDisableUser + AdminUserGlobalSignOut).
+  const before = await db
+    .select({
+      email: appUser.email,
+      cognito_sub: appUser.cognito_sub,
+    })
+    .from(appUser)
+    .where(eq(appUser.user_id, parsed.data.user_id))
+    .limit(1);
+
   const updated = await db
     .update(appUser)
     .set({ is_disabled: parsed.data.disabled })
@@ -281,7 +351,7 @@ export async function setUserDisabledAction(
       user_id: appUser.user_id,
       is_disabled: appUser.is_disabled,
     });
-  if (!updated[0]) {
+  if (!updated[0] || !before[0]) {
     await audit(ctx, {
       action: "user_disable_denied",
       target_type: "app_user",
@@ -299,6 +369,42 @@ export async function setUserDisabledAction(
   // Bust the cache so the next protected request sees the new state
   // immediately, not after the 30s TTL.
   invalidateDisabledCache(parsed.data.user_id);
+
+  // Mirror the change in Cognito. Without this:
+  //   - On disable, the user's existing Cognito tokens stay valid up
+  //     to 7 days and any system that accepts them (not just our app)
+  //     still treats them as signed-in.
+  //   - On disable, the user could still complete in-flight OAuth
+  //     flows initiated before the disable.
+  //   - On enable, app_user.is_disabled flips but the user can't
+  //     actually sign in if Cognito previously disabled them
+  //     out-of-band — keeping the two states in sync prevents that
+  //     divergence.
+  // AdminDisableUser doesn't revoke tokens — only blocks new sign-ins
+  // — so pair with AdminUserGlobalSignOut on disable.
+  const isDev = process.env.AUTH_DEV_MODE === "true";
+  const isDevStub = before[0].cognito_sub.startsWith("dev:");
+  if (!isDev && !isDevStub) {
+    try {
+      if (parsed.data.disabled) {
+        await adminDisableCognitoUser(before[0].email);
+        await adminGlobalSignOut(before[0].email);
+      } else {
+        await adminEnableCognitoUser(before[0].email);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // DB is updated; surface the Cognito divergence so the operator
+      // can reconcile. UnsupportedUserStateException = already in the
+      // target state — treat as success.
+      if (!msg.includes("UnsupportedUserStateException")) {
+        return err(
+          "internal_error",
+          `${parsed.data.disabled ? "Disabled" : "Enabled"} in DB but Cognito sync failed: ${msg}.`,
+        );
+      }
+    }
+  }
 
   revalidatePath("/settings/users");
   return ok(updated[0]);
@@ -321,10 +427,20 @@ export async function deleteUserAction(
     if (f) return f;
     throw e;
   }
+  // Scoped rate limit on the destructive admin actions. The global
+  // ceiling already fired in requireSession; this `expensive` tier
+  // (20/min) bounds how many users a compromised admin token can wipe
+  // before the bucket runs dry. Same shape for resend + reset below.
+  enforceRateLimit(ctx, "user_admin_delete", "expensive");
   const parsed = DeleteSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
   if (parsed.data.user_id === ctx.user_id) {
+    await audit(ctx, {
+      action: "user_delete_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
     return err("conflict", "You can't delete your own account.");
   }
 
@@ -341,8 +457,20 @@ export async function deleteUserAction(
     .where(eq(appUser.user_id, parsed.data.user_id))
     .limit(1);
   const target = rows[0];
-  if (!target) return err("not_found", "User not found.");
+  if (!target) {
+    await audit(ctx, {
+      action: "user_delete_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
+    return err("not_found", "User not found.");
+  }
   if (!target.is_disabled) {
+    await audit(ctx, {
+      action: "user_delete_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
     return err(
       "conflict",
       "Disable the user before deleting. Delete is irreversible.",
@@ -402,6 +530,9 @@ export async function resendInvitationAction(
     if (f) return f;
     throw e;
   }
+  // Each call sends a real Cognito email via SES — bound at 20/min so
+  // a compromised admin token can't blast invitations / burn SES quota.
+  enforceRateLimit(ctx, "user_admin_resend", "expensive");
   const parsed = ResendSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
@@ -411,12 +542,24 @@ export async function resendInvitationAction(
     .where(eq(appUser.user_id, parsed.data.user_id))
     .limit(1);
   const target = rows[0];
-  if (!target) return err("not_found", "User not found.");
+  if (!target) {
+    await audit(ctx, {
+      action: "user_invitation_resend_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
+    return err("not_found", "User not found.");
+  }
 
   // RESEND only works for users in FORCE_CHANGE_PASSWORD — i.e. who
   // haven't signed in yet. Surfacing a friendly error here beats
   // forwarding Cognito's `NotAuthorizedException`.
   if (target.last_login_at) {
+    await audit(ctx, {
+      action: "user_invitation_resend_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
     return err(
       "conflict",
       "This user has already signed in. Use Reset password instead.",
@@ -456,6 +599,10 @@ export async function resetPasswordAction(
     if (f) return f;
     throw e;
   }
+  // Triggers AdminResetUserPassword → SES email + invalidates the
+  // user's current password. Compromised admin token + a loop here =
+  // every user locked out + SES quota gone. 20/min cap.
+  enforceRateLimit(ctx, "user_admin_reset", "expensive");
   const parsed = ResetPasswordSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
@@ -465,12 +612,24 @@ export async function resetPasswordAction(
     .where(eq(appUser.user_id, parsed.data.user_id))
     .limit(1);
   const target = rows[0];
-  if (!target) return err("not_found", "User not found.");
+  if (!target) {
+    await audit(ctx, {
+      action: "user_password_reset_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
+    return err("not_found", "User not found.");
+  }
 
   // AdminResetUserPassword is for users who've completed first sign-in.
   // For never-signed-in users, RESEND the original temp-password email
   // instead — that's `resendInvitationAction`.
   if (!target.last_login_at) {
+    await audit(ctx, {
+      action: "user_password_reset_denied",
+      target_type: "app_user",
+      target_id: parsed.data.user_id,
+    });
     return err(
       "conflict",
       "This user has never signed in. Use Send again instead.",

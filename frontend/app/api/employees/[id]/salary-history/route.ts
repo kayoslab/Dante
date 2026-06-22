@@ -27,6 +27,12 @@ export async function GET(
       ORDER BY effective_from ASC NULLS LAST, category, type_name
     `);
 
+    await audit(ctx, {
+      action: "view_salary",
+      target_type: "employee",
+      target_id: employee_id,
+    });
+
     return (result.rows as Array<Record<string, unknown>>).map((r) => ({
       effective_from: r.effective_from,
       amount_value:
@@ -42,11 +48,5 @@ export async function GET(
           ? null
           : Number(r.weekly_working_hours).toFixed(2),
     }));
-    await audit(ctx, {
-      action: "view_salary_history",
-      target_type: "employee",
-      target_id: employee_id,
-    });
-
   });
 }

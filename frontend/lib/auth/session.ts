@@ -25,6 +25,7 @@ import { db } from "@/lib/db/client";
 import { appUser } from "@/lib/db/schema";
 
 import { auth, type Role } from ".";
+import { enforceGlobalApiRateLimit } from "@/lib/api/rate-limit";
 
 export type SessionContext = {
   user_id: string;
@@ -107,6 +108,14 @@ export async function requireSession(opts: {
     role: session.user.role,
     employee_id: session.user.employee_id,
   };
+  // Per-user global ceiling on every protected entry point — Server
+  // Components, Server Actions, anything else hitting requireSession.
+  // requireApiSession also calls this with the same "_global" scope so
+  // the budget is unified across surfaces, not per-surface. Without
+  // this, Server Actions skipped the ceiling and a phished admin token
+  // could loop expensive admin actions (resetPasswordAction →
+  // AdminResetUserPassword → SES quota burn) without hitting any cap.
+  enforceGlobalApiRateLimit(ctx);
   if (opts.minRole && ROLE_RANK[ctx.role] < ROLE_RANK[opts.minRole]) {
     throw new ForbiddenError(
       `requires role ${opts.minRole} or above (you are ${ctx.role})`,

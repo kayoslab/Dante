@@ -159,6 +159,25 @@ resource "aws_iam_role_policy" "task_secrets" {
   })
 }
 
+# Lambda invoke grants — used to keep the task role out of sensitive
+# credential reads by routing work through a Lambda with narrower IAM.
+# `runSyncAction` (Server Action) invokes the sync Lambda instead of
+# loading Personio + awork creds in-process.
+resource "aws_iam_role_policy" "task_lambda_invoke" {
+  count = length(var.additional_invokable_lambda_arns) == 0 ? 0 : 1
+  name  = "${local.name}-task-lambda-invoke"
+  role  = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = var.additional_invokable_lambda_arns
+    }]
+  })
+}
+
 # --- Task definition ------------------------------------------------------
 
 data "aws_region" "current" {}

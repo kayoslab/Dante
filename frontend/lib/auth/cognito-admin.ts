@@ -20,7 +20,11 @@ import {
   AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
   AdminDeleteUserCommand,
+  AdminDisableUserCommand,
+  AdminEnableUserCommand,
+  AdminRemoveUserFromGroupCommand,
   AdminResetUserPasswordCommand,
+  AdminUserGlobalSignOutCommand,
   CognitoIdentityProviderClient,
 } from "@aws-sdk/client-cognito-identity-provider";
 
@@ -146,6 +150,82 @@ export async function adminResetPassword(email: string): Promise<void> {
 export async function adminDeleteCognitoUser(email: string): Promise<void> {
   await client().send(
     new AdminDeleteUserCommand({
+      UserPoolId: userPoolId(),
+      Username: email,
+    }),
+  );
+}
+
+/** Move a user between Cognito groups. Called after `setUserRoleAction`
+ * so the JWT `cognito:groups` claim — which the Auth.js JWT callback
+ * trusts as the source of truth for role — reflects the new role on the
+ * user's next sign-in. Without this, a demoted admin re-elevates the
+ * moment they sign in again because their Cognito group is unchanged.
+ *
+ * Cognito doesn't have a single "set group" API, so we remove from the
+ * old group (best-effort) and add to the new one. AdminRemoveUserFromGroup
+ * is idempotent (no error if the user wasn't in the group). */
+export async function adminUpdateUserGroup(
+  email: string,
+  oldGroup: Role,
+  newGroup: Role,
+): Promise<void> {
+  if (oldGroup === newGroup) return;
+  await client().send(
+    new AdminRemoveUserFromGroupCommand({
+      UserPoolId: userPoolId(),
+      Username: email,
+      GroupName: oldGroup,
+    }),
+  );
+  await client().send(
+    new AdminAddUserToGroupCommand({
+      UserPoolId: userPoolId(),
+      Username: email,
+      GroupName: newGroup,
+    }),
+  );
+}
+
+/** Mark a Cognito user as disabled. Cognito refuses all sign-in
+ * attempts immediately; existing access + refresh tokens stay valid
+ * until they expire on their own, so callers should pair this with
+ * `adminGlobalSignOut` to revoke them. Idempotent on already-disabled
+ * users. */
+export async function adminDisableCognitoUser(email: string): Promise<void> {
+  await client().send(
+    new AdminDisableUserCommand({
+      UserPoolId: userPoolId(),
+      Username: email,
+    }),
+  );
+}
+
+/** Re-enable a previously-disabled Cognito user so they can sign in
+ * again. The user keeps their group memberships and password. */
+export async function adminEnableCognitoUser(email: string): Promise<void> {
+  await client().send(
+    new AdminEnableUserCommand({
+      UserPoolId: userPoolId(),
+      Username: email,
+    }),
+  );
+}
+
+/** Revoke every refresh token Cognito has issued for the user, plus
+ * mark every active access token for invalidation at its next
+ * introspection. After this call:
+ *   - The user's existing refresh tokens are rejected with
+ *     `NotAuthorizedException`.
+ *   - Their access tokens still pass JWT signature verification until
+ *     they expire (Cognito access tokens are not revocable by design),
+ *     but our `lib/auth/cognito-tokens.ts` refresh path will fail and
+ *     mark the JWT `cognito_refresh_failed = true`.
+ *
+ * Use after demote / disable / delete to force a fresh sign-in. */
+export async function adminGlobalSignOut(email: string): Promise<void> {
+  await client().send(
+    new AdminUserGlobalSignOutCommand({
       UserPoolId: userPoolId(),
       Username: email,
     }),

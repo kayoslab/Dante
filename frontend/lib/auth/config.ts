@@ -229,11 +229,21 @@ export const authConfig = {
         const sub = (profile as { sub?: string }).sub;
         const email = (profile as { email?: string }).email;
         if (sub && email) {
-          const u = await findOrCreateAppUser({ email, cognito_sub: sub });
+          const expected_role = cognitoRoleFor(groups);
+          // Pass `expected_role` so findOrCreateAppUser writes the Cognito
+          // groups → app_user.role on every sign-in. Without this the DB
+          // column drifts behind Cognito after a role change, and admin
+          // actions that gate on app_user.role would treat a freshly-
+          // demoted user as still admin until the next manual write.
+          const u = await findOrCreateAppUser({
+            email,
+            cognito_sub: sub,
+            expected_role,
+          });
           token.user_id = u.user_id;
           token.email = u.email;
           token.employee_id = u.employee_id;
-          token.role = cognitoRoleFor(groups);
+          token.role = expected_role;
         }
       }
       // Capture Cognito OAuth tokens on initial sign-in. Server actions

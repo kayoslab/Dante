@@ -73,3 +73,23 @@ variable "ses_reply_to_email_address" {
   type        = string
   default     = null
 }
+
+variable "advanced_security_mode" {
+  description = "Cognito Threat Protection (formerly Advanced Security): adaptive auth, IP-based throttling, compromised-credentials detection. Choices: OFF, AUDIT (log risk events only), ENFORCED (block / step-up on risky sign-ins). Requires `user_pool_tier = PLUS`. ENFORCED is the right default for prod; AUDIT for staging when tuning."
+  type        = string
+  default     = "OFF"
+  validation {
+    condition     = contains(["OFF", "AUDIT", "ENFORCED"], var.advanced_security_mode)
+    error_message = "advanced_security_mode must be OFF, AUDIT, or ENFORCED."
+  }
+}
+
+variable "user_pool_tier" {
+  description = "Cognito user pool pricing tier. LITE = no MFA + no advanced features. ESSENTIALS = MFA + custom domain. PLUS = ESSENTIALS + Threat Protection (adaptive auth, IP throttling, compromised-credentials checks). Must be PLUS to set `advanced_security_mode` to AUDIT or ENFORCED. Cost difference at 40 MAU is roughly $2/mo PLUS vs ESSENTIALS."
+  type        = string
+  default     = "ESSENTIALS"
+  validation {
+    condition     = contains(["LITE", "ESSENTIALS", "PLUS"], var.user_pool_tier)
+    error_message = "user_pool_tier must be LITE, ESSENTIALS, or PLUS."
+  }
+}

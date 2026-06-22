@@ -16,7 +16,7 @@ import crypto from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
 
 import { audit } from "@/lib/auth/audit";
-import { getSession } from "@/lib/auth/session";
+import { ForbiddenError, requireSession } from "@/lib/auth/session";
 import { buildAuthorizeUrl } from "@/lib/sync/awork/auth";
 
 export const COOKIE_NAME = "awork_oauth_state";
@@ -33,15 +33,21 @@ function genPkcePair(): { verifier: string; challenge: string } {
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const ctx = await getSession();
-  if (!ctx) {
-    return NextResponse.redirect(new URL("/login", req.nextUrl));
-  }
-  if (ctx.role !== "admin") {
-    return NextResponse.json(
-      { detail: "Admin only", code: "forbidden" },
-      { status: 403 },
-    );
+  // `requireSession` covers no-session redirect (NEXT_REDIRECT throw),
+  // the disabled-user bounce (H-008), and the role gate in one call.
+  // ForbiddenError surfaces here for non-admins; render it as a 403
+  // JSON instead of letting Next's default handler turn it into a 500.
+  let ctx;
+  try {
+    ctx = await requireSession({ minRole: "admin" });
+  } catch (e) {
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json(
+        { detail: "Admin only", code: "forbidden" },
+        { status: 403 },
+      );
+    }
+    throw e;
   }
 
   const { verifier, challenge } = genPkcePair();
