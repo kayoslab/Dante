@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Loader2Icon, UserPlusIcon } from "lucide-react";
+import { KeyIcon, Loader2Icon, MailIcon, Trash2Icon, UserPlusIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  deleteUserAction,
   inviteUserAction,
+  resendInvitationAction,
+  resetPasswordAction,
   setUserDisabledAction,
   setUserRoleAction,
 } from "@/lib/actions/users";
@@ -122,6 +125,46 @@ function UserRow({ row, isSelf }: { row: Row; isSelf: boolean }) {
     });
   }
 
+  function resendInvitation() {
+    startTransition(async () => {
+      const r = await resendInvitationAction({ user_id: row.user_id });
+      if (!r.ok) toast.error(r.error.detail);
+      else toast.success(`Invitation re-sent to ${row.email}.`);
+    });
+  }
+
+  function resetPassword() {
+    if (
+      !confirm(
+        `Send a password-reset email to ${row.email}? They'll receive a code and pick a new password on the sign-in page.`,
+      )
+    ) {
+      return;
+    }
+    startTransition(async () => {
+      const r = await resetPasswordAction({ user_id: row.user_id });
+      if (!r.ok) toast.error(r.error.detail);
+      else toast.success(`Password-reset email sent to ${row.email}.`);
+    });
+  }
+
+  function deleteUser() {
+    if (
+      !confirm(
+        `Delete ${row.email}? This removes the Cognito account and the app record. Irreversible.`,
+      )
+    ) {
+      return;
+    }
+    startTransition(async () => {
+      const r = await deleteUserAction({ user_id: row.user_id });
+      if (!r.ok) toast.error(r.error.detail);
+      else toast.success(`${row.email} deleted.`);
+    });
+  }
+
+  const neverSignedIn = row.last_login_at === null;
+
   return (
     <tr className={row.is_disabled ? "bg-muted/30 text-muted-foreground" : ""}>
       <td className="px-3 py-2">
@@ -164,7 +207,27 @@ function UserRow({ row, isSelf }: { row: Row; isSelf: boolean }) {
           : "—"}
       </td>
       <td className="px-3 py-2 text-right">
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
+          {!isSelf && !row.is_disabled && (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={isPending}
+              onClick={neverSignedIn ? resendInvitation : resetPassword}
+              title={
+                neverSignedIn
+                  ? "Re-send the invitation email"
+                  : "Send a password-reset email"
+              }
+            >
+              {neverSignedIn ? (
+                <MailIcon className="size-3" />
+              ) : (
+                <KeyIcon className="size-3" />
+              )}
+              {neverSignedIn ? "Send again" : "Reset password"}
+            </Button>
+          )}
           {!isSelf && (
             <Button
               size="xs"
@@ -174,6 +237,18 @@ function UserRow({ row, isSelf }: { row: Row; isSelf: boolean }) {
             >
               {isPending && <Loader2Icon className="size-3 animate-spin" />}
               {row.is_disabled ? "Enable" : "Disable"}
+            </Button>
+          )}
+          {!isSelf && row.is_disabled && (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={isPending}
+              onClick={deleteUser}
+              className="text-destructive hover:text-destructive"
+            >
+              <Trash2Icon className="size-3" />
+              Delete
             </Button>
           )}
         </div>

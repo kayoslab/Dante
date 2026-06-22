@@ -19,6 +19,8 @@ import "server-only";
 import {
   AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
+  AdminDeleteUserCommand,
+  AdminResetUserPasswordCommand,
   CognitoIdentityProviderClient,
 } from "@aws-sdk/client-cognito-identity-provider";
 
@@ -93,4 +95,59 @@ export async function adminCreateCognitoUser(opts: {
   );
 
   return { sub };
+}
+
+/** Re-send the welcome / temp-password email for a user who hasn't
+ * signed in yet (Cognito status `FORCE_CHANGE_PASSWORD`). Uses
+ * AdminCreateUser with `MessageAction = RESEND` — Cognito reuses the
+ * existing user record, generates a fresh temp password, and sends the
+ * invitation email again.
+ *
+ * Cognito rejects this with `UserNotFoundException` if the user
+ * doesn't exist, `NotAuthorizedException` if the user has already
+ * completed the first sign-in (status != FORCE_CHANGE_PASSWORD), and
+ * `UnsupportedUserStateException` on disabled accounts. Caller maps
+ * those to friendly UI errors. */
+export async function adminResendInvitation(email: string): Promise<void> {
+  await client().send(
+    new AdminCreateUserCommand({
+      UserPoolId: userPoolId(),
+      Username: email,
+      MessageAction: "RESEND",
+      DesiredDeliveryMediums: ["EMAIL"],
+    }),
+  );
+}
+
+/** Trigger Cognito's admin-initiated password reset. The user receives
+ * a verification-code email and goes through the standard hosted-UI
+ * forgot-password flow to pick a new password.
+ *
+ * Use for users who have already signed in at least once
+ * (`CONFIRMED`); for `FORCE_CHANGE_PASSWORD` users use
+ * `adminResendInvitation` instead, which re-sends the original temp
+ * password rather than walking the reset flow. */
+export async function adminResetPassword(email: string): Promise<void> {
+  await client().send(
+    new AdminResetUserPasswordCommand({
+      UserPoolId: userPoolId(),
+      Username: email,
+    }),
+  );
+}
+
+/** Hard-delete a Cognito user. Irreversible — every active session,
+ * passkey, MFA registration, and group membership is wiped. The matching
+ * `app_user` row should be removed in the same operation; otherwise the
+ * email is "taken" but unsignable.
+ *
+ * Cognito returns success on already-deleted users (treated as
+ * idempotent), so the caller doesn't need to pre-check existence. */
+export async function adminDeleteCognitoUser(email: string): Promise<void> {
+  await client().send(
+    new AdminDeleteUserCommand({
+      UserPoolId: userPoolId(),
+      Username: email,
+    }),
+  );
 }

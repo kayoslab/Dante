@@ -7,7 +7,12 @@ import { z } from "zod";
 import { db } from "@/lib/db/client";
 import { appUser, employeeCurrent } from "@/lib/db/schema";
 import { audit } from "@/lib/auth/audit";
-import { adminCreateCognitoUser } from "@/lib/auth/cognito-admin";
+import {
+  adminCreateCognitoUser,
+  adminDeleteCognitoUser,
+  adminResendInvitation,
+  adminResetPassword,
+} from "@/lib/auth/cognito-admin";
 import {
   ForbiddenError,
   invalidateDisabledCache,
@@ -299,7 +304,194 @@ export async function setUserDisabledAction(
   return ok(updated[0]);
 }
 
-/* ---------- reset MFA (lost device) ---------- */
+/* ---------- delete user ---------- */
+
+const DeleteSchema = z.object({
+  user_id: z.string().uuid(),
+});
+
+export async function deleteUserAction(
+  input: unknown,
+): Promise<ActionResult<{ user_id: string }>> {
+  let ctx;
+  try {
+    ctx = await requireAdmin();
+  } catch (e) {
+    const f = bailForbidden<{ user_id: string }>(e);
+    if (f) return f;
+    throw e;
+  }
+  const parsed = DeleteSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+
+  if (parsed.data.user_id === ctx.user_id) {
+    return err("conflict", "You can't delete your own account.");
+  }
+
+  // Look up the email + disabled flag before deleting; we need the email
+  // to call AdminDeleteUser, and the disabled flag to enforce the gate.
+  const rows = await db
+    .select({
+      user_id: appUser.user_id,
+      email: appUser.email,
+      is_disabled: appUser.is_disabled,
+      cognito_sub: appUser.cognito_sub,
+    })
+    .from(appUser)
+    .where(eq(appUser.user_id, parsed.data.user_id))
+    .limit(1);
+  const target = rows[0];
+  if (!target) return err("not_found", "User not found.");
+  if (!target.is_disabled) {
+    return err(
+      "conflict",
+      "Disable the user before deleting. Delete is irreversible.",
+    );
+  }
+
+  // Audit BEFORE deleting — the audit_log FK is `ON DELETE SET NULL`,
+  // so the row survives, but we want the target_id captured while the
+  // app_user row still exists.
+  await audit(ctx, {
+    action: "user_deleted",
+    target_type: "app_user",
+    target_id: parsed.data.user_id,
+  });
+
+  // Cognito first. If this fails the DB row stays put and we can retry.
+  // The reverse order would leave Cognito in a state where the user
+  // still exists but has no app_user row, which surfaces as a confusing
+  // sign-in attempt landing on `findOrCreateAppUser`.
+  const isDev = process.env.AUTH_DEV_MODE === "true";
+  const isDevStub = target.cognito_sub.startsWith("dev:");
+  if (!isDev && !isDevStub) {
+    try {
+      await adminDeleteCognitoUser(target.email);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!msg.includes("UserNotFoundException")) {
+        return err(
+          "internal_error",
+          `Cognito AdminDeleteUser failed: ${msg}`,
+        );
+      }
+      // already gone — proceed
+    }
+  }
+
+  await db.delete(appUser).where(eq(appUser.user_id, parsed.data.user_id));
+
+  revalidatePath("/settings/users");
+  return ok({ user_id: parsed.data.user_id });
+}
+
+/* ---------- resend invitation ---------- */
+
+const ResendSchema = z.object({
+  user_id: z.string().uuid(),
+});
+
+export async function resendInvitationAction(
+  input: unknown,
+): Promise<ActionResult<{ user_id: string }>> {
+  let ctx;
+  try {
+    ctx = await requireAdmin();
+  } catch (e) {
+    const f = bailForbidden<{ user_id: string }>(e);
+    if (f) return f;
+    throw e;
+  }
+  const parsed = ResendSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+
+  const rows = await db
+    .select({ email: appUser.email, last_login_at: appUser.last_login_at })
+    .from(appUser)
+    .where(eq(appUser.user_id, parsed.data.user_id))
+    .limit(1);
+  const target = rows[0];
+  if (!target) return err("not_found", "User not found.");
+
+  // RESEND only works for users in FORCE_CHANGE_PASSWORD — i.e. who
+  // haven't signed in yet. Surfacing a friendly error here beats
+  // forwarding Cognito's `NotAuthorizedException`.
+  if (target.last_login_at) {
+    return err(
+      "conflict",
+      "This user has already signed in. Use Reset password instead.",
+    );
+  }
+
+  try {
+    await adminResendInvitation(target.email);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return err("internal_error", `Cognito RESEND failed: ${msg}`);
+  }
+
+  await audit(ctx, {
+    action: "user_invitation_resent",
+    target_type: "app_user",
+    target_id: parsed.data.user_id,
+  });
+
+  return ok({ user_id: parsed.data.user_id });
+}
+
+/* ---------- admin password reset ---------- */
+
+const ResetPasswordSchema = z.object({
+  user_id: z.string().uuid(),
+});
+
+export async function resetPasswordAction(
+  input: unknown,
+): Promise<ActionResult<{ user_id: string }>> {
+  let ctx;
+  try {
+    ctx = await requireAdmin();
+  } catch (e) {
+    const f = bailForbidden<{ user_id: string }>(e);
+    if (f) return f;
+    throw e;
+  }
+  const parsed = ResetPasswordSchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+
+  const rows = await db
+    .select({ email: appUser.email, last_login_at: appUser.last_login_at })
+    .from(appUser)
+    .where(eq(appUser.user_id, parsed.data.user_id))
+    .limit(1);
+  const target = rows[0];
+  if (!target) return err("not_found", "User not found.");
+
+  // AdminResetUserPassword is for users who've completed first sign-in.
+  // For never-signed-in users, RESEND the original temp-password email
+  // instead — that's `resendInvitationAction`.
+  if (!target.last_login_at) {
+    return err(
+      "conflict",
+      "This user has never signed in. Use Send again instead.",
+    );
+  }
+
+  try {
+    await adminResetPassword(target.email);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return err("internal_error", `Cognito AdminResetUserPassword failed: ${msg}`);
+  }
+
+  await audit(ctx, {
+    action: "user_password_reset",
+    target_type: "app_user",
+    target_id: parsed.data.user_id,
+  });
+
+  return ok({ user_id: parsed.data.user_id });
+}
 
 /* ---------- link to employee ---------- */
 
