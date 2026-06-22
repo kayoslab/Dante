@@ -209,6 +209,29 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # Secrets Manager — terraform refreshes secret_version resources
+  # during plan (needs GetSecretValue) and rewrites them on apply
+  # (needs PutSecretValue). AWS's managed ReadOnlyAccess deliberately
+  # excludes GetSecretValue, so it has to be granted explicitly.
+  # Scoped to `dante/<env>/*` so a compromised CI token can't pull
+  # secrets from elsewhere in the account.
+  dynamic "statement" {
+    for_each = length(var.secret_arn_prefixes) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:UpdateSecretVersionStage",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource",
+      ]
+      resources = [for p in var.secret_arn_prefixes : "${p}*"]
+    }
+  }
+
   # Terraform remote state (only if we've migrated off local backend).
   dynamic "statement" {
     for_each = var.terraform_state_bucket_arn == null ? [] : [1]

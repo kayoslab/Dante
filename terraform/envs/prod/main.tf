@@ -610,4 +610,12 @@ module "github_oidc" {
   # operator uses locally.
   terraform_state_bucket_arn     = "arn:aws:s3:::dante-tfstate"
   terraform_state_lock_table_arn = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/dante-tfstate-lock"
+
+  # Terraform-managed secrets the deploy role must be able to refresh
+  # + write. Scoped to the `dante/prod/` name prefix; the wildcard
+  # appended by the module's policy template covers the random suffix
+  # Secrets Manager appends to every secret ARN.
+  secret_arn_prefixes = [
+    "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:dante/prod/",
+  ]
 }

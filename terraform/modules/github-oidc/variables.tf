@@ -64,3 +64,9 @@ variable "terraform_state_lock_table_arn" {
   type        = string
   default     = null
 }
+
+variable "secret_arn_prefixes" {
+  description = "List of Secrets Manager ARN prefixes the deploy role may read + write. Used to scope `secretsmanager:GetSecretValue` / `PutSecretValue` so terraform can refresh + update the secret_version resources it manages. Each entry should end in the secret name prefix without the random suffix Secrets Manager appends (e.g. `arn:aws:secretsmanager:eu-central-1:<account>:secret:dante/prod/` — the trailing wildcard is added by the policy). Empty list disables the statement entirely."
+  type        = list(string)
+  default     = []
+}
