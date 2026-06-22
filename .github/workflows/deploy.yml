@@ -45,7 +45,7 @@ jobs:
     name: build (container + lambda)
     runs-on: ubuntu-latest
     outputs:
-      image_uri: ${{ steps.push.outputs.image_uri }}
+      image_uri: ${{ steps.tag.outputs.image_uri }}
     steps:
       - uses: actions/checkout@v4
 
@@ -90,10 +90,6 @@ jobs:
           # reusing the npm + Next.js build cache between commits.
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Set image_uri output
-        run: echo "image_uri=${{ steps.tag.outputs.image_uri }}" >> "$GITHUB_OUTPUT"
-        id: image_uri_out
 
       # --- ECR vulnerability scan gate ------------------------------
       #
