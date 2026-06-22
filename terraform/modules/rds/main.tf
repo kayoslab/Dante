@@ -78,7 +78,7 @@ resource "aws_security_group" "rds" {
   # reach the public internet. (RDS is in a private data subnet with
   # no NAT route anyway — this is belt-and-braces.)
   egress {
-    description = "Egress restricted to VPC CIDR. RDS itself never initiates outbound — this just denies the long-tail SG escape path."
+    description = "Egress restricted to VPC CIDR. RDS itself never initiates outbound; this denies the long-tail SG escape path."
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
