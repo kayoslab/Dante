@@ -334,10 +334,27 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Force-new-deployment + wait
+        env:
+          REPO_NAME: dante-prod-app
         run: |
+          # Resolve the latest ACTIVE revision of the task def family
+          # and roll the service to it. Without --task-definition,
+          # --force-new-deployment just redeploys the current
+          # task_definition reference — and terraform's
+          # `lifecycle.ignore_changes = [task_definition]` on
+          # aws_ecs_service means terraform never updates that
+          # reference. Net effect of "force-new-deployment only" is
+          # the new task def revision sits unused while the service
+          # keeps cycling the old image.
+          TD_ARN=$(aws ecs describe-task-definition \
+            --task-definition "$REPO_NAME" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "Rolling service to: $TD_ARN"
           aws ecs update-service \
             --cluster "${{ vars.ECS_CLUSTER_NAME }}" \
             --service "${{ vars.ECS_SERVICE_NAME }}" \
+            --task-definition "$TD_ARN" \
             --force-new-deployment >/dev/null
           aws ecs wait services-stable \
             --cluster "${{ vars.ECS_CLUSTER_NAME }}" \
