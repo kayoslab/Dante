@@ -168,7 +168,10 @@ data "aws_iam_policy_document" "deploy" {
   }
 
   # ECS — register new task definition revisions, deregister old ones
-  # (terraform rotates them every apply), and force-roll services.
+  # (terraform rotates them every apply), tag them, and force-roll
+  # services. Tag/Untag are required because RegisterTaskDefinition
+  # creates the rev with tags atomically — without `ecs:TagResource`
+  # the whole Register call is rejected.
   statement {
     effect = "Allow"
     actions = [
@@ -176,6 +179,8 @@ data "aws_iam_policy_document" "deploy" {
       "ecs:DeregisterTaskDefinition",
       "ecs:DescribeTaskDefinition",
       "ecs:ListTaskDefinitions",
+      "ecs:TagResource",
+      "ecs:UntagResource",
     ]
     resources = ["*"] # task-def actions have no resource-level support
   }
