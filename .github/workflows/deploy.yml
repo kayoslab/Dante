@@ -29,6 +29,11 @@ permissions:
 env:
   AWS_REGION: eu-central-1
   TF_VERSION: 1.9.x
+  # Flip to "true" once Inspector v2 is enabled at the account level
+  # and the `aws_ecr_registry_scanning_configuration` resource in
+  # terraform/envs/prod is applied. See the long-form note next to the
+  # scan-gate step below for why it's off right now.
+  SCAN_GATE_ENABLED: "false"
 
 jobs:
   # ---------------------------------------------------------------------
@@ -95,20 +100,52 @@ jobs:
       # `scan_on_push` runs an Inspector v2 scan in the background. Poll
       # until it finishes, then hard-fail the deploy if it finds any
       # CRITICAL or HIGH CVEs. Was M-008 in the pre-launch pen test —
-      # the scan was enabled but had no enforcement. To deploy despite
-      # a finding (e.g. a known-false-positive while a fix is in
-      # progress), re-run the workflow with `inputs.skip_scan_gate`.
+      # the scan was enabled but had no enforcement.
+      #
+      # Currently disabled: ECR basic scans don't fire for arm64
+      # (Fargate Graviton), and Inspector v2 requires an account
+      # subscription that the AWS Free Plan blocks. Flip
+      # `SCAN_GATE_ENABLED: true` (env above) once IT upgrades the
+      # AWS account and the Inspector terraform stanza in
+      # `terraform/envs/prod/main.tf` is un-commented + applied. To
+      # bypass for one-off deploys, re-run with `inputs.skip_scan_gate`.
       - name: Wait for ECR scan + enforce severity gate
-        if: github.event.inputs.skip_scan_gate != 'true'
+        if: env.SCAN_GATE_ENABLED == 'true' && github.event.inputs.skip_scan_gate != 'true'
         env:
           REPO_NAME: dante-prod-app
           IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           echo "Waiting for ECR scan on ${REPO_NAME}:${IMAGE_TAG}..."
-          aws ecr wait image-scan-complete \
-            --repository-name "$REPO_NAME" \
-            --image-id imageTag="$IMAGE_TAG"
+          # Custom poll loop instead of `aws ecr wait image-scan-complete`:
+          # the built-in waiter only matches the basic-scan `COMPLETE`
+          # status, but we're on Inspector v2 enhanced scanning which
+          # reports `ACTIVE` once findings are available (and stays
+          # `ACTIVE` thereafter because Inspector continuously rescans).
+          # 60 attempts × 10s = 10 minutes, plenty for a one-off scan.
+          status=""
+          for i in $(seq 1 60); do
+            status=$(aws ecr describe-image-scan-findings \
+              --repository-name "$REPO_NAME" \
+              --image-id imageTag="$IMAGE_TAG" \
+              --query 'imageScanStatus.status' \
+              --output text 2>/dev/null || echo "PENDING")
+            case "$status" in
+              ACTIVE|COMPLETE)
+                echo "Scan ready (status=$status)"
+                break
+                ;;
+              FAILED|UNSUPPORTED_IMAGE|SCAN_ELIGIBILITY_EXPIRED|FINDINGS_UNAVAILABLE)
+                echo "::error::Scan terminal-failed: $status"
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          if [ "$status" != "ACTIVE" ] && [ "$status" != "COMPLETE" ]; then
+            echo "::error::Scan did not complete after 10 minutes (last status: $status)"
+            exit 1
+          fi
           findings=$(aws ecr describe-image-scan-findings \
             --repository-name "$REPO_NAME" \
             --image-id imageTag="$IMAGE_TAG" \

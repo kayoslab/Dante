@@ -347,6 +347,36 @@ module "ecr" {
   name_prefix = "dante"
 }
 
+data "aws_caller_identity" "current" {}
+
+# CVE scan gate on ECR pushes is currently disabled.
+#
+# We want Inspector v2 enhanced scanning here (basic `scan_on_push` is
+# silently a no-op for arm64 images, and Fargate Graviton is arm64).
+# Inspector v2 requires an account-level subscription that the AWS Free
+# Plan blocks ("SubscriptionRequiredException" on `inspector2:Enable`)
+# — same gating as the RDS backups + Lambda concurrency TODOs.
+#
+# When IT upgrades the AWS account, re-enable by un-commenting:
+#
+#   resource "aws_inspector2_enabler" "ecr" {
+#     account_ids    = [data.aws_caller_identity.current.account_id]
+#     resource_types = ["ECR"]
+#   }
+#   resource "aws_ecr_registry_scanning_configuration" "this" {
+#     scan_type = "ENHANCED"
+#     rule {
+#       scan_frequency = "SCAN_ON_PUSH"
+#       repository_filter {
+#         filter      = "*"
+#         filter_type = "WILDCARD"
+#       }
+#     }
+#     depends_on = [aws_inspector2_enabler.ecr]
+#   }
+#
+# And flip `SCAN_GATE_ENABLED` in `.github/workflows/deploy.yml`.
+
 module "alb" {
   source = "../../modules/alb"
 
@@ -574,5 +604,3 @@ module "github_oidc" {
     "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${module.sync_lambda.function_name}",
   ]
 }
-
-data "aws_caller_identity" "current" {}
