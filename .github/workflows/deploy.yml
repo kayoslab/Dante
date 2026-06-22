@@ -244,13 +244,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
-          # The plan binary references the .terraform provider plugins;
-          # include the whole .terraform directory so the apply step can
-          # `terraform apply prod.tfplan` without re-running init.
-          path: |
-            terraform/envs/prod/prod.tfplan
-            terraform/envs/prod/.terraform
-            terraform/envs/prod/.terraform.lock.hcl
+          # Only the plan binary travels via artifact. The apply job
+          # re-runs `terraform init` to materialize the provider
+          # plugins; the checked-in `.terraform.lock.hcl` keeps both
+          # runs on the same provider versions. (upload-artifact@v4
+          # silently drops dotfile paths anyway unless
+          # `include-hidden-files: true` is set, so shipping the
+          # ~100 MB `.terraform/` directory through artifact was
+          # never going to work in v4.)
+          path: terraform/envs/prod/prod.tfplan
           retention-days: 7
 
   # ---------------------------------------------------------------------
@@ -305,6 +307,12 @@ jobs:
         with:
           name: terraform-plan
           path: terraform/envs/prod
+
+      # Plan ran in a separate runner, so .terraform/ isn't cached
+      # here. init reads the checked-in lock file, so the providers
+      # match what the plan was built against.
+      - name: terraform init
+        run: terraform init
 
       - name: terraform apply
         run: terraform apply -auto-approve prod.tfplan
