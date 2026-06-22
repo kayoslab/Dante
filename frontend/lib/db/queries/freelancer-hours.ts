@@ -11,7 +11,7 @@
  *
  * Hours storage is `hours_decimal` (NUMERIC(8,2)) — display can convert
  * to days at 8h/day when needed. */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "../client";
 import { assignment, freelancerTimeEntry } from "../schema";
@@ -22,6 +22,72 @@ export type FreelancerHoursEntry = {
   hours_decimal: string;
   source: "manual" | "awork";
 };
+
+export type FreelancerAssignmentMeta = {
+  project_id: number;
+  freelancer_id: number | null;
+};
+
+/** Look up the project + freelancer linkage for an assignment. Caller
+ * uses the project_id for the capability gate and the freelancer_id to
+ * reject set/delete on employee assignments (a CHECK can't enforce this
+ * across tables). Returns null when the assignment doesn't exist. */
+export async function getFreelancerAssignmentMeta(
+  assignment_id: number,
+): Promise<FreelancerAssignmentMeta | null> {
+  const [row] = await db
+    .select({
+      project_id: assignment.project_id,
+      freelancer_id: assignment.freelancer_id,
+    })
+    .from(assignment)
+    .where(eq(assignment.assignment_id, assignment_id))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Upsert a freelancer hours cell. `source='manual'` always overrides
+ * whatever the awork sync wrote — manual entry wins. */
+export async function upsertFreelancerHours(opts: {
+  assignment_id: number;
+  year_month: string;
+  hours_decimal: number;
+  entered_by: string;
+}): Promise<void> {
+  await db
+    .insert(freelancerTimeEntry)
+    .values({
+      assignment_id: opts.assignment_id,
+      year_month: opts.year_month,
+      hours_decimal: String(opts.hours_decimal),
+      source: "manual",
+      entered_by: opts.entered_by,
+    })
+    .onConflictDoUpdate({
+      target: [freelancerTimeEntry.assignment_id, freelancerTimeEntry.year_month],
+      set: {
+        hours_decimal: String(opts.hours_decimal),
+        source: "manual",
+        entered_by: opts.entered_by,
+        entered_at: new Date(),
+      },
+    });
+}
+
+/** Clear a freelancer hours cell. */
+export async function deleteFreelancerHours(opts: {
+  assignment_id: number;
+  year_month: string;
+}): Promise<void> {
+  await db
+    .delete(freelancerTimeEntry)
+    .where(
+      and(
+        eq(freelancerTimeEntry.assignment_id, opts.assignment_id),
+        eq(freelancerTimeEntry.year_month, opts.year_month),
+      ),
+    );
+}
 
 /** All freelancer hours rows for a project, joined through assignment. */
 export async function getFreelancerHoursForProject(

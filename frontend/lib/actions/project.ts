@@ -1,26 +1,39 @@
 "use server";
 
-import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/lib/db/client";
 import { audit } from "@/lib/auth/audit";
 import {
+  customerExists,
+} from "@/lib/db/queries/customer";
+import {
+  deleteProject,
+  deleteProjectAssignments,
+  deleteProjectRate as deleteProjectRateRow,
+  deleteProjectRates,
+  deleteProjectSdm,
+  findProjectByCustomerAndName,
+  getAppUserRole,
+  getFrameworkCustomerId,
+  getProjectCustomerId,
   getProjectDetail,
+  getProjectName,
+  getProjectRate,
+  getProjectRateDefaultValidFrom,
+  insertProject,
+  insertProjectRate,
+  insertProjectSdm,
+  listProjectAssignmentIds,
+  listProjectRateKeys,
+  mergeProjects,
+  preflightMergeProjects,
+  projectExists,
+  updateProject,
+  updateProjectRate as updateProjectRateRow,
   type ProjectDetail,
   type Rate,
+  type MergeProjectsResult as QueryMergeProjectsResult,
 } from "@/lib/db/queries/project";
-import {
-  assignment,
-  appUser,
-  aworkProjectLink,
-  customer,
-  frameworkAgreement,
-  personioProjectLink,
-  project,
-  projectRate,
-  projectSdm,
-} from "@/lib/db/schema";
 
 import {
   err,
@@ -90,11 +103,7 @@ export async function createProjectAction(
   const parsed = CreateProjectSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const customerExists = await db
-    .select({ id: customer.customer_id })
-    .from(customer)
-    .where(eq(customer.customer_id, parsed.data.customer_id));
-  if (customerExists.length === 0) {
+  if (!(await customerExists(parsed.data.customer_id))) {
     return err("not_found", `customer not found: ${parsed.data.customer_id}`);
   }
 
@@ -114,55 +123,37 @@ export async function createProjectAction(
   }
 
   if (parsed.data.framework_id !== null && parsed.data.framework_id !== undefined) {
-    const [fwRow] = await db
-      .select({ customer_id: frameworkAgreement.customer_id })
-      .from(frameworkAgreement)
-      .where(eq(frameworkAgreement.framework_id, parsed.data.framework_id));
-    if (!fwRow) {
+    const fwCustomerId = await getFrameworkCustomerId(parsed.data.framework_id);
+    if (fwCustomerId === null) {
       return err("not_found", `framework not found: ${parsed.data.framework_id}`);
     }
-    if (fwRow.customer_id !== parsed.data.customer_id) {
+    if (fwCustomerId !== parsed.data.customer_id) {
       return err("conflict", "framework belongs to a different customer");
     }
   }
 
   const name = parsed.data.name.trim();
-  const dup = await db
-    .select({ id: project.project_id })
-    .from(project)
-    .where(
-      and(
-        eq(project.customer_id, parsed.data.customer_id),
-        eq(project.name, name),
-      ),
-    );
-  if (dup.length > 0) {
+  if ((await findProjectByCustomerAndName(parsed.data.customer_id, name)) !== null) {
     return err("conflict", `project '${name}' already exists for this customer`);
   }
 
-  const now = new Date();
-  let inserted;
+  let new_project_id: number;
   try {
-    inserted = await db
-      .insert(project)
-      .values({
-        customer_id: parsed.data.customer_id,
-        framework_id: parsed.data.framework_id ?? null,
-        name,
-        billing_model,
-        agreed_amount_eur:
-          parsed.data.agreed_amount_eur === null ||
-          parsed.data.agreed_amount_eur === undefined
-            ? null
-            : String(parsed.data.agreed_amount_eur),
-        planned_start_date: parsed.data.planned_start_date ?? null,
-        planned_end_date: parsed.data.planned_end_date ?? null,
-        status: parsed.data.status,
-        notes: parsed.data.notes ?? null,
-        created_at: now,
-        updated_at: now,
-      })
-      .returning({ project_id: project.project_id });
+    new_project_id = await insertProject({
+      customer_id: parsed.data.customer_id,
+      framework_id: parsed.data.framework_id ?? null,
+      name,
+      billing_model,
+      agreed_amount_eur:
+        parsed.data.agreed_amount_eur === null ||
+        parsed.data.agreed_amount_eur === undefined
+          ? null
+          : String(parsed.data.agreed_amount_eur),
+      planned_start_date: parsed.data.planned_start_date ?? null,
+      planned_end_date: parsed.data.planned_end_date ?? null,
+      status: parsed.data.status,
+      notes: parsed.data.notes ?? null,
+    });
   } catch (e) {
     if (isUniqueViolation(e)) {
       return err("conflict", `could not create project (unique violation)`);
@@ -170,7 +161,7 @@ export async function createProjectAction(
     throw e;
   }
 
-  const detail = await getProjectDetail(inserted[0].project_id);
+  const detail = await getProjectDetail(new_project_id);
   if (!detail) return err("internal_error", "created project not found");
   return ok(detail);
 }
@@ -188,11 +179,8 @@ export async function updateProjectAction(
   const parsed = UpdateProjectSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const [current] = await db
-    .select({ customer_id: project.customer_id })
-    .from(project)
-    .where(eq(project.project_id, project_id));
-  if (!current) {
+  const currentCustomerId = await getProjectCustomerId(project_id);
+  if (currentCustomerId === null) {
     return err("not_found", `project not found: ${project_id}`);
   }
 
@@ -201,14 +189,11 @@ export async function updateProjectAction(
   if (parsed.data.clear_framework) {
     updates.framework_id = null;
   } else if (parsed.data.framework_id !== null && parsed.data.framework_id !== undefined) {
-    const [fwRow] = await db
-      .select({ customer_id: frameworkAgreement.customer_id })
-      .from(frameworkAgreement)
-      .where(eq(frameworkAgreement.framework_id, parsed.data.framework_id));
-    if (!fwRow) {
+    const fwCustomerId = await getFrameworkCustomerId(parsed.data.framework_id);
+    if (fwCustomerId === null) {
       return err("not_found", `framework not found: ${parsed.data.framework_id}`);
     }
-    if (fwRow.customer_id !== current.customer_id) {
+    if (fwCustomerId !== currentCustomerId) {
       return err("conflict", "framework belongs to a different customer");
     }
     updates.framework_id = parsed.data.framework_id;
@@ -233,13 +218,9 @@ export async function updateProjectAction(
     if (!d) return err("not_found", `project not found: ${project_id}`);
     return ok(d);
   }
-  updates.updated_at = new Date();
 
   try {
-    await db
-      .update(project)
-      .set(updates)
-      .where(eq(project.project_id, project_id));
+    await updateProject(project_id, updates);
   } catch (e) {
     if (isUniqueViolation(e)) {
       return err("conflict", "project name already exists for this customer");
@@ -263,54 +244,36 @@ export async function deleteProjectAction(
     return err("validation_error", `invalid project id: ${project_id}`);
   }
 
-  const [existing] = await db
-    .select({ name: project.name })
-    .from(project)
-    .where(eq(project.project_id, project_id));
-  if (!existing) {
+  const existingName = await getProjectName(project_id);
+  if (existingName === null) {
     return err("not_found", `project not found: ${project_id}`);
   }
 
-  const rates = await db
-    .select({ id: projectRate.profile })
-    .from(projectRate)
-    .where(eq(projectRate.project_id, project_id));
-  const asns = await db
-    .select({ id: assignment.assignment_id })
-    .from(assignment)
-    .where(eq(assignment.project_id, project_id));
+  const rates = await listProjectRateKeys(project_id);
+  const asns = await listProjectAssignmentIds(project_id);
 
   if ((rates.length > 0 || asns.length > 0) && !force) {
     return err(
       "has_children",
-      `project '${existing.name}' has ${rates.length} rate(s) and ${asns.length} assignment(s). Pass force=true to cascade.`,
+      `project '${existingName}' has ${rates.length} rate(s) and ${asns.length} assignment(s). Pass force=true to cascade.`,
     );
   }
 
   if (force) {
     if (asns.length > 0) {
-      await db.delete(assignment).where(eq(assignment.project_id, project_id));
+      await deleteProjectAssignments(project_id);
     }
     if (rates.length > 0) {
-      await db.delete(projectRate).where(eq(projectRate.project_id, project_id));
+      await deleteProjectRates(project_id);
     }
   }
-  await db.delete(project).where(eq(project.project_id, project_id));
+  await deleteProject(project_id);
   return ok(null);
 }
 
 // ----------------------------------------------------------------------------
 // Project rates
 // ----------------------------------------------------------------------------
-
-async function defaultProjectRateValidFrom(project_id: number): Promise<string> {
-  const [row] = await db
-    .select({ planned_start_date: project.planned_start_date })
-    .from(project)
-    .where(eq(project.project_id, project_id));
-  if (row && row.planned_start_date) return row.planned_start_date;
-  return new Date().toISOString().slice(0, 10);
-}
 
 export async function addProjectRateAction(
   project_id: number,
@@ -325,37 +288,25 @@ export async function addProjectRateAction(
   const parsed = RateCreateSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const exists = await db
-    .select({ id: project.project_id })
-    .from(project)
-    .where(eq(project.project_id, project_id));
-  if (exists.length === 0) {
+  if (!(await projectExists(project_id))) {
     return err("not_found", `project not found: ${project_id}`);
   }
 
   const profile = parsed.data.profile.trim();
   if (!profile) return err("conflict", "rate profile cannot be empty");
   const valid_from =
-    parsed.data.valid_from ?? (await defaultProjectRateValidFrom(project_id));
+    parsed.data.valid_from ??
+    (await getProjectRateDefaultValidFrom(project_id));
 
-  const dup = await db
-    .select({ existing: projectRate.daily_rate_eur })
-    .from(projectRate)
-    .where(
-      and(
-        eq(projectRate.project_id, project_id),
-        eq(projectRate.profile, profile),
-        eq(projectRate.valid_from, valid_from),
-      ),
-    );
-  if (dup.length > 0) {
+  const existing = await getProjectRate(project_id, profile, valid_from);
+  if (existing !== null) {
     return err(
       "conflict",
-      `rate for profile '${profile}' on this project effective ${valid_from} already exists (€${dup[0].existing}/day)`,
+      `rate for profile '${profile}' on this project effective ${valid_from} already exists (€${existing}/day)`,
     );
   }
 
-  await db.insert(projectRate).values({
+  await insertProjectRate({
     project_id,
     profile,
     valid_from,
@@ -387,33 +338,20 @@ export async function updateProjectRateAction(
   const parsed = RateUpdateSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const existing = await db
-    .select({ existing: projectRate.daily_rate_eur })
-    .from(projectRate)
-    .where(
-      and(
-        eq(projectRate.project_id, project_id),
-        eq(projectRate.profile, profile),
-        eq(projectRate.valid_from, valid_from),
-      ),
-    );
-  if (existing.length === 0) {
+  const existing = await getProjectRate(project_id, profile, valid_from);
+  if (existing === null) {
     return err(
       "not_found",
       `no rate for profile '${profile}' on project ${project_id} with valid_from ${valid_from}`,
     );
   }
 
-  await db
-    .update(projectRate)
-    .set({ daily_rate_eur: String(parsed.data.daily_rate_eur) })
-    .where(
-      and(
-        eq(projectRate.project_id, project_id),
-        eq(projectRate.profile, profile),
-        eq(projectRate.valid_from, valid_from),
-      ),
-    );
+  await updateProjectRateRow(
+    project_id,
+    profile,
+    valid_from,
+    String(parsed.data.daily_rate_eur),
+  );
 
   return ok({
     profile,
@@ -436,31 +374,14 @@ export async function deleteProjectRateAction(
   const auth = await requireProjectAccess(project_id);
   if (!auth.ok) return auth.result;
 
-  const existing = await db
-    .select({ existing: projectRate.daily_rate_eur })
-    .from(projectRate)
-    .where(
-      and(
-        eq(projectRate.project_id, project_id),
-        eq(projectRate.profile, profile),
-        eq(projectRate.valid_from, valid_from),
-      ),
-    );
-  if (existing.length === 0) {
+  const existing = await getProjectRate(project_id, profile, valid_from);
+  if (existing === null) {
     return err(
       "not_found",
       `no rate for profile '${profile}' on project ${project_id} with valid_from ${valid_from}`,
     );
   }
-  await db
-    .delete(projectRate)
-    .where(
-      and(
-        eq(projectRate.project_id, project_id),
-        eq(projectRate.profile, profile),
-        eq(projectRate.valid_from, valid_from),
-      ),
-    );
+  await deleteProjectRateRow(project_id, profile, valid_from);
   return ok(null);
 }
 
@@ -496,14 +417,7 @@ const MergeSchema = z.object({
   confirm: z.literal(true),
 });
 
-export type MergeProjectsResult = {
-  target_project_id: number;
-  moved_assignments: number;
-  moved_rates: number;
-  dropped_rates: number; // rates on source that conflicted with target's
-  moved_personio_links: number;
-  moved_awork_links: number;
-};
+export type MergeProjectsResult = QueryMergeProjectsResult;
 
 export async function mergeProjectsAction(
   input: unknown,
@@ -519,86 +433,15 @@ export async function mergeProjectsAction(
     return err("validation_error", "Source and target must differ.");
   }
 
-  // Pre-flight outside the transaction so the not-found error path doesn't
-  // have to fight Drizzle's transaction callback typing.
-  const both = await db
-    .select({ id: project.project_id })
-    .from(project)
-    .where(inArray(project.project_id, [source_project_id, target_project_id]));
-  if (both.length !== 2) {
+  const preflight = await preflightMergeProjects(
+    source_project_id,
+    target_project_id,
+  );
+  if (!preflight.ok) {
     return err("not_found", "Source or target project not found.");
   }
 
-  const result = await db.transaction(async (tx) => {
-    // Drop conflicting rate rows on the source — source loses, target keeps.
-    const conflicting = await tx
-      .select({ profile: projectRate.profile, valid_from: projectRate.valid_from })
-      .from(projectRate)
-      .where(eq(projectRate.project_id, source_project_id));
-    let dropped_rates = 0;
-    if (conflicting.length > 0) {
-      const targetRates = await tx
-        .select({ profile: projectRate.profile, valid_from: projectRate.valid_from })
-        .from(projectRate)
-        .where(eq(projectRate.project_id, target_project_id));
-      const targetKeys = new Set(targetRates.map((r) => `${r.profile}|${r.valid_from}`));
-      const dropKeys = conflicting
-        .filter((r) => targetKeys.has(`${r.profile}|${r.valid_from}`))
-        .map((r) => `${r.profile}|${r.valid_from}`);
-      for (const key of dropKeys) {
-        const [profile, valid_from] = key.split("|");
-        await tx
-          .delete(projectRate)
-          .where(
-            and(
-              eq(projectRate.project_id, source_project_id),
-              eq(projectRate.profile, profile),
-              eq(projectRate.valid_from, valid_from),
-            ),
-          );
-        dropped_rates += 1;
-      }
-    }
-
-    // Move the rest of the rates.
-    const movedRates = await tx
-      .update(projectRate)
-      .set({ project_id: target_project_id })
-      .where(eq(projectRate.project_id, source_project_id))
-      .returning({ profile: projectRate.profile });
-
-    // Move assignments (no UNIQUE on project_id, no conflict possible).
-    const movedAssignments = await tx
-      .update(assignment)
-      .set({ project_id: target_project_id })
-      .where(eq(assignment.project_id, source_project_id))
-      .returning({ id: assignment.assignment_id });
-
-    // Move Personio + awork link rows (PK is the upstream id, not project_id).
-    const movedPersonio = await tx
-      .update(personioProjectLink)
-      .set({ project_id: target_project_id })
-      .where(eq(personioProjectLink.project_id, source_project_id))
-      .returning({ id: personioProjectLink.personio_project_id });
-
-    const movedAwork = await tx
-      .update(aworkProjectLink)
-      .set({ project_id: target_project_id })
-      .where(eq(aworkProjectLink.project_id, source_project_id))
-      .returning({ id: aworkProjectLink.awork_project_id });
-
-    // Drop the now-orphaned source project.
-    await tx.delete(project).where(eq(project.project_id, source_project_id));
-
-    return {
-      target_project_id,
-      moved_assignments: movedAssignments.length,
-      moved_rates: movedRates.length,
-      dropped_rates,
-      moved_personio_links: movedPersonio.length,
-      moved_awork_links: movedAwork.length,
-    } satisfies MergeProjectsResult;
-  });
+  const result = await mergeProjects(source_project_id, target_project_id);
 
   await audit(auth.ctx, {
     action: "project_merged",
@@ -637,32 +480,24 @@ export async function grantProjectSdmAction(
   // Sanity: both must exist. Granting on a deleted/missing target is a
   // foot-gun even though the FK would catch it — the error message is
   // friendlier here.
-  const [proj] = await db
-    .select({ id: project.project_id })
-    .from(project)
-    .where(eq(project.project_id, project_id));
-  if (!proj) return err("not_found", `project not found: ${project_id}`);
+  if (!(await projectExists(project_id))) {
+    return err("not_found", `project not found: ${project_id}`);
+  }
 
-  const [user] = await db
-    .select({ id: appUser.user_id, role: appUser.role })
-    .from(appUser)
-    .where(eq(appUser.user_id, user_id));
-  if (!user) return err("not_found", `user not found: ${user_id}`);
-  if (user.role !== "employee") {
+  const role = await getAppUserRole(user_id);
+  if (role === null) return err("not_found", `user not found: ${user_id}`);
+  if (role !== "employee") {
     return err(
       "validation_error",
       "Only employee-role users need SDM grants — admin/manager already have project access.",
     );
   }
 
-  await db
-    .insert(projectSdm)
-    .values({
-      project_id,
-      user_id,
-      granted_by: auth.ctx.user_id,
-    })
-    .onConflictDoNothing();
+  await insertProjectSdm({
+    project_id,
+    user_id,
+    granted_by: auth.ctx.user_id,
+  });
 
   await audit(auth.ctx, {
     action: "project_sdm_granted",
@@ -683,14 +518,7 @@ export async function revokeProjectSdmAction(
   if (!parsed.success) return fromZod(parsed.error);
   const { project_id, user_id } = parsed.data;
 
-  await db
-    .delete(projectSdm)
-    .where(
-      and(
-        eq(projectSdm.project_id, project_id),
-        eq(projectSdm.user_id, user_id),
-      ),
-    );
+  await deleteProjectSdm(project_id, user_id);
 
   await audit(auth.ctx, {
     action: "project_sdm_revoked",

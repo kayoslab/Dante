@@ -1,7 +1,16 @@
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "../client";
-import { customer, frameworkAgreement, project } from "../schema";
+import {
+  assignment,
+  aworkCompany,
+  aworkCompanyLink,
+  customer,
+  frameworkAgreement,
+  frameworkRate,
+  project,
+  projectRate,
+} from "../schema";
 
 export type CustomerDetail = {
   customer_id: number;
@@ -70,4 +79,225 @@ export async function getCustomerDetail(
     frameworks,
     projects,
   };
+}
+
+export type CustomerAworkLinkRow = {
+  awork_company_id: unknown;
+  name: unknown;
+  is_external: unknown;
+  projects_count: unknown;
+  projects_in_progress_count: unknown;
+  mapped_to_customer_id: number;
+  mapped_to_customer_name: null;
+};
+
+export async function getCustomerAworkLink(
+  customer_id: number,
+): Promise<CustomerAworkLinkRow | null> {
+  const r = await db.execute(sql`
+    SELECT aco.awork_company_id, aco.name, aco.is_external,
+           aco.projects_count, aco.projects_in_progress_count
+    FROM awork_company_link link
+    JOIN awork_company aco
+      ON aco.awork_company_id = link.awork_company_id
+    WHERE link.customer_id = ${customer_id}
+  `);
+  const row = (r.rows as Array<Record<string, unknown>>)[0];
+  if (!row) return null;
+  return {
+    awork_company_id: row.awork_company_id,
+    name: row.name,
+    is_external: row.is_external,
+    projects_count: row.projects_count,
+    projects_in_progress_count: row.projects_in_progress_count,
+    mapped_to_customer_id: customer_id,
+    mapped_to_customer_name: null,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Mutations — used by `lib/actions/customer.ts`.
+// ----------------------------------------------------------------------------
+
+/** Lookup an existing customer by exact name. Returns the matching
+ * `customer_id` or `null`. Used by `createCustomerAction` to short-circuit
+ * a duplicate insert with a friendlier conflict message than the
+ * Postgres unique-violation. */
+export async function findCustomerIdByName(
+  name: string,
+): Promise<number | null> {
+  const rows = await db
+    .select({ id: customer.customer_id })
+    .from(customer)
+    .where(eq(customer.name, name));
+  return rows[0]?.id ?? null;
+}
+
+/** Existence probe for a `customer_id`. */
+export async function customerExists(customer_id: number): Promise<boolean> {
+  const rows = await db
+    .select({ id: customer.customer_id })
+    .from(customer)
+    .where(eq(customer.customer_id, customer_id));
+  return rows.length > 0;
+}
+
+/** Fetch a customer's name without the full detail payload — used to
+ * compose the cascade-delete error message. Returns `null` when missing. */
+export async function getCustomerName(
+  customer_id: number,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ name: customer.name })
+    .from(customer)
+    .where(eq(customer.customer_id, customer_id));
+  return row?.name ?? null;
+}
+
+/** Insert a fresh customer; returns the newly minted `customer_id`. */
+export async function insertCustomer(args: {
+  name: string;
+  notes: string | null;
+}): Promise<number> {
+  const now = new Date();
+  const [row] = await db
+    .insert(customer)
+    .values({
+      name: args.name,
+      notes: args.notes,
+      created_at: now,
+      updated_at: now,
+    })
+    .returning({ customer_id: customer.customer_id });
+  return row.customer_id;
+}
+
+/** Apply a partial update; caller composes the `updates` dict so we keep
+ * the "only-touched-fields" semantics from the action. `updated_at` is
+ * stamped here so callers can't forget it. */
+export async function updateCustomer(
+  customer_id: number,
+  updates: Record<string, unknown>,
+): Promise<void> {
+  await db
+    .update(customer)
+    .set({ ...updates, updated_at: new Date() })
+    .where(eq(customer.customer_id, customer_id));
+}
+
+/** Count of frameworks + projects linked to a customer — used by the
+ * cascade-delete guard to decide whether to require `force=true`. */
+export async function countCustomerChildren(
+  customer_id: number,
+): Promise<{ n_fw: number; n_pr: number }> {
+  const [row] = await db
+    .select({
+      n_fw: sql<number>`(SELECT COUNT(*)::int FROM ${frameworkAgreement} WHERE ${frameworkAgreement.customer_id} = ${customer_id})`,
+      n_pr: sql<number>`(SELECT COUNT(*)::int FROM ${project} WHERE ${project.customer_id} = ${customer_id})`,
+    })
+    .from(sql`(SELECT 1) AS dummy`);
+  return { n_fw: Number(row.n_fw), n_pr: Number(row.n_pr) };
+}
+
+/** Cascade-remove every dependent row for a customer (assignments,
+ * project rates, projects, framework rates, frameworks) and finally
+ * the customer row itself. Order matches the FK chain so the final
+ * `customer` delete sees no children.
+ *
+ * Called only when the action has already determined the caller passed
+ * `force=true` (or no children exist), so this function does no
+ * additional gating. */
+export async function deleteCustomerCascading(
+  customer_id: number,
+  force: boolean,
+): Promise<void> {
+  if (force) {
+    // Order: assignments → project_rate → project → framework_rate → framework → customer
+    const projectIds = (
+      await db
+        .select({ id: project.project_id })
+        .from(project)
+        .where(eq(project.customer_id, customer_id))
+    ).map((p) => p.id);
+    if (projectIds.length > 0) {
+      await db
+        .delete(assignment)
+        .where(inArray(assignment.project_id, projectIds));
+      await db
+        .delete(projectRate)
+        .where(inArray(projectRate.project_id, projectIds));
+      await db.delete(project).where(eq(project.customer_id, customer_id));
+    }
+    const fwIds = (
+      await db
+        .select({ id: frameworkAgreement.framework_id })
+        .from(frameworkAgreement)
+        .where(eq(frameworkAgreement.customer_id, customer_id))
+    ).map((f) => f.id);
+    if (fwIds.length > 0) {
+      await db
+        .delete(frameworkRate)
+        .where(inArray(frameworkRate.framework_id, fwIds));
+      await db
+        .delete(frameworkAgreement)
+        .where(eq(frameworkAgreement.customer_id, customer_id));
+    }
+  }
+
+  await db.delete(customer).where(eq(customer.customer_id, customer_id));
+}
+
+// ----------------------------------------------------------------------------
+// awork_company_link write-side helpers.
+// ----------------------------------------------------------------------------
+
+/** Look up an awork company's name — `null` when the upstream awork
+ * company row does not exist. */
+export async function getAworkCompanyName(
+  awork_company_id: string,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ name: aworkCompany.name })
+    .from(aworkCompany)
+    .where(eq(aworkCompany.awork_company_id, awork_company_id));
+  return row?.name ?? null;
+}
+
+/** Is this awork company already linked? Returns the linked
+ * `customer_id` or `null`. */
+export async function getAworkCompanyLinkCustomerId(
+  awork_company_id: string,
+): Promise<number | null> {
+  const [row] = await db
+    .select({ customer_id: aworkCompanyLink.customer_id })
+    .from(aworkCompanyLink)
+    .where(eq(aworkCompanyLink.awork_company_id, awork_company_id));
+  return row?.customer_id ?? null;
+}
+
+export async function insertAworkCompanyLink(input: {
+  awork_company_id: string;
+  customer_id: number;
+}): Promise<void> {
+  await db.insert(aworkCompanyLink).values({
+    awork_company_id: input.awork_company_id,
+    customer_id: input.customer_id,
+    mapped_at: new Date(),
+  });
+}
+
+export async function deleteAworkCompanyLink(
+  customer_id: number,
+  awork_company_id: string,
+): Promise<number> {
+  const rows = await db
+    .delete(aworkCompanyLink)
+    .where(
+      and(
+        eq(aworkCompanyLink.awork_company_id, awork_company_id),
+        eq(aworkCompanyLink.customer_id, customer_id),
+      ),
+    )
+    .returning({ id: aworkCompanyLink.awork_company_id });
+  return rows.length;
 }

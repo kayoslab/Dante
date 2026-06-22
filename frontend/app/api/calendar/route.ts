@@ -1,12 +1,17 @@
-import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
-import { db } from "@/lib/db/client";
 import {
   germanFederalHolidays,
   germanHolidaysForState,
   stateCodeForOffice,
 } from "@/lib/db/_de-holidays";
+import {
+  listCalendarAbsences,
+  listCalendarAssignments,
+  listCalendarEmployees,
+  listCalendarPlannedBookings,
+  listCalendarTrackedTime,
+} from "@/lib/db/queries/calendar";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 import {
@@ -95,50 +100,22 @@ export async function GET(req: NextRequest) {
     });
 
     // 2) Employees visible on the grid
-    const contribFilter = include_non_contributing
-      ? sql``
-      : sql` AND COALESCE(a.is_project_contributing, TRUE) = TRUE`;
-    const empRes = await db.execute(sql`
-      SELECT ec.employee_id, ec.first_name, ec.last_name,
-             CASE WHEN ec.weekly_working_hours IS NULL OR ec.weekly_working_hours = 0
-                  THEN NULL
-                  ELSE CAST(ec.weekly_working_hours / 40.0 AS NUMERIC(5, 3))
-             END AS fte,
-             a.team_user,
-             rt.role_tier,
-             ec.office,
-             ec.hire_date,
-             LEAST(
-                 COALESCE(ec.contract_end_date, DATE '9999-12-31'),
-                 COALESCE(ec.employment_end_date, DATE '9999-12-31')
-             ) AS effective_end_date
-      FROM employee_current ec
-      LEFT JOIN employee_annotation a ON a.employee_id = ec.employee_id
-      LEFT JOIN employee_role_tier rt ON rt.employee_id = ec.employee_id
-      WHERE ec.status = 'active'
-        AND COALESCE(a.is_real_employee, TRUE) = TRUE
-        AND (ec.hire_date IS NULL OR ec.hire_date <= ${end}::date)
-        AND LEAST(
-            COALESCE(ec.contract_end_date, DATE '9999-12-31'),
-            COALESCE(ec.employment_end_date, DATE '9999-12-31')
-        ) >= ${start}::date
-        ${contribFilter}
-      ORDER BY a.team_user NULLS LAST, ec.last_name, ec.first_name
-    `);
+    const empRows = await listCalendarEmployees({
+      start,
+      end,
+      include_non_contributing,
+    });
 
     const employeeIds = new Set<number>();
     // Per-employee state code for local-holiday lookups below. Stored
     // separately from the public response so we don't leak office strings
     // unnecessarily — the UI only needs the rendered holiday name.
     const employeeStateCode = new Map<number, string | null>();
-    const employees = (empRes.rows as Array<Record<string, unknown>>).map((r) => {
-      const empId = r.employee_id as number;
+    const employees = empRows.map((r) => {
+      const empId = r.employee_id;
       employeeIds.add(empId);
-      employeeStateCode.set(
-        empId,
-        stateCodeForOffice(r.office as string | null),
-      );
-      const endIso = r.effective_end_date as string | null;
+      employeeStateCode.set(empId, stateCodeForOffice(r.office));
+      const endIso = r.effective_end_date;
       // Strip HR-sensitive fields for non-managers (contract end date,
       // hire date, role tier). FTE + team stay visible because they
       // drive useful "who's available right now" signals that the
@@ -147,7 +124,7 @@ export async function GET(req: NextRequest) {
         employee_id: r.employee_id,
         first_name: r.first_name,
         last_name: r.last_name,
-        fte: r.fte === null || r.fte === undefined ? null : Number(r.fte),
+        fte: r.fte,
         team: r.team_user,
         role_tier: isManagerOrAdmin ? r.role_tier : null,
         hire_date: isManagerOrAdmin ? r.hire_date : null,
@@ -182,75 +159,10 @@ export async function GET(req: NextRequest) {
     }
 
     // 3) Assignment day-expansion
-    const asnRes = await db.execute(sql`
-      WITH date_range AS (
-        SELECT generate_series(${start}::date, ${end}::date, '1 day'::interval)::date AS day
-      )
-      SELECT
-        a.employee_id,
-        d.day,
-        a.assignment_id,
-        a.project_id,
-        CAST(a.allocation_pct AS double precision) AS allocation_pct,
-        c.name AS customer_name,
-        p.name AS project_name,
-        COALESCE(a.profile, rt.role_tier) AS profile,
-        aer.effective_daily_rate_eur
-      FROM assignment a
-      CROSS JOIN date_range d
-      JOIN project p ON p.project_id = a.project_id
-      JOIN customer c ON c.customer_id = p.customer_id
-      LEFT JOIN employee_role_tier rt ON rt.employee_id = a.employee_id
-      LEFT JOIN assignment_effective_rate aer ON aer.assignment_id = a.assignment_id
-      WHERE a.employee_id IS NOT NULL
-        AND a.source = 'manual'
-        AND a.start_date <= d.day
-        AND (a.end_date IS NULL OR a.end_date >= d.day)
-    `);
+    const asnRows = await listCalendarAssignments({ start, end });
 
     // 4) Tracked time (Personio + awork)
-    const trkRes = await db.execute(sql`
-      WITH personio AS (
-        SELECT a.employee_id, a.work_date,
-               COALESCE(pp.name, 'Untagged') AS project_name,
-               SUM(a.duration_minutes) AS minutes,
-               'personio' AS source
-        FROM attendance a
-        LEFT JOIN personio_project pp ON pp.personio_project_id = a.project_id
-        WHERE a.work_date BETWEEN ${start}::date AND ${end}::date
-        GROUP BY a.employee_id, a.work_date, pp.name
-      ),
-      awork AS (
-        SELECT ul.employee_id, t.work_date,
-               COALESCE(ap.name, 'Untagged') AS project_name,
-               -- Dante project_id when the awork project is mapped to a
-               -- Dante project (used to merge with manual assignment
-               -- allocations at the load-calculation step). NULL when
-               -- the awork project isn't linked.
-               apl.project_id AS dante_project_id,
-               t.awork_project_id,
-               SUM(t.duration_minutes) AS minutes,
-               'awork' AS source
-        FROM awork_time_entry t
-        JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-        LEFT JOIN awork_project ap ON ap.awork_project_id = t.awork_project_id
-        LEFT JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-        WHERE t.work_date BETWEEN ${start}::date AND ${end}::date
-        GROUP BY ul.employee_id, t.work_date, ap.name, apl.project_id, t.awork_project_id
-      )
-      SELECT employee_id, work_date, project_name, minutes, source,
-             dante_project_id, awork_project_id
-      FROM (
-        SELECT employee_id, work_date, project_name, minutes, source,
-               NULL::integer AS dante_project_id, NULL::text AS awork_project_id
-        FROM personio
-        UNION ALL
-        SELECT employee_id, work_date, project_name, minutes, source,
-               dante_project_id, awork_project_id
-        FROM awork
-      ) u
-      ORDER BY employee_id, work_date
-    `);
+    const trkRows = await listCalendarTrackedTime({ start, end });
 
     // 4b) Per-day planned breakdown for the tooltip. The same data
     // already feeds `assignment.allocation_pct` via the sync rollup
@@ -259,45 +171,10 @@ export async function GET(req: NextRequest) {
     // surface that separately. Divisor uses the FULL booking range
     // (not the calendar window) so a booking that straddles the
     // window's edge doesn't inflate the visible days' share.
-    const plnRes = await db.execute(sql`
-      SELECT
-        ul.employee_id,
-        d::date AS day,
-        COALESCE(ap.name, 'Untagged') AS project_name,
-        apl.project_id AS dante_project_id,
-        tb.awork_project_id,
-        tb.duration_seconds * 1.0 / GREATEST(
-          (
-            SELECT COUNT(*)
-            FROM generate_series(tb.start_date, tb.end_date, '1 day'::interval) gd
-            WHERE EXTRACT(DOW FROM gd) NOT IN (0, 6)
-          ),
-          1
-        ) AS per_day_seconds
-      FROM awork_time_booking tb
-      JOIN awork_user_link ul ON ul.awork_user_id = tb.awork_user_id
-      LEFT JOIN awork_project ap ON ap.awork_project_id = tb.awork_project_id
-      LEFT JOIN awork_project_link apl ON apl.awork_project_id = tb.awork_project_id
-      CROSS JOIN LATERAL generate_series(
-        GREATEST(tb.start_date, ${start}::date),
-        LEAST(tb.end_date, ${end}::date),
-        '1 day'::interval
-      ) d
-      WHERE EXTRACT(DOW FROM d) NOT IN (0, 6)
-        AND tb.end_date >= ${start}::date
-        AND tb.start_date <= ${end}::date
-    `);
+    const plnRows = await listCalendarPlannedBookings({ start, end });
 
     // 5) Vacations
-    const vacRes = await db.execute(sql`
-      WITH date_range AS (
-        SELECT generate_series(${start}::date, ${end}::date, '1 day'::interval)::date AS day
-      )
-      SELECT abs.employee_id, d.day, abs.time_off_type
-      FROM absence abs
-      CROSS JOIN date_range d
-      WHERE d.day BETWEEN abs.start_date AND abs.end_date
-    `);
+    const vacRows = await listCalendarAbsences({ start, end });
 
     // 6) Aggregate into cells
     type Cell = {
@@ -387,36 +264,31 @@ export async function GET(req: NextRequest) {
       return b;
     };
 
-    for (const raw of asnRes.rows as Array<Record<string, unknown>>) {
-      const emp_id = raw.employee_id as number;
+    for (const raw of asnRows) {
+      const emp_id = raw.employee_id;
       if (!employeeIds.has(emp_id)) continue;
-      const c = cellFor(emp_id, raw.day as string);
-      const alloc = Number(raw.allocation_pct);
+      const c = cellFor(emp_id, raw.day);
+      const alloc = raw.allocation_pct;
       c.allocation_pct += alloc;
-      getBucket(c, bucketKey(raw.project_id as number)).manual += alloc;
+      getBucket(c, bucketKey(raw.project_id)).manual += alloc;
       // Daily rate is commercial-confidential — surface to managers/admins
       // only. Customer + project names stay visible so an employee can
       // tell who's working on what (useful for cross-team awareness).
       c.assignments.push({
-        assignment_id: raw.assignment_id as number,
-        customer_name: raw.customer_name as string,
-        project_name: raw.project_name as string,
-        profile: (raw.profile as string | null) ?? null,
+        assignment_id: raw.assignment_id,
+        customer_name: raw.customer_name,
+        project_name: raw.project_name,
+        profile: raw.profile,
         allocation_pct: alloc.toFixed(4),
-        daily_rate_eur: isManagerOrAdmin
-          ? raw.effective_daily_rate_eur === null ||
-            raw.effective_daily_rate_eur === undefined
-            ? null
-            : String(raw.effective_daily_rate_eur)
-          : null,
+        daily_rate_eur: isManagerOrAdmin ? raw.effective_daily_rate_eur : null,
       });
     }
 
-    for (const raw of trkRes.rows as Array<Record<string, unknown>>) {
-      const emp_id = raw.employee_id as number | null;
+    for (const raw of trkRows) {
+      const emp_id = raw.employee_id;
       if (emp_id === null || !employeeIds.has(emp_id)) continue;
-      const c = cellFor(emp_id, raw.work_date as string);
-      const mins = Number(raw.minutes ?? 0);
+      const c = cellFor(emp_id, raw.work_date);
+      const mins = raw.minutes;
       if (raw.source === "personio") {
         c.personio_minutes_raw += mins;
       } else {
@@ -425,16 +297,13 @@ export async function GET(req: NextRequest) {
         // the project level. Personio is intentionally excluded — it
         // backs the corner number, not the color signal.
         c.awork_minutes_raw += mins;
-        const key = bucketKey(
-          raw.dante_project_id as number | null,
-          raw.awork_project_id as string | null,
-        );
+        const key = bucketKey(raw.dante_project_id, raw.awork_project_id);
         getBucket(c, key).awork_tracked_h += mins / 60;
       }
       c.tracked_entries.push({
-        project_name: raw.project_name as string,
+        project_name: raw.project_name,
         hours: bankerHours(mins),
-        source: raw.source as string,
+        source: raw.source,
       });
     }
 
@@ -443,17 +312,14 @@ export async function GET(req: NextRequest) {
     // map collapses multiple bookings on the same project into one
     // entry; flushed to the array below after the loop.
     const plannedSeen = new Map<Cell, Map<string, number>>();
-    for (const raw of plnRes.rows as Array<Record<string, unknown>>) {
-      const emp_id = raw.employee_id as number | null;
+    for (const raw of plnRows) {
+      const emp_id = raw.employee_id;
       if (emp_id === null || !employeeIds.has(emp_id)) continue;
-      const c = cellFor(emp_id, raw.day as string);
-      const sec = Number(raw.per_day_seconds ?? 0);
-      const bkey = bucketKey(
-        raw.dante_project_id as number | null,
-        raw.awork_project_id as string | null,
-      );
+      const c = cellFor(emp_id, raw.day);
+      const sec = raw.per_day_seconds;
+      const bkey = bucketKey(raw.dante_project_id, raw.awork_project_id);
       getBucket(c, bkey).planned_h += sec / 3600;
-      const nameKey = raw.project_name as string;
+      const nameKey = raw.project_name;
       let perCell = plannedSeen.get(c);
       if (!perCell) {
         perCell = new Map();
@@ -470,10 +336,10 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    for (const raw of vacRes.rows as Array<Record<string, unknown>>) {
-      const emp_id = raw.employee_id as number;
+    for (const raw of vacRows) {
+      const emp_id = raw.employee_id;
       if (!employeeIds.has(emp_id)) continue;
-      const c = cellFor(emp_id, raw.day as string);
+      const c = cellFor(emp_id, raw.day);
       c.on_vacation = true;
       // Managers and admins are allowed to see the specific absence
       // type — they need it for planning ("X is on sick leave so we
@@ -484,7 +350,7 @@ export async function GET(req: NextRequest) {
       // managers; employees should ask Personio if they need detail.
       if (c.vacation_type === null) {
         c.vacation_type = isManagerOrAdmin
-          ? ((raw.time_off_type as string | null) ?? "absence")
+          ? (raw.time_off_type ?? "absence")
           : "absence";
       }
     }

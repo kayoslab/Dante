@@ -14,17 +14,23 @@
  * These call into the existing Phase C actions so all the same validation
  * (unique-name, billing model aliases, FP requires amount) applies.
  */
-import { eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/lib/db/client";
+import { getAworkProjectImportContext } from "@/lib/db/queries/awork";
 import {
-  aworkCompany,
-  aworkCompanyLink,
-  aworkProject,
-  aworkProjectLink,
-  project,
-} from "@/lib/db/schema";
+  getAworkCompanyName,
+  getAworkCompanyLinkCustomerId,
+  getCustomerDetail,
+  insertAworkCompanyLink,
+  type CustomerDetail,
+} from "@/lib/db/queries/customer";
+import {
+  getAworkProjectLinkProjectId,
+  getProjectDetail,
+  insertAworkProjectLink,
+  setProjectTimeBudgetHours,
+  type ProjectDetail,
+} from "@/lib/db/queries/project";
 
 import {
   err,
@@ -35,14 +41,6 @@ import {
 } from "./_action-helpers";
 import { createCustomerAction } from "./customer";
 import { createProjectAction } from "./project";
-import {
-  getCustomerDetail,
-  type CustomerDetail,
-} from "@/lib/db/queries/customer";
-import {
-  getProjectDetail,
-  type ProjectDetail,
-} from "@/lib/db/queries/project";
 
 // ----------------------------------------------------------------------------
 // import_customer_from_awork
@@ -63,26 +61,20 @@ export async function importCustomerFromAworkAction(
   if (!parsed.success) return fromZod(parsed.error);
   const { awork_company_id, name_override } = parsed.data;
 
-  const [co] = await db
-    .select({ name: aworkCompany.name })
-    .from(aworkCompany)
-    .where(eq(aworkCompany.awork_company_id, awork_company_id));
-  if (!co) {
+  const co_name = await getAworkCompanyName(awork_company_id);
+  if (co_name === null) {
     return err("not_found", `awork company not found: ${awork_company_id}`);
   }
 
-  const existingLink = await db
-    .select({ customer_id: aworkCompanyLink.customer_id })
-    .from(aworkCompanyLink)
-    .where(eq(aworkCompanyLink.awork_company_id, awork_company_id));
-  if (existingLink.length > 0) {
+  const existingCustomerId = await getAworkCompanyLinkCustomerId(awork_company_id);
+  if (existingCustomerId !== null) {
     return err(
       "conflict",
-      `awork company already linked to customer ${existingLink[0].customer_id}; unlink first if you want to re-import`,
+      `awork company already linked to customer ${existingCustomerId}; unlink first if you want to re-import`,
     );
   }
 
-  const name = (name_override ?? co.name ?? "").trim();
+  const name = (name_override ?? co_name ?? "").trim();
   if (!name) {
     return err(
       "validation_error",
@@ -93,10 +85,9 @@ export async function importCustomerFromAworkAction(
   const created = await createCustomerAction({ name, notes: null });
   if (!created.ok) return created;
 
-  await db.insert(aworkCompanyLink).values({
+  await insertAworkCompanyLink({
     awork_company_id,
     customer_id: created.data.customer_id,
-    mapped_at: new Date(),
   });
 
   // Re-fetch the customer detail so any timing-sensitive fields land fresh.
@@ -154,36 +145,16 @@ export async function importProjectFromAworkAction(
   } = parsed.data;
 
   // Pull the awork side AND the company → customer link in one go.
-  const [row] = await db
-    .select({
-      ap_name: aworkProject.name,
-      ap_company_id: aworkProject.awork_company_id,
-      ap_start: aworkProject.start_date,
-      ap_due: aworkProject.due_date,
-      ap_closed: aworkProject.closed_on,
-      ap_time_budget_sec: aworkProject.time_budget_seconds,
-      ap_status_type: aworkProject.project_status_type,
-      ap_description: aworkProject.description,
-      linked_customer_id: aworkCompanyLink.customer_id,
-    })
-    .from(aworkProject)
-    .leftJoin(
-      aworkCompanyLink,
-      eq(aworkCompanyLink.awork_company_id, aworkProject.awork_company_id),
-    )
-    .where(eq(aworkProject.awork_project_id, awork_project_id));
+  const row = await getAworkProjectImportContext(awork_project_id);
   if (!row) {
     return err("not_found", `awork project not found: ${awork_project_id}`);
   }
 
-  const existing = await db
-    .select({ project_id: aworkProjectLink.project_id })
-    .from(aworkProjectLink)
-    .where(eq(aworkProjectLink.awork_project_id, awork_project_id));
-  if (existing.length > 0) {
+  const existingProjectId = await getAworkProjectLinkProjectId(awork_project_id);
+  if (existingProjectId !== null) {
     return err(
       "conflict",
-      `awork project already linked to project ${existing[0].project_id}`,
+      `awork project already linked to project ${existingProjectId}`,
     );
   }
 
@@ -215,7 +186,7 @@ export async function importProjectFromAworkAction(
   if (row.ap_status_type === "closed") our_status = "completed";
   else if (row.ap_status_type === "archived") our_status = "cancelled";
 
-  const notes = stripHtml((row.ap_description as string | null) ?? null);
+  const notes = stripHtml(row.ap_description ?? null);
 
   const created = await createProjectAction({
     customer_id,
@@ -233,18 +204,15 @@ export async function importProjectFromAworkAction(
   // time_budget_hours doesn't go through createProjectAction (it's a
   // Phase B.4 addition). Patch it inline after create.
   if (row.ap_time_budget_sec !== null && row.ap_time_budget_sec !== undefined) {
-    await db
-      .update(project)
-      .set({
-        time_budget_hours: Math.floor(Number(row.ap_time_budget_sec) / 3600),
-      })
-      .where(eq(project.project_id, created.data.project_id));
+    await setProjectTimeBudgetHours(
+      created.data.project_id,
+      Math.floor(Number(row.ap_time_budget_sec) / 3600),
+    );
   }
 
-  await db.insert(aworkProjectLink).values({
+  await insertAworkProjectLink({
     awork_project_id,
     project_id: created.data.project_id,
-    mapped_at: new Date(),
   });
 
   // Note: also bind the awork-imported project to a closed (=ended)

@@ -12,12 +12,14 @@
  *
  * Authorization: `requireProjectAccess` — admins/managers always pass,
  * SDMs pass if they have a grant on the project's id. */
-import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { audit } from "@/lib/auth/audit";
-import { db } from "@/lib/db/client";
-import { assignment, freelancerTimeEntry } from "@/lib/db/schema";
+import {
+  deleteFreelancerHours,
+  getFreelancerAssignmentMeta,
+  upsertFreelancerHours,
+} from "@/lib/db/queries/freelancer-hours";
 import { requireProjectAccess } from "@/lib/auth/project-capability";
 
 import {
@@ -45,25 +47,6 @@ const DeleteHoursSchema = z.object({
     .regex(/^\d{4}-(0[1-9]|1[0-2])$/, "year_month must be YYYY-MM"),
 });
 
-type FreelancerAssignmentMeta = {
-  project_id: number;
-  freelancer_id: number | null;
-};
-
-async function loadAssignmentMeta(
-  assignment_id: number,
-): Promise<FreelancerAssignmentMeta | null> {
-  const [row] = await db
-    .select({
-      project_id: assignment.project_id,
-      freelancer_id: assignment.freelancer_id,
-    })
-    .from(assignment)
-    .where(eq(assignment.assignment_id, assignment_id))
-    .limit(1);
-  return row ?? null;
-}
-
 export async function setFreelancerHoursAction(
   input: unknown,
 ): Promise<ActionResult<null>> {
@@ -71,7 +54,7 @@ export async function setFreelancerHoursAction(
   if (!parsed.success) return fromZod(parsed.error);
   const { assignment_id, year_month, hours_decimal } = parsed.data;
 
-  const meta = await loadAssignmentMeta(assignment_id);
+  const meta = await getFreelancerAssignmentMeta(assignment_id);
   if (!meta) return err("not_found", `assignment not found: ${assignment_id}`);
   if (meta.freelancer_id === null) {
     return err(
@@ -83,24 +66,12 @@ export async function setFreelancerHoursAction(
   if (!auth.ok) return auth.result;
 
   // Manual writes always override (including overriding awork-sourced rows).
-  await db
-    .insert(freelancerTimeEntry)
-    .values({
-      assignment_id,
-      year_month,
-      hours_decimal: String(hours_decimal),
-      source: "manual",
-      entered_by: auth.ctx.user_id,
-    })
-    .onConflictDoUpdate({
-      target: [freelancerTimeEntry.assignment_id, freelancerTimeEntry.year_month],
-      set: {
-        hours_decimal: String(hours_decimal),
-        source: "manual",
-        entered_by: auth.ctx.user_id,
-        entered_at: new Date(),
-      },
-    });
+  await upsertFreelancerHours({
+    assignment_id,
+    year_month,
+    hours_decimal,
+    entered_by: auth.ctx.user_id,
+  });
 
   await audit(auth.ctx, {
     action: "freelancer_hours_set",
@@ -118,7 +89,7 @@ export async function deleteFreelancerHoursAction(
   if (!parsed.success) return fromZod(parsed.error);
   const { assignment_id, year_month } = parsed.data;
 
-  const meta = await loadAssignmentMeta(assignment_id);
+  const meta = await getFreelancerAssignmentMeta(assignment_id);
   if (!meta) return err("not_found", `assignment not found: ${assignment_id}`);
   if (meta.freelancer_id === null) {
     return err(
@@ -129,14 +100,7 @@ export async function deleteFreelancerHoursAction(
   const auth = await requireProjectAccess(meta.project_id);
   if (!auth.ok) return auth.result;
 
-  await db
-    .delete(freelancerTimeEntry)
-    .where(
-      and(
-        eq(freelancerTimeEntry.assignment_id, assignment_id),
-        eq(freelancerTimeEntry.year_month, year_month),
-      ),
-    );
+  await deleteFreelancerHours({ assignment_id, year_month });
 
   await audit(auth.ctx, {
     action: "freelancer_hours_cleared",

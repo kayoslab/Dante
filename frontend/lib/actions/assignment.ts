@@ -18,22 +18,31 @@
  *   * estimate uses FTE-aware revenue (40h baseline) and applies burden_factor
  *     to employee cost only (freelancers bill direct)
  */
-import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/lib/db/client";
 import {
+  deleteAssignment,
   getAssignmentDetail,
+  getAssignmentProjectId,
+  getAssignmentSource,
+  getAssignmentStartDate,
+  insertAssignment,
+  setAssignmentEndDate,
+  updateAssignment,
   type AssignmentDetail,
 } from "@/lib/db/queries/assignment";
+import { employeeExists } from "@/lib/db/queries/employee-annotation";
+import { freelancerExists } from "@/lib/db/queries/freelancer";
+import { projectExists } from "@/lib/db/queries/project";
 import {
-  assignment,
-  customer,
-  employeeCurrent,
-  freelancer,
-  project,
-  setting,
-} from "@/lib/db/schema";
+  getBurdenFactor,
+  getEmployeeCompForCost,
+  getEmployeeRoleTier,
+  getEmployeeWeeklyHours,
+  getEstimateProjectContext,
+  getFreelancerForCost,
+  resolveAssignmentRate,
+} from "@/lib/db/queries/estimate";
 
 import {
   err,
@@ -46,36 +55,20 @@ import { requireProjectAccess } from "@/lib/auth/project-capability";
 const WORKING_DAYS_PER_MONTH = 20;
 const WEEKS_PER_MONTH = 52 / 12;
 
-/** Resolve the project_id behind an assignment so we can run the project
- * capability check. Returns null when no such assignment exists — caller
- * surfaces that as a not_found ActionResult. */
-async function projectIdOfAssignment(
-  assignment_id: number,
-): Promise<number | null> {
-  const [row] = await db
-    .select({ project_id: assignment.project_id })
-    .from(assignment)
-    .where(eq(assignment.assignment_id, assignment_id))
-    .limit(1);
-  return row?.project_id ?? null;
-}
-
 /** Reject mutations against synthesized rows (source != 'manual').
  * The awork-planning rollup wipes and re-inserts on every sync, so any
  * hand-edit would be silently destroyed; surface a 422 instead. */
 async function ensureManualAssignment(
   assignment_id: number,
 ): Promise<ActionResult<null>> {
-  const [row] = await db
-    .select({ source: assignment.source })
-    .from(assignment)
-    .where(eq(assignment.assignment_id, assignment_id))
-    .limit(1);
-  if (!row) return err("not_found", `assignment not found: ${assignment_id}`);
-  if (row.source !== "manual") {
+  const source = await getAssignmentSource(assignment_id);
+  if (source === null) {
+    return err("not_found", `assignment not found: ${assignment_id}`);
+  }
+  if (source !== "manual") {
     return err(
       "validation_error",
-      `assignment is auto-generated (source=${row.source}); edit the upstream awork booking instead`,
+      `assignment is auto-generated (source=${source}); edit the upstream awork booking instead`,
     );
   }
   return ok(null);
@@ -122,34 +115,20 @@ const EstimateRequestSchema = z.object({
 });
 
 // ----------------------------------------------------------------------------
-// Helpers
+// Helpers (pure math; DB reads live in lib/db/queries/estimate.ts)
 // ----------------------------------------------------------------------------
-
-async function burdenFactorValue(): Promise<number> {
-  const [row] = await db
-    .select({ value: setting.value })
-    .from(setting)
-    .where(eq(setting.key, "burden_factor"));
-  return row ? Number(row.value) : 1.0;
-}
 
 type EmployeeCost = { base: number | null; basis: string };
 
-async function employeeMonthlyCostPreBurden(employee_id: number): Promise<EmployeeCost> {
-  const [row] = await db
-    .select({
-      fix_salary: employeeCurrent.fix_salary,
-      fix_salary_interval: employeeCurrent.fix_salary_interval,
-      hourly_salary: employeeCurrent.hourly_salary,
-      weekly_working_hours: employeeCurrent.weekly_working_hours,
-    })
-    .from(employeeCurrent)
-    .where(eq(employeeCurrent.employee_id, employee_id));
+async function employeeMonthlyCostPreBurden(
+  employee_id: number,
+): Promise<EmployeeCost> {
+  const row = await getEmployeeCompForCost(employee_id);
   if (!row) return { base: null, basis: "unknown employee" };
   const fix = row.fix_salary === null ? null : Number(row.fix_salary);
   const interval = row.fix_salary_interval;
   const hourly = row.hourly_salary === null ? null : Number(row.hourly_salary);
-  const weekly = row.weekly_working_hours === null ? null : Number(row.weekly_working_hours);
+  const weekly = row.weekly_working_hours;
   if (fix !== null && fix > 0 && interval === "yearly") {
     return { base: fix / 12, basis: "fix_salary yearly/12" };
   }
@@ -163,32 +142,6 @@ async function employeeMonthlyCostPreBurden(employee_id: number): Promise<Employ
     };
   }
   return { base: null, basis: "no salary or hourly comp on file" };
-}
-
-async function resolveRate(
-  project_id: number,
-  framework_id: number | null,
-  profile: string | null,
-  as_of: string,
-): Promise<{ rate: number | null; source: string }> {
-  if (!profile) return { rate: null, source: "unset" };
-  const pr = await db.execute(sql`
-    SELECT daily_rate_eur FROM project_rate
-    WHERE project_id = ${project_id} AND profile = ${profile} AND valid_from <= ${as_of}::date
-    ORDER BY valid_from DESC LIMIT 1
-  `);
-  const prRow = (pr.rows as Array<{ daily_rate_eur: string }>)[0];
-  if (prRow) return { rate: Number(prRow.daily_rate_eur), source: "project_rate" };
-  if (framework_id !== null) {
-    const fr = await db.execute(sql`
-      SELECT daily_rate_eur FROM framework_rate
-      WHERE framework_id = ${framework_id} AND profile = ${profile} AND valid_from <= ${as_of}::date
-      ORDER BY valid_from DESC LIMIT 1
-    `);
-    const frRow = (fr.rows as Array<{ daily_rate_eur: string }>)[0];
-    if (frRow) return { rate: Number(frRow.daily_rate_eur), source: "framework_rate" };
-  }
-  return { rate: null, source: "unset" };
 }
 
 // ----------------------------------------------------------------------------
@@ -244,34 +197,23 @@ export async function estimateAssignmentAction(
     );
   }
 
-  const projRes = await db.execute(sql`
-    SELECT p.billing_model, p.framework_id, p.agreed_amount_eur,
-           p.planned_start_date, p.planned_end_date, p.name AS project_name,
-           c.name AS customer_name
-    FROM project p JOIN customer c ON c.customer_id = p.customer_id
-    WHERE p.project_id = ${project_id}
-  `);
-  const projRow = (projRes.rows as Array<Record<string, unknown>>)[0];
-  if (!projRow) return err("not_found", `project not found: ${project_id}`);
+  const projCtx = await getEstimateProjectContext(project_id);
+  if (!projCtx) return err("not_found", `project not found: ${project_id}`);
 
-  const billing_model = projRow.billing_model as string;
-  const framework_id = (projRow.framework_id as number | null) ?? null;
-  const agreed_amount = projRow.agreed_amount_eur as string | null;
-  const fp_start = (projRow.planned_start_date as string | null) ?? null;
-  const fp_end = (projRow.planned_end_date as string | null) ?? null;
-  const p_name = projRow.project_name as string;
-  const c_name = projRow.customer_name as string;
+  const billing_model = projCtx.billing_model;
+  const framework_id = projCtx.framework_id;
+  const agreed_amount = projCtx.agreed_amount_eur;
+  const fp_start = projCtx.planned_start_date;
+  const fp_end = projCtx.planned_end_date;
+  const p_name = projCtx.project_name;
+  const c_name = projCtx.customer_name;
 
-  const burden = await burdenFactorValue();
+  const burden = await getBurdenFactor();
   const as_of_date = as_of ?? new Date().toISOString().slice(0, 10);
 
   let effective_profile = profile ?? null;
   if (employee_id !== null && !effective_profile) {
-    const tier = await db.execute(sql`
-      SELECT role_tier FROM employee_role_tier WHERE employee_id = ${employee_id}
-    `);
-    const tRow = (tier.rows as Array<{ role_tier: string | null }>)[0];
-    if (tRow) effective_profile = tRow.role_tier ?? null;
+    effective_profile = await getEmployeeRoleTier(employee_id);
   }
 
   let monthly_cost: number | null = null;
@@ -291,10 +233,7 @@ export async function estimateAssignmentAction(
     kind = "employee";
     who_id = employee_id;
   } else {
-    const [flRow] = await db
-      .select({ name: freelancer.name, daily_cost_eur: freelancer.daily_cost_eur })
-      .from(freelancer)
-      .where(eq(freelancer.freelancer_id, freelancer_id!));
+    const flRow = await getFreelancerForCost(freelancer_id!);
     if (!flRow) {
       return err("not_found", `freelancer not found: ${freelancer_id}`);
     }
@@ -311,20 +250,20 @@ export async function estimateAssignmentAction(
     effective_rate = rate_override;
     rate_source = "rate_override";
   } else {
-    const r = await resolveRate(project_id, framework_id, effective_profile, as_of_date);
+    const r = await resolveAssignmentRate({
+      project_id,
+      framework_id,
+      profile: effective_profile,
+      as_of: as_of_date,
+    });
     effective_rate = r.rate;
     rate_source = r.source;
   }
 
   let fte_factor = 1.0;
   if (employee_id !== null) {
-    const [row] = await db
-      .select({ weekly_working_hours: employeeCurrent.weekly_working_hours })
-      .from(employeeCurrent)
-      .where(eq(employeeCurrent.employee_id, employee_id));
-    if (row && row.weekly_working_hours) {
-      fte_factor = Number(row.weekly_working_hours) / 40.0;
-    }
+    const hours = await getEmployeeWeeklyHours(employee_id);
+    if (hours !== null) fte_factor = hours / 40.0;
   }
 
   let monthly_revenue: number | null = null;
@@ -405,28 +344,16 @@ export async function createAssignmentAction(
     return err("validation_error", "end_date must be on or after start_date");
   }
 
-  const projExists = await db
-    .select({ id: project.project_id })
-    .from(project)
-    .where(eq(project.project_id, project_id));
-  if (projExists.length === 0) {
+  if (!(await projectExists(project_id))) {
     return err("not_found", `project not found: ${project_id}`);
   }
   if (employee_id !== null) {
-    const empExists = await db
-      .select({ id: employeeCurrent.employee_id })
-      .from(employeeCurrent)
-      .where(eq(employeeCurrent.employee_id, employee_id));
-    if (empExists.length === 0) {
+    if (!(await employeeExists(employee_id))) {
       return err("not_found", `employee not found: ${employee_id}`);
     }
   }
   if (freelancer_id !== null) {
-    const flExists = await db
-      .select({ id: freelancer.freelancer_id })
-      .from(freelancer)
-      .where(eq(freelancer.freelancer_id, freelancer_id));
-    if (flExists.length === 0) {
+    if (!(await freelancerExists(freelancer_id))) {
       return err("not_found", `freelancer not found: ${freelancer_id}`);
     }
   }
@@ -437,31 +364,23 @@ export async function createAssignmentAction(
     );
   }
 
-  const now = new Date();
-  const [inserted] = await db
-    .insert(assignment)
-    .values({
-      employee_id,
-      freelancer_id,
-      project_id,
-      profile,
-      allocation_pct: String(allocation_pct),
-      start_date,
-      end_date,
-      daily_rate_override_eur:
-        daily_rate_override_eur === null ? null : String(daily_rate_override_eur),
-      daily_cost_override_eur:
-        daily_cost_override_eur === null ? null : String(daily_cost_override_eur),
-      notes,
-      created_at: now,
-      updated_at: now,
-    })
-    .returning({ assignment_id: assignment.assignment_id });
+  const inserted = await insertAssignment({
+    employee_id,
+    freelancer_id,
+    project_id,
+    profile,
+    allocation_pct: String(allocation_pct),
+    start_date,
+    end_date,
+    daily_rate_override_eur:
+      daily_rate_override_eur === null ? null : String(daily_rate_override_eur),
+    daily_cost_override_eur:
+      daily_cost_override_eur === null ? null : String(daily_cost_override_eur),
+    notes,
+  });
 
   const detail = await getAssignmentDetail(inserted.assignment_id);
   if (!detail) return err("internal_error", "created assignment not found");
-  // Customer table reference kept alive for future joins (Drizzle pruning lint).
-  void customer;
   return ok(detail);
 }
 
@@ -476,7 +395,7 @@ export async function updateAssignmentAction(
   if (!Number.isInteger(assignment_id)) {
     return err("validation_error", `invalid assignment id: ${assignment_id}`);
   }
-  const project_id = await projectIdOfAssignment(assignment_id);
+  const project_id = await getAssignmentProjectId(assignment_id);
   if (project_id === null) {
     return err("not_found", `assignment not found: ${assignment_id}`);
   }
@@ -519,10 +438,7 @@ export async function updateAssignmentAction(
     return ok(d);
   }
   updates.updated_at = new Date();
-  await db
-    .update(assignment)
-    .set(updates)
-    .where(eq(assignment.assignment_id, assignment_id));
+  await updateAssignment(assignment_id, updates);
 
   const d = await getAssignmentDetail(assignment_id);
   if (!d) return err("not_found", `assignment not found: ${assignment_id}`);
@@ -544,7 +460,7 @@ export async function endAssignmentAction(
   if (!Number.isInteger(assignment_id)) {
     return err("validation_error", `invalid assignment id: ${assignment_id}`);
   }
-  const project_id = await projectIdOfAssignment(assignment_id);
+  const project_id = await getAssignmentProjectId(assignment_id);
   if (project_id === null) {
     return err("not_found", `assignment not found: ${assignment_id}`);
   }
@@ -556,10 +472,7 @@ export async function endAssignmentAction(
   const guard = await ensureManualAssignment(assignment_id);
   if (!guard.ok) return guard;
 
-  const [existing] = await db
-    .select({ start_date: assignment.start_date })
-    .from(assignment)
-    .where(eq(assignment.assignment_id, assignment_id));
+  const existing = await getAssignmentStartDate(assignment_id);
   if (!existing) {
     return err("not_found", `assignment not found: ${assignment_id}`);
   }
@@ -567,10 +480,7 @@ export async function endAssignmentAction(
     return err("validation_error", "end_date must be on or after start_date");
   }
 
-  await db
-    .update(assignment)
-    .set({ end_date: parsed.data.end_date, updated_at: new Date() })
-    .where(eq(assignment.assignment_id, assignment_id));
+  await setAssignmentEndDate(assignment_id, parsed.data.end_date);
 
   const d = await getAssignmentDetail(assignment_id);
   if (!d) return err("not_found", `assignment not found: ${assignment_id}`);
@@ -587,7 +497,7 @@ export async function deleteAssignmentAction(
   if (!Number.isInteger(assignment_id)) {
     return err("validation_error", `invalid assignment id: ${assignment_id}`);
   }
-  const project_id = await projectIdOfAssignment(assignment_id);
+  const project_id = await getAssignmentProjectId(assignment_id);
   if (project_id === null) {
     return err("not_found", `assignment not found: ${assignment_id}`);
   }
@@ -595,8 +505,6 @@ export async function deleteAssignmentAction(
   if (!auth.ok) return auth.result;
   const guard = await ensureManualAssignment(assignment_id);
   if (!guard.ok) return guard;
-  await db
-    .delete(assignment)
-    .where(eq(assignment.assignment_id, assignment_id));
+  await deleteAssignment(assignment_id);
   return ok(null);
 }

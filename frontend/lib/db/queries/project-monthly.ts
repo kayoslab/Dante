@@ -40,6 +40,75 @@ import {
   workingDaysInRange,
 } from "../_monthly-helpers";
 
+export type ActiveProjectRow = {
+  project_id: number;
+  name: string;
+  billing_model: string;
+  customer_name: string;
+};
+
+/** All active projects with their customer name, ordered the way the
+ * portfolio page expects (customer asc, project asc). Used by
+ * `/api/portfolio/monthly` to fan out per-project breakdowns. */
+export async function listActiveProjectsForPortfolio(): Promise<
+  ActiveProjectRow[]
+> {
+  const r = await db.execute(sql`
+    SELECT p.project_id, p.name, p.billing_model, c.name AS customer_name
+    FROM project p
+    JOIN customer c ON c.customer_id = p.customer_id
+    WHERE p.status = 'active'
+    ORDER BY c.name, p.name
+  `);
+  return (r.rows as Array<Record<string, unknown>>).map((row) => ({
+    project_id: row.project_id as number,
+    name: row.name as string,
+    billing_model: row.billing_model as string,
+    customer_name: row.customer_name as string,
+  }));
+}
+
+export type UnallocatedPayrollEmployeeRow = {
+  employee_id: number;
+  first_name: string | null;
+  last_name: string | null;
+  hire_date: string | null;
+  employment_end_date: string | null;
+  team: string | null;
+  is_real: boolean;
+};
+
+/** Active, real, project-contributing employees whose contract overlaps
+ * the given month. Drives the bench / unallocated-payroll summary on
+ * `/api/portfolio/monthly`. */
+export async function listUnallocatedPayrollEmployees(
+  month_start: string,
+  month_end: string,
+): Promise<UnallocatedPayrollEmployeeRow[]> {
+  const r = await db.execute(sql`
+    SELECT ec.employee_id, ec.first_name, ec.last_name,
+           ec.hire_date, ec.employment_end_date,
+           COALESCE(ann.team_user, ec.department) AS team,
+           COALESCE(ann.is_real_employee, TRUE) AS is_real
+    FROM employee_current ec
+    LEFT JOIN employee_annotation ann ON ann.employee_id = ec.employee_id
+    WHERE COALESCE(ann.is_real_employee, TRUE) = TRUE
+      AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
+      AND ec.status = 'active'
+      AND (ec.hire_date IS NULL OR ec.hire_date <= ${month_end}::date)
+      AND (ec.employment_end_date IS NULL OR ec.employment_end_date >= ${month_start}::date)
+  `);
+  return (r.rows as Array<Record<string, unknown>>).map((row) => ({
+    employee_id: row.employee_id as number,
+    first_name: (row.first_name as string | null) ?? null,
+    last_name: (row.last_name as string | null) ?? null,
+    hire_date: (row.hire_date as string | null) ?? null,
+    employment_end_date: (row.employment_end_date as string | null) ?? null,
+    team: (row.team as string | null) ?? null,
+    is_real: Boolean(row.is_real),
+  }));
+}
+
 export type ProjectMonthlyBreakdown = Record<string, unknown> & {
   project_id: number;
   project_name: string;

@@ -16,19 +16,17 @@
  * `team` table — unknown values get rejected so the FE can't drift the
  * curated team list silently.
  */
-import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/lib/db/client";
 import {
   getEmployeeDetail,
   type EmployeeDetail,
 } from "@/lib/db/queries/employee";
 import {
-  employeeAnnotation,
-  employeeCurrent,
-  team,
-} from "@/lib/db/schema";
+  applyEmployeeAnnotationUpdates,
+  employeeExists,
+  teamExists,
+} from "@/lib/db/queries/employee-annotation";
 
 import {
   err,
@@ -59,11 +57,7 @@ export async function updateEmployeeFlagsAction(
   const parsed = FlagsSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const exists = await db
-    .select({ id: employeeCurrent.employee_id })
-    .from(employeeCurrent)
-    .where(eq(employeeCurrent.employee_id, employee_id));
-  if (exists.length === 0) {
+  if (!(await employeeExists(employee_id))) {
     return err("not_found", `employee not found: ${employee_id}`);
   }
 
@@ -74,25 +68,13 @@ export async function updateEmployeeFlagsAction(
     !parsed.data.clear_team
   ) {
     const teamName = parsed.data.team_user.trim();
-    const t = await db
-      .select({ name: team.team_name })
-      .from(team)
-      .where(eq(team.team_name, teamName));
-    if (t.length === 0) {
+    if (!(await teamExists(teamName))) {
       return err(
         "validation_error",
         `unknown team '${teamName}' — create it under Settings first`,
       );
     }
   }
-
-  const now = new Date();
-  // Ensure the annotation row exists.
-  await db.execute(sql`
-    INSERT INTO employee_annotation (employee_id, last_reconciled_at)
-    VALUES (${employee_id}, ${now})
-    ON CONFLICT (employee_id) DO NOTHING
-  `);
 
   const updates: Record<string, unknown> = {};
   if (parsed.data.is_real_employee !== undefined && parsed.data.is_real_employee !== null) {
@@ -110,13 +92,7 @@ export async function updateEmployeeFlagsAction(
     updates.team_user = parsed.data.team_user.trim();
   }
 
-  if (Object.keys(updates).length > 0) {
-    updates.last_reconciled_at = now;
-    await db
-      .update(employeeAnnotation)
-      .set(updates)
-      .where(eq(employeeAnnotation.employee_id, employee_id));
-  }
+  await applyEmployeeAnnotationUpdates(employee_id, updates);
 
   const detail = await getEmployeeDetail(employee_id);
   if (!detail) return err("not_found", `employee not found: ${employee_id}`);

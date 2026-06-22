@@ -1,7 +1,9 @@
-import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
-import { db } from "@/lib/db/client";
+import {
+  employeeExists,
+  getLatestRawEmployeeSnapshot,
+} from "@/lib/db/queries/inspect";
 import { audit } from "@/lib/auth/audit";
 import { NotFound, Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 import { checkRateLimit } from "@/lib/api/rate-limit";
@@ -83,20 +85,9 @@ export async function GET(
       throw Validation(`invalid employee id: ${rawId}`);
     }
 
-    const r = await db.execute(sql`
-      SELECT s.sync_run_id, sr.started_at, s.payload
-      FROM raw_employee_snapshot s
-      LEFT JOIN sync_run sr ON sr.sync_run_id = s.sync_run_id
-      WHERE s.employee_id = ${employee_id}
-      ORDER BY sr.started_at DESC NULLS LAST
-      LIMIT 1
-    `);
-    const row = (r.rows as Array<Record<string, unknown>>)[0];
+    const row = await getLatestRawEmployeeSnapshot(employee_id);
     if (!row) {
-      const e = await db.execute(sql`
-        SELECT 1 FROM employee_current WHERE employee_id = ${employee_id}
-      `);
-      if ((e.rows as unknown[]).length === 0) {
+      if (!(await employeeExists(employee_id))) {
         throw NotFound(`employee not found: ${employee_id}`);
       }
       throw NotFound(
@@ -118,7 +109,7 @@ export async function GET(
       full = {};
     }
 
-    const started_at = row.started_at as Date | string | null;
+    const started_at = row.started_at;
     const sync_started_at =
       started_at === null
         ? null

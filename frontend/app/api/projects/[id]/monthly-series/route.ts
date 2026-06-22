@@ -1,9 +1,8 @@
-import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
-import { db } from "@/lib/db/client";
 import { addMonths, firstOfMonth } from "@/lib/db/_monthly-helpers";
 import { computeProjectMonthly } from "@/lib/db/queries/project-monthly";
+import { getProjectHeader } from "@/lib/db/queries/project";
 import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { requireApiProjectAccess } from "@/lib/auth/project-capability";
@@ -34,15 +33,10 @@ export async function GET(
       throw Validation("to_month must be >= from_month");
     }
 
-    const projRes = await db.execute(sql`
-      SELECT name, billing_model, agreed_amount_eur
-      FROM project WHERE project_id = ${project_id}
-    `);
-    const projRow = (projRes.rows as Array<Record<string, unknown>>)[0];
-    if (!projRow) throw NotFound(`project not found: ${project_id}`);
-    const project_name = projRow.name as string;
-    const billing_model = projRow.billing_model as string;
-    const agreed_amount = projRow.agreed_amount_eur as string | null;
+    const header = await getProjectHeader(project_id);
+    if (!header) throw NotFound(`project not found: ${project_id}`);
+    const { name: project_name, billing_model } = header;
+    const agreed_amount = header.agreed_amount_eur;
 
     const points: Array<Record<string, unknown>> = [];
     let cur = from_month;

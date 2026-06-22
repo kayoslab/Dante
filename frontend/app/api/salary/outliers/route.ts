@@ -1,23 +1,17 @@
-import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
-import { db } from "@/lib/db/client";
 import { audit } from "@/lib/auth/audit";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
+import {
+  getSalaryOutlierCandidates,
+  type OutlierGrouping,
+  type SalaryOutlierEmployeeRow,
+} from "@/lib/db/queries/salary";
 
-type Grouping = "tier" | "team" | "department";
-const VALID_GROUPING = new Set<Grouping>(["tier", "team", "department"]);
+const VALID_GROUPING = new Set<OutlierGrouping>(["tier", "team", "department"]);
 
 const TIER_ORDER = ["junior", "advanced", "senior", "expert"] as const;
 type Tier = (typeof TIER_ORDER)[number];
-
-type EmployeeRow = {
-  employee_id: number;
-  name: string;
-  position: string | null;
-  group_key: string;
-  salary: number;
-};
 
 type Reason = {
   kind: "in_band" | "cross_band";
@@ -39,7 +33,7 @@ export async function GET(req: NextRequest) {
   return handle(async () => {
     const ctx = await requireApiSession({ minRole: "manager" });
     const { searchParams } = new URL(req.url);
-    const grouping = (searchParams.get("grouping") ?? "tier") as Grouping;
+    const grouping = (searchParams.get("grouping") ?? "tier") as OutlierGrouping;
     if (!VALID_GROUPING.has(grouping)) {
       throw Validation("grouping must be tier|team|department");
     }
@@ -49,57 +43,14 @@ export async function GET(req: NextRequest) {
       target_id: grouping,
     });
 
-    const groupCol =
-      grouping === "tier"
-        ? sql.raw("rt.role_tier")
-        : grouping === "team"
-          ? sql.raw("a.team_user")
-          : sql.raw("ec.department");
-
-    const joinRoleTier =
-      grouping === "tier"
-        ? sql`JOIN employee_role_tier rt ON rt.employee_id = ec.employee_id`
-        : sql``;
-
-    const r = await db.execute(sql`
-      SELECT
-        ec.employee_id,
-        ec.first_name,
-        ec.last_name,
-        ec.position,
-        ${groupCol} AS group_key,
-        esn.monthly_salary_fte AS salary
-      FROM employee_current ec
-      JOIN employee_salary_normalized esn ON esn.employee_id = ec.employee_id
-      LEFT JOIN employee_annotation a ON a.employee_id = ec.employee_id
-      ${joinRoleTier}
-      WHERE ec.status = 'active'
-        AND esn.monthly_salary_fte IS NOT NULL
-        AND ${groupCol} IS NOT NULL
-        AND COALESCE(a.is_multi_org, FALSE) = FALSE
-        AND COALESCE(a.is_real_employee, TRUE) = TRUE
-    `);
-
-    const rows: EmployeeRow[] = (
-      r.rows as Array<Record<string, unknown>>
-    ).map((row) => ({
-      employee_id: Number(row.employee_id),
-      name: [row.first_name, row.last_name]
-        .filter(Boolean)
-        .join(" ")
-        .trim() || `#${row.employee_id}`,
-      position: row.position === null ? null : String(row.position),
-      group_key: String(row.group_key),
-      salary: Number(row.salary),
-    }));
-
+    const rows = await getSalaryOutlierCandidates(grouping);
     return identifyOutliers(rows, grouping);
   });
 }
 
 function identifyOutliers(
-  rows: EmployeeRow[],
-  grouping: Grouping,
+  rows: SalaryOutlierEmployeeRow[],
+  grouping: OutlierGrouping,
 ): SalaryOutlier[] {
   const byGroup = new Map<string, number[]>();
   for (const r of rows) {

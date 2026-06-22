@@ -1,18 +1,18 @@
 "use server";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/lib/db/client";
-import { getCustomerDetail, type CustomerDetail } from "@/lib/db/queries/customer";
 import {
-  assignment,
-  customer,
-  frameworkAgreement,
-  frameworkRate,
-  project,
-  projectRate,
-} from "@/lib/db/schema";
+  countCustomerChildren,
+  customerExists,
+  deleteCustomerCascading,
+  findCustomerIdByName,
+  getCustomerDetail,
+  getCustomerName,
+  insertCustomer,
+  updateCustomer,
+  type CustomerDetail,
+} from "@/lib/db/queries/customer";
 
 import {
   err,
@@ -44,26 +44,16 @@ export async function createCustomerAction(
   const name = parsed.data.name.trim();
   if (!name) return err("conflict", "customer name cannot be empty");
 
-  const existing = await db
-    .select({ id: customer.customer_id })
-    .from(customer)
-    .where(eq(customer.name, name));
-  if (existing.length > 0) {
+  if ((await findCustomerIdByName(name)) !== null) {
     return err("conflict", `customer already exists: ${name}`);
   }
 
-  const now = new Date();
-  const [row] = await db
-    .insert(customer)
-    .values({
-      name,
-      notes: parsed.data.notes ?? null,
-      created_at: now,
-      updated_at: now,
-    })
-    .returning({ customer_id: customer.customer_id });
+  const customer_id = await insertCustomer({
+    name,
+    notes: parsed.data.notes ?? null,
+  });
 
-  const detail = await getCustomerDetail(row.customer_id);
+  const detail = await getCustomerDetail(customer_id);
   if (!detail) return err("internal_error", "created customer not found");
   return ok(detail);
 }
@@ -81,11 +71,7 @@ export async function updateCustomerAction(
   const parsed = UpdateCustomerSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const existing = await db
-    .select({ id: customer.customer_id })
-    .from(customer)
-    .where(eq(customer.customer_id, customer_id));
-  if (existing.length === 0) {
+  if (!(await customerExists(customer_id))) {
     return err("not_found", `customer not found: ${customer_id}`);
   }
 
@@ -105,12 +91,8 @@ export async function updateCustomerAction(
     return ok(d);
   }
 
-  updates.updated_at = new Date();
   try {
-    await db
-      .update(customer)
-      .set(updates)
-      .where(eq(customer.customer_id, customer_id));
+    await updateCustomer(customer_id, updates);
   } catch (e) {
     if (isUniqueViolation(e)) {
       return err(
@@ -137,22 +119,12 @@ export async function deleteCustomerAction(
     return err("validation_error", `invalid customer id: ${customer_id}`);
   }
 
-  const [existing] = await db
-    .select({ name: customer.name })
-    .from(customer)
-    .where(eq(customer.customer_id, customer_id));
-  if (!existing) {
+  const name = await getCustomerName(customer_id);
+  if (name === null) {
     return err("not_found", `customer not found: ${customer_id}`);
   }
-  const name = existing.name;
 
-  const [{ n_fw, n_pr }] = await db
-    .select({
-      n_fw: sql<number>`(SELECT COUNT(*)::int FROM ${frameworkAgreement} WHERE ${frameworkAgreement.customer_id} = ${customer_id})`,
-      n_pr: sql<number>`(SELECT COUNT(*)::int FROM ${project} WHERE ${project.customer_id} = ${customer_id})`,
-    })
-    .from(sql`(SELECT 1) AS dummy`);
-
+  const { n_fw, n_pr } = await countCustomerChildren(customer_id);
   if ((n_fw > 0 || n_pr > 0) && !force) {
     return err(
       "has_children",
@@ -160,40 +132,7 @@ export async function deleteCustomerAction(
     );
   }
 
-  if (force) {
-    // Order: assignments → project_rate → project → framework_rate → framework → customer
-    const projectIds = (
-      await db
-        .select({ id: project.project_id })
-        .from(project)
-        .where(eq(project.customer_id, customer_id))
-    ).map((p) => p.id);
-    if (projectIds.length > 0) {
-      await db
-        .delete(assignment)
-        .where(inArray(assignment.project_id, projectIds));
-      await db
-        .delete(projectRate)
-        .where(inArray(projectRate.project_id, projectIds));
-      await db.delete(project).where(eq(project.customer_id, customer_id));
-    }
-    const fwIds = (
-      await db
-        .select({ id: frameworkAgreement.framework_id })
-        .from(frameworkAgreement)
-        .where(eq(frameworkAgreement.customer_id, customer_id))
-    ).map((f) => f.id);
-    if (fwIds.length > 0) {
-      await db
-        .delete(frameworkRate)
-        .where(inArray(frameworkRate.framework_id, fwIds));
-      await db
-        .delete(frameworkAgreement)
-        .where(eq(frameworkAgreement.customer_id, customer_id));
-    }
-  }
-
-  await db.delete(customer).where(eq(customer.customer_id, customer_id));
+  await deleteCustomerCascading(customer_id, force);
   return ok(null);
 }
 
@@ -206,8 +145,3 @@ function isUniqueViolation(e: unknown): boolean {
     (e as { code?: string }).code === "23505"
   );
 }
-
-// Silence the unused-import lint when build context narrows down — these
-// stay referenced by the body above.
-void and;
-

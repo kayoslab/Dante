@@ -1,23 +1,36 @@
 "use server";
 
-import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/lib/db/client";
 import {
-  aworkCompany,
-  aworkCompanyLink,
-  aworkProject,
-  aworkProjectLink,
-  aworkUser,
-  aworkUserLink,
-  customer,
-  employeeCurrent,
-  personioProject,
-  personioProjectLink,
-  project,
-  setting,
-} from "@/lib/db/schema";
+  customerExists,
+  deleteAworkCompanyLink,
+  getAworkCompanyLinkCustomerId,
+  getAworkCompanyName,
+  insertAworkCompanyLink,
+} from "@/lib/db/queries/customer";
+import {
+  deleteAworkUserLink,
+  employeeExists,
+  getAworkUserLinkEmployeeId,
+  getAworkUserName,
+  insertAworkUserLink,
+} from "@/lib/db/queries/employee";
+import {
+  deleteAworkProjectLink,
+  deletePersonioProjectLink,
+  getAworkProjectLinkProjectId,
+  getAworkProjectName,
+  getPersonioLinkProjectId,
+  getPersonioProjectName,
+  insertAworkProjectLink,
+  insertPersonioProjectLink,
+  projectExists,
+} from "@/lib/db/queries/project";
+import {
+  getSettingDescription,
+  upsertSetting,
+} from "@/lib/db/queries/setting";
 
 import {
   err,
@@ -56,34 +69,24 @@ export async function createPersonioLinkAction(
   if (!parsed.success) return fromZod(parsed.error);
   const personio_project_id = parsed.data.personio_project_id;
 
-  const proj = await db
-    .select({ id: project.project_id })
-    .from(project)
-    .where(eq(project.project_id, project_id));
-  if (proj.length === 0) {
+  if (!(await projectExists(project_id))) {
     return err("not_found", `project not found: ${project_id}`);
   }
 
-  const [pp] = await db
-    .select({ name: personioProject.name })
-    .from(personioProject)
-    .where(eq(personioProject.personio_project_id, personio_project_id));
-  if (!pp) {
+  const pp_name = await getPersonioProjectName(personio_project_id);
+  if (pp_name === null) {
     return err(
       "not_found",
       `personio project not found: ${personio_project_id}. Run \`dante sync\` to refresh the list.`,
     );
   }
 
-  const existing = await db
-    .select({ project_id: personioProjectLink.project_id })
-    .from(personioProjectLink)
-    .where(eq(personioProjectLink.personio_project_id, personio_project_id));
-  if (existing.length > 0) {
-    if (existing[0].project_id !== project_id) {
+  const existingProjectId = await getPersonioLinkProjectId(personio_project_id);
+  if (existingProjectId !== null) {
+    if (existingProjectId !== project_id) {
       return err(
         "conflict",
-        `personio project ${personio_project_id} '${pp.name}' is already linked to project ${existing[0].project_id}. Unlink it first.`,
+        `personio project ${personio_project_id} '${pp_name}' is already linked to project ${existingProjectId}. Unlink it first.`,
       );
     }
     return err(
@@ -92,14 +95,10 @@ export async function createPersonioLinkAction(
     );
   }
 
-  await db.insert(personioProjectLink).values({
-    personio_project_id,
-    project_id,
-    mapped_at: new Date(),
-  });
+  await insertPersonioProjectLink({ personio_project_id, project_id });
   return ok({
     personio_project_id,
-    name: pp.name,
+    name: pp_name,
     mapped_to_project_id: project_id,
   });
 }
@@ -114,29 +113,16 @@ export async function deletePersonioLinkAction(
   const auth = await requireProjectAccess(project_id);
   if (!auth.ok) return auth.result;
 
-  const existing = await db
-    .select({ id: personioProjectLink.personio_project_id })
-    .from(personioProjectLink)
-    .where(
-      and(
-        eq(personioProjectLink.personio_project_id, personio_project_id),
-        eq(personioProjectLink.project_id, project_id),
-      ),
-    );
-  if (existing.length === 0) {
+  const removed = await deletePersonioProjectLink(
+    project_id,
+    personio_project_id,
+  );
+  if (removed === 0) {
     return err(
       "not_found",
       `no link from personio project ${personio_project_id} to project ${project_id}`,
     );
   }
-  await db
-    .delete(personioProjectLink)
-    .where(
-      and(
-        eq(personioProjectLink.personio_project_id, personio_project_id),
-        eq(personioProjectLink.project_id, project_id),
-      ),
-    );
   return ok(null);
 }
 
@@ -168,47 +154,33 @@ export async function createAworkProjectLinkAction(
   if (!parsed.success) return fromZod(parsed.error);
   const awork_project_id = parsed.data.awork_project_id;
 
-  const proj = await db
-    .select({ id: project.project_id })
-    .from(project)
-    .where(eq(project.project_id, project_id));
-  if (proj.length === 0) {
+  if (!(await projectExists(project_id))) {
     return err("not_found", `project not found: ${project_id}`);
   }
 
-  const [ap] = await db
-    .select({ name: aworkProject.name })
-    .from(aworkProject)
-    .where(eq(aworkProject.awork_project_id, awork_project_id));
-  if (!ap) {
+  const ap_name = await getAworkProjectName(awork_project_id);
+  if (ap_name === null) {
     return err(
       "not_found",
       `awork project not found: ${awork_project_id}. Run \`dante awork sync\` to refresh the catalog.`,
     );
   }
 
-  const existing = await db
-    .select({ project_id: aworkProjectLink.project_id })
-    .from(aworkProjectLink)
-    .where(eq(aworkProjectLink.awork_project_id, awork_project_id));
-  if (existing.length > 0) {
-    if (existing[0].project_id !== project_id) {
+  const existingProjectId = await getAworkProjectLinkProjectId(awork_project_id);
+  if (existingProjectId !== null) {
+    if (existingProjectId !== project_id) {
       return err(
         "conflict",
-        `awork project ${awork_project_id} '${ap.name ?? ""}' is already linked to project ${existing[0].project_id}. Unlink it first.`,
+        `awork project ${awork_project_id} '${ap_name ?? ""}' is already linked to project ${existingProjectId}. Unlink it first.`,
       );
     }
     return err("conflict", `awork project ${awork_project_id} already linked here`);
   }
 
-  await db.insert(aworkProjectLink).values({
-    awork_project_id,
-    project_id,
-    mapped_at: new Date(),
-  });
+  await insertAworkProjectLink({ awork_project_id, project_id });
   return ok({
     awork_project_id,
-    name: ap.name,
+    name: ap_name,
     mapped_to_project_id: project_id,
   });
 }
@@ -223,29 +195,13 @@ export async function deleteAworkProjectLinkAction(
   const auth = await requireProjectAccess(project_id);
   if (!auth.ok) return auth.result;
 
-  const existing = await db
-    .select({ id: aworkProjectLink.awork_project_id })
-    .from(aworkProjectLink)
-    .where(
-      and(
-        eq(aworkProjectLink.awork_project_id, awork_project_id),
-        eq(aworkProjectLink.project_id, project_id),
-      ),
-    );
-  if (existing.length === 0) {
+  const removed = await deleteAworkProjectLink(project_id, awork_project_id);
+  if (removed === 0) {
     return err(
       "not_found",
       `no link from awork project ${awork_project_id} to project ${project_id}`,
     );
   }
-  await db
-    .delete(aworkProjectLink)
-    .where(
-      and(
-        eq(aworkProjectLink.awork_project_id, awork_project_id),
-        eq(aworkProjectLink.project_id, project_id),
-      ),
-    );
   return ok(null);
 }
 
@@ -278,46 +234,32 @@ export async function createAworkUserLinkAction(
   if (!parsed.success) return fromZod(parsed.error);
   const awork_user_id = parsed.data.awork_user_id;
 
-  const emp = await db
-    .select({ id: employeeCurrent.employee_id })
-    .from(employeeCurrent)
-    .where(eq(employeeCurrent.employee_id, employee_id));
-  if (emp.length === 0) {
+  if (!(await employeeExists(employee_id))) {
     return err("not_found", `employee not found: ${employee_id}`);
   }
 
-  const [au] = await db
-    .select({ first_name: aworkUser.first_name, last_name: aworkUser.last_name })
-    .from(aworkUser)
-    .where(eq(aworkUser.awork_user_id, awork_user_id));
-  if (!au) {
+  const au = await getAworkUserName(awork_user_id);
+  if (au === null) {
     return err(
       "not_found",
       `awork user not found: ${awork_user_id}. Run \`dante awork sync\` to refresh.`,
     );
   }
 
-  const existing = await db
-    .select({ employee_id: aworkUserLink.employee_id })
-    .from(aworkUserLink)
-    .where(eq(aworkUserLink.awork_user_id, awork_user_id));
-  if (existing.length > 0) {
-    if (existing[0].employee_id !== employee_id) {
+  const existingEmployeeId = await getAworkUserLinkEmployeeId(awork_user_id);
+  if (existingEmployeeId !== null) {
+    if (existingEmployeeId !== employee_id) {
       const fn = au.first_name ?? "";
       const ln = au.last_name ?? "";
       return err(
         "conflict",
-        `awork user ${awork_user_id} (${fn} ${ln}) is already linked to employee ${existing[0].employee_id}. Unlink it first.`,
+        `awork user ${awork_user_id} (${fn} ${ln}) is already linked to employee ${existingEmployeeId}. Unlink it first.`,
       );
     }
     return err("conflict", "already linked");
   }
 
-  await db.insert(aworkUserLink).values({
-    awork_user_id,
-    employee_id,
-    mapped_at: new Date(),
-  });
+  await insertAworkUserLink({ awork_user_id, employee_id });
   return ok({
     awork_user_id,
     first_name: au.first_name,
@@ -336,29 +278,13 @@ export async function deleteAworkUserLinkAction(
   if (!Number.isInteger(employee_id)) {
     return err("validation_error", `invalid employee id: ${employee_id}`);
   }
-  const existing = await db
-    .select({ id: aworkUserLink.awork_user_id })
-    .from(aworkUserLink)
-    .where(
-      and(
-        eq(aworkUserLink.awork_user_id, awork_user_id),
-        eq(aworkUserLink.employee_id, employee_id),
-      ),
-    );
-  if (existing.length === 0) {
+  const removed = await deleteAworkUserLink(employee_id, awork_user_id);
+  if (removed === 0) {
     return err(
       "not_found",
       `no link from awork user ${awork_user_id} to employee ${employee_id}`,
     );
   }
-  await db
-    .delete(aworkUserLink)
-    .where(
-      and(
-        eq(aworkUserLink.awork_user_id, awork_user_id),
-        eq(aworkUserLink.employee_id, employee_id),
-      ),
-    );
   return ok(null);
 }
 
@@ -390,41 +316,28 @@ export async function createAworkCompanyLinkAction(
   if (!parsed.success) return fromZod(parsed.error);
   const awork_company_id = parsed.data.awork_company_id;
 
-  const cust = await db
-    .select({ id: customer.customer_id })
-    .from(customer)
-    .where(eq(customer.customer_id, customer_id));
-  if (cust.length === 0) {
+  if (!(await customerExists(customer_id))) {
     return err("not_found", `customer not found: ${customer_id}`);
   }
-  const [co] = await db
-    .select({ name: aworkCompany.name })
-    .from(aworkCompany)
-    .where(eq(aworkCompany.awork_company_id, awork_company_id));
-  if (!co) {
+  const co_name = await getAworkCompanyName(awork_company_id);
+  if (co_name === null) {
     return err("not_found", `awork company not found: ${awork_company_id}`);
   }
-  const existing = await db
-    .select({ customer_id: aworkCompanyLink.customer_id })
-    .from(aworkCompanyLink)
-    .where(eq(aworkCompanyLink.awork_company_id, awork_company_id));
-  if (existing.length > 0) {
-    if (existing[0].customer_id !== customer_id) {
+  const existingCustomerId =
+    await getAworkCompanyLinkCustomerId(awork_company_id);
+  if (existingCustomerId !== null) {
+    if (existingCustomerId !== customer_id) {
       return err(
         "conflict",
-        `awork company ${awork_company_id} '${co.name ?? ""}' is already linked to customer ${existing[0].customer_id}`,
+        `awork company ${awork_company_id} '${co_name ?? ""}' is already linked to customer ${existingCustomerId}`,
       );
     }
     return err("conflict", "already linked here");
   }
-  await db.insert(aworkCompanyLink).values({
-    awork_company_id,
-    customer_id,
-    mapped_at: new Date(),
-  });
+  await insertAworkCompanyLink({ awork_company_id, customer_id });
   return ok({
     awork_company_id,
-    name: co.name,
+    name: co_name,
     mapped_to_customer_id: customer_id,
   });
 }
@@ -439,29 +352,13 @@ export async function deleteAworkCompanyLinkAction(
   if (!Number.isInteger(customer_id)) {
     return err("validation_error", `invalid customer id: ${customer_id}`);
   }
-  const existing = await db
-    .select({ id: aworkCompanyLink.awork_company_id })
-    .from(aworkCompanyLink)
-    .where(
-      and(
-        eq(aworkCompanyLink.awork_company_id, awork_company_id),
-        eq(aworkCompanyLink.customer_id, customer_id),
-      ),
-    );
-  if (existing.length === 0) {
+  const removed = await deleteAworkCompanyLink(customer_id, awork_company_id);
+  if (removed === 0) {
     return err(
       "not_found",
       `no link from awork company ${awork_company_id} to customer ${customer_id}`,
     );
   }
-  await db
-    .delete(aworkCompanyLink)
-    .where(
-      and(
-        eq(aworkCompanyLink.awork_company_id, awork_company_id),
-        eq(aworkCompanyLink.customer_id, customer_id),
-      ),
-    );
   return ok(null);
 }
 
@@ -497,32 +394,15 @@ export async function putSettingAction(
   // the explanatory text intact.
   let description: string | null = parsed.data.description ?? null;
   if (parsed.data.description === undefined || parsed.data.description === null) {
-    const [existing] = await db
-      .select({ description: setting.description })
-      .from(setting)
-      .where(eq(setting.key, key));
-    if (existing) description = existing.description ?? null;
+    description = await getSettingDescription(key);
   }
 
-  const now = new Date();
-  await db.execute(sql`
-    INSERT INTO setting (key, value, description, updated_at)
-    VALUES (${key}, ${parsed.data.value}, ${description}, ${now})
-    ON CONFLICT (key) DO UPDATE SET
-      value = EXCLUDED.value,
-      description = EXCLUDED.description,
-      updated_at = EXCLUDED.updated_at
-  `);
-
-  const [row] = await db
-    .select({
-      key: setting.key,
-      value: setting.value,
-      description: setting.description,
-      updated_at: setting.updated_at,
-    })
-    .from(setting)
-    .where(eq(setting.key, key));
+  const row = await upsertSetting({
+    key,
+    value: parsed.data.value,
+    description,
+    updated_at: new Date(),
+  });
   if (!row) return err("internal_error", "setting upsert vanished");
   return ok({
     key: row.key,

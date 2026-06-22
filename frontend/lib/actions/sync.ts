@@ -24,12 +24,12 @@ import {
 } from "@aws-sdk/client-lambda";
 
 import { audit } from "@/lib/auth/audit";
-import { ForbiddenError, requireSession } from "@/lib/auth/session";
 
 import {
   err,
   fromZod,
   ok,
+  requireActionRole,
   type ActionResult,
 } from "./_action-helpers";
 
@@ -65,15 +65,9 @@ function lambda(): LambdaClient {
 export async function runSyncAction(
   input: unknown,
 ): Promise<ActionResult<RunSyncSuccess>> {
-  let ctx;
-  try {
-    ctx = await requireSession({ minRole: "admin" });
-  } catch (e) {
-    if (e instanceof ForbiddenError) {
-      return err("forbidden", "Only admins can trigger a sync.");
-    }
-    throw e;
-  }
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
   const parsed = RunSyncSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 

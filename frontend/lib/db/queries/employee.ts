@@ -1,7 +1,12 @@
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { db } from "../client";
 import { roleTierFromAlias } from "../_sql-fragments";
+import {
+  aworkUser,
+  aworkUserLink,
+  employeeCurrent,
+} from "../schema";
 
 export type EmployeeDetail = {
   employee_id: number;
@@ -136,4 +141,186 @@ export async function getEmployeeDetail(
     is_multi_org: (row.is_multi_org as boolean | null) ?? null,
     role_tier: (row.role_tier as string | null) ?? null,
   };
+}
+
+export type EmployeeAllocationRow = {
+  assignment_id: unknown;
+  project_id: unknown;
+  project_name: unknown;
+  customer_name: unknown;
+  billing_model: unknown;
+  profile: unknown;
+  allocation_pct: string;
+  start_date: unknown;
+  end_date: unknown;
+  is_active_today: boolean;
+  effective_daily_rate_eur: string | null;
+};
+
+export async function getEmployeeAllocations(
+  employee_id: number,
+): Promise<EmployeeAllocationRow[]> {
+  // role_tier needs ec + ann aliases. The rate-resolution subqueries are
+  // inlined rather than fragment-composed — they reference outer aliases
+  // (`a`, `p`) which is awkward to express via a generic helper.
+  const roleTier = roleTierFromAlias("ec", "ann");
+  const result = await db.execute(sql`
+    SELECT
+      a.assignment_id, a.project_id, p.name AS project_name,
+      c.name AS customer_name, p.billing_model,
+      COALESCE(a.profile, ${roleTier}) AS profile,
+      a.allocation_pct, a.start_date, a.end_date,
+      COALESCE(
+        a.daily_rate_override_eur,
+        (SELECT daily_rate_eur FROM project_rate pr
+         WHERE pr.project_id = a.project_id
+           AND pr.profile = COALESCE(a.profile, ${roleTier})
+           AND pr.valid_from <= a.start_date
+         ORDER BY pr.valid_from DESC LIMIT 1),
+        (SELECT daily_rate_eur FROM framework_rate fr
+         WHERE fr.framework_id = p.framework_id
+           AND fr.profile = COALESCE(a.profile, ${roleTier})
+           AND fr.valid_from <= a.start_date
+         ORDER BY fr.valid_from DESC LIMIT 1)
+      ) AS effective_daily_rate_eur,
+      (a.start_date <= CURRENT_DATE
+       AND (a.end_date IS NULL OR a.end_date >= CURRENT_DATE)) AS is_active_today
+    FROM assignment a
+    JOIN project p ON p.project_id = a.project_id
+    JOIN customer c ON c.customer_id = p.customer_id
+    LEFT JOIN employee_current ec ON ec.employee_id = a.employee_id
+    LEFT JOIN employee_annotation ann ON ann.employee_id = a.employee_id
+    WHERE a.employee_id = ${employee_id}
+    ORDER BY a.start_date DESC, a.assignment_id DESC
+  `);
+
+  return (result.rows as Array<Record<string, unknown>>).map((r) => ({
+    assignment_id: r.assignment_id,
+    project_id: r.project_id,
+    project_name: r.project_name,
+    customer_name: r.customer_name,
+    billing_model: r.billing_model,
+    profile: r.profile,
+    allocation_pct: Number(r.allocation_pct).toFixed(4),
+    start_date: r.start_date,
+    end_date: r.end_date,
+    is_active_today: Boolean(r.is_active_today),
+    effective_daily_rate_eur:
+      r.effective_daily_rate_eur === null || r.effective_daily_rate_eur === undefined
+        ? null
+        : Number(r.effective_daily_rate_eur).toFixed(2),
+  }));
+}
+
+export type EmployeeAworkLinkRow = {
+  awork_user_id: unknown;
+  first_name: unknown;
+  last_name: unknown;
+  email: unknown;
+  n_time_entries: number;
+  mapped_to_employee_id: number;
+  mapped_to_employee_name: null;
+  position: null;
+  title: null;
+  is_archived: null;
+  is_deactivated: null;
+  is_external: null;
+};
+
+export async function getEmployeeAworkLinks(
+  employee_id: number,
+): Promise<EmployeeAworkLinkRow[]> {
+  const r = await db.execute(sql`
+    SELECT au.awork_user_id, au.first_name, au.last_name, au.email,
+           COALESCE(t.n_entries, 0)::int AS n_entries
+    FROM awork_user_link link
+    JOIN awork_user au ON au.awork_user_id = link.awork_user_id
+    LEFT JOIN (
+      SELECT awork_user_id, COUNT(*) AS n_entries
+      FROM awork_time_entry GROUP BY awork_user_id
+    ) t ON t.awork_user_id = link.awork_user_id
+    WHERE link.employee_id = ${employee_id}
+    ORDER BY au.last_name
+  `);
+
+  return (r.rows as Array<Record<string, unknown>>).map((row) => ({
+    awork_user_id: row.awork_user_id,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    email: row.email,
+    n_time_entries: Number(row.n_entries ?? 0),
+    mapped_to_employee_id: employee_id,
+    mapped_to_employee_name: null,
+    position: null,
+    title: null,
+    is_archived: null,
+    is_deactivated: null,
+    is_external: null,
+  }));
+}
+
+// ----------------------------------------------------------------------------
+// awork_user_link write-side helpers.
+// ----------------------------------------------------------------------------
+
+export async function employeeExists(employee_id: number): Promise<boolean> {
+  const rows = await db
+    .select({ id: employeeCurrent.employee_id })
+    .from(employeeCurrent)
+    .where(eq(employeeCurrent.employee_id, employee_id));
+  return rows.length > 0;
+}
+
+/** Look up an awork user's display name parts. `null` when the
+ * upstream awork user row does not exist. */
+export async function getAworkUserName(
+  awork_user_id: string,
+): Promise<{ first_name: string | null; last_name: string | null } | null> {
+  const [row] = await db
+    .select({
+      first_name: aworkUser.first_name,
+      last_name: aworkUser.last_name,
+    })
+    .from(aworkUser)
+    .where(eq(aworkUser.awork_user_id, awork_user_id));
+  return row ?? null;
+}
+
+/** Is this awork user already linked? Returns the linked
+ * `employee_id` or `null`. */
+export async function getAworkUserLinkEmployeeId(
+  awork_user_id: string,
+): Promise<number | null> {
+  const [row] = await db
+    .select({ employee_id: aworkUserLink.employee_id })
+    .from(aworkUserLink)
+    .where(eq(aworkUserLink.awork_user_id, awork_user_id));
+  return row?.employee_id ?? null;
+}
+
+export async function insertAworkUserLink(input: {
+  awork_user_id: string;
+  employee_id: number;
+}): Promise<void> {
+  await db.insert(aworkUserLink).values({
+    awork_user_id: input.awork_user_id,
+    employee_id: input.employee_id,
+    mapped_at: new Date(),
+  });
+}
+
+export async function deleteAworkUserLink(
+  employee_id: number,
+  awork_user_id: string,
+): Promise<number> {
+  const rows = await db
+    .delete(aworkUserLink)
+    .where(
+      and(
+        eq(aworkUserLink.awork_user_id, awork_user_id),
+        eq(aworkUserLink.employee_id, employee_id),
+      ),
+    )
+    .returning({ id: aworkUserLink.awork_user_id });
+  return rows.length;
 }

@@ -1,8 +1,6 @@
 import Decimal from "decimal.js";
-import { sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
-import { db } from "@/lib/db/client";
 import {
   absencesForEmployee,
   burdenFactor,
@@ -13,7 +11,11 @@ import {
   lastOfMonth,
   workingDaysInRange,
 } from "@/lib/db/_monthly-helpers";
-import { computeProjectMonthly } from "@/lib/db/queries/project-monthly";
+import {
+  computeProjectMonthly,
+  listActiveProjectsForPortfolio,
+  listUnallocatedPayrollEmployees,
+} from "@/lib/db/queries/project-monthly";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 
@@ -34,13 +36,7 @@ export async function GET(req: NextRequest) {
     const burden = await burdenFactor();
 
     // Pull every active project; per-project monthly delegated to existing handler.
-    const projRes = await db.execute(sql`
-      SELECT p.project_id, p.name, p.billing_model, c.name AS customer_name
-      FROM project p
-      JOIN customer c ON c.customer_id = p.customer_id
-      WHERE p.status = 'active'
-      ORDER BY c.name, p.name
-    `);
+    const projects = await listActiveProjectsForPortfolio();
 
     let tm_revenue = new Decimal(0);
     let tm_cost = new Decimal(0);
@@ -57,11 +53,11 @@ export async function GET(req: NextRequest) {
     let n_fp = 0;
     const project_rows: Array<Record<string, unknown>> = [];
 
-    for (const raw of projRes.rows as Array<Record<string, unknown>>) {
-      const project_id = raw.project_id as number;
-      const project_name = raw.name as string;
-      const billing_model = raw.billing_model as string;
-      const customer_name = raw.customer_name as string;
+    for (const raw of projects) {
+      const project_id = raw.project_id;
+      const project_name = raw.name;
+      const billing_model = raw.billing_model;
+      const customer_name = raw.customer_name;
 
       // Direct in-process call — replaced an internal `fetchSelf` of
       // `/api/projects/[id]/monthly` that re-authed and re-queried per
@@ -261,19 +257,10 @@ async function buildUnallocatedPayroll(
   burden: number,
   holidays: Map<string, string>,
 ): Promise<Record<string, unknown>> {
-  const empRes = await db.execute(sql`
-    SELECT ec.employee_id, ec.first_name, ec.last_name,
-           ec.hire_date, ec.employment_end_date,
-           COALESCE(ann.team_user, ec.department) AS team,
-           COALESCE(ann.is_real_employee, TRUE) AS is_real
-    FROM employee_current ec
-    LEFT JOIN employee_annotation ann ON ann.employee_id = ec.employee_id
-    WHERE COALESCE(ann.is_real_employee, TRUE) = TRUE
-      AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
-      AND ec.status = 'active'
-      AND (ec.hire_date IS NULL OR ec.hire_date <= ${month_end}::date)
-      AND (ec.employment_end_date IS NULL OR ec.employment_end_date >= ${month_start}::date)
-  `);
+  const employees = await listUnallocatedPayrollEmployees(
+    month_start,
+    month_end,
+  );
 
   const n_wd = working_days.length;
   const consultants: Array<Record<string, unknown>> = [];
@@ -283,13 +270,13 @@ async function buildUnallocatedPayroll(
   let n_partial_bench = 0;
   let n_fully_utilized = 0;
 
-  for (const raw of empRes.rows as Array<Record<string, unknown>>) {
-    const emp_id = raw.employee_id as number;
-    const first = raw.first_name as string | null;
-    const last = raw.last_name as string | null;
-    const hire_date = (raw.hire_date as string | null) ?? null;
-    const end_date = (raw.employment_end_date as string | null) ?? null;
-    const team = (raw.team as string | null) ?? null;
+  for (const raw of employees) {
+    const emp_id = raw.employee_id;
+    const first = raw.first_name;
+    const last = raw.last_name;
+    const hire_date = raw.hire_date;
+    const end_date = raw.employment_end_date;
+    const team = raw.team;
 
     const { monthly_cost } = await entityMonthlyCost(emp_id, null, null, burden);
     if (monthly_cost === null) continue;

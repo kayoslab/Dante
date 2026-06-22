@@ -6,15 +6,19 @@
  * Three actions: create / update / delete. The delete cascades through
  * `assignment` when `force=true`.
  */
-import { eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/lib/db/client";
 import {
+  countFreelancerAssignments,
+  deleteFreelancerCascading,
+  findFreelancerIdByName,
+  freelancerExists,
   getFreelancerDetail,
+  getFreelancerName,
+  insertFreelancer,
+  updateFreelancerById,
   type FreelancerDetail,
 } from "@/lib/db/queries/freelancer";
-import { assignment, freelancer } from "@/lib/db/schema";
 
 import {
   err,
@@ -52,29 +56,22 @@ export async function createFreelancerAction(
   const name = parsed.data.name.trim();
   if (!name) return err("conflict", "freelancer name cannot be empty");
 
-  const dup = await db
-    .select({ id: freelancer.freelancer_id })
-    .from(freelancer)
-    .where(eq(freelancer.name, name));
-  if (dup.length > 0) {
+  if ((await findFreelancerIdByName(name)) !== null) {
     return err("conflict", `freelancer already exists: ${name}`);
   }
 
   const now = new Date();
-  let inserted;
+  let freelancer_id: number;
   try {
-    inserted = await db
-      .insert(freelancer)
-      .values({
-        name,
-        daily_cost_eur: String(parsed.data.daily_cost_eur),
-        status: parsed.data.status,
-        contact_email: parsed.data.contact_email ?? null,
-        notes: parsed.data.notes ?? null,
-        created_at: now,
-        updated_at: now,
-      })
-      .returning({ freelancer_id: freelancer.freelancer_id });
+    freelancer_id = await insertFreelancer({
+      name,
+      daily_cost_eur: String(parsed.data.daily_cost_eur),
+      status: parsed.data.status,
+      contact_email: parsed.data.contact_email ?? null,
+      notes: parsed.data.notes ?? null,
+      created_at: now,
+      updated_at: now,
+    });
   } catch (e) {
     if (isUniqueViolation(e)) {
       return err("conflict", `could not create freelancer (unique violation)`);
@@ -82,7 +79,7 @@ export async function createFreelancerAction(
     throw e;
   }
 
-  const detail = await getFreelancerDetail(inserted[0].freelancer_id);
+  const detail = await getFreelancerDetail(freelancer_id);
   if (!detail) return err("internal_error", "created freelancer not found");
   return ok(detail);
 }
@@ -100,11 +97,7 @@ export async function updateFreelancerAction(
   const parsed = UpdateFreelancerSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const existing = await db
-    .select({ id: freelancer.freelancer_id })
-    .from(freelancer)
-    .where(eq(freelancer.freelancer_id, freelancer_id));
-  if (existing.length === 0) {
+  if (!(await freelancerExists(freelancer_id))) {
     return err("not_found", `freelancer not found: ${freelancer_id}`);
   }
 
@@ -127,10 +120,7 @@ export async function updateFreelancerAction(
   updates.updated_at = new Date();
 
   try {
-    await db
-      .update(freelancer)
-      .set(updates)
-      .where(eq(freelancer.freelancer_id, freelancer_id));
+    await updateFreelancerById(freelancer_id, updates);
   } catch (e) {
     if (isUniqueViolation(e)) {
       return err("conflict", "freelancer name already exists");
@@ -154,30 +144,23 @@ export async function deleteFreelancerAction(
     return err("validation_error", `invalid freelancer id: ${freelancer_id}`);
   }
 
-  const [existing] = await db
-    .select({ name: freelancer.name })
-    .from(freelancer)
-    .where(eq(freelancer.freelancer_id, freelancer_id));
-  if (!existing) {
+  const name = await getFreelancerName(freelancer_id);
+  if (name === null) {
     return err("not_found", `freelancer not found: ${freelancer_id}`);
   }
 
-  const asn = await db
-    .select({ id: assignment.assignment_id })
-    .from(assignment)
-    .where(eq(assignment.freelancer_id, freelancer_id));
+  const n_assignments = await countFreelancerAssignments(freelancer_id);
 
-  if (asn.length > 0 && !force) {
+  if (n_assignments > 0 && !force) {
     return err(
       "has_children",
-      `freelancer '${existing.name}' has ${asn.length} assignment(s). Pass force=true to cascade.`,
+      `freelancer '${name}' has ${n_assignments} assignment(s). Pass force=true to cascade.`,
     );
   }
 
-  if (force && asn.length > 0) {
-    await db.delete(assignment).where(eq(assignment.freelancer_id, freelancer_id));
-  }
-  await db.delete(freelancer).where(eq(freelancer.freelancer_id, freelancer_id));
+  await deleteFreelancerCascading(freelancer_id, {
+    cascadeAssignments: force && n_assignments > 0,
+  });
   return ok(null);
 }
 

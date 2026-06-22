@@ -1,11 +1,20 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/lib/db/client";
-import { appUser, employeeCurrent } from "@/lib/db/schema";
+import {
+  deleteAppUser,
+  findAppUserByEmail,
+  findEmployeeIdByEmail,
+  getAppUserEmailAndLastLogin,
+  getAppUserEmailAndSub,
+  getAppUserForDelete,
+  insertAppUser,
+  setAppUserDisabled,
+  setAppUserEmployee,
+  updateUserRoleWithLastAdminGuard,
+} from "@/lib/db/queries/app-user";
 import { audit } from "@/lib/auth/audit";
 import {
   adminCreateCognitoUser,
@@ -17,39 +26,16 @@ import {
   adminResetPassword,
   adminUpdateUserGroup,
 } from "@/lib/auth/cognito-admin";
-import {
-  ForbiddenError,
-  invalidateDisabledCache,
-  requireSession,
-} from "@/lib/auth/session";
+import { invalidateDisabledCache } from "@/lib/auth/session";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 
 import {
   err,
   fromZod,
   ok,
+  requireActionRole,
   type ActionResult,
 } from "./_action-helpers";
-
-/* ---------- shared admin gate ---------- */
-
-async function requireAdmin() {
-  try {
-    return await requireSession({ minRole: "admin" });
-  } catch (e) {
-    if (e instanceof ForbiddenError) {
-      throw new Error("forbidden");
-    }
-    throw e;
-  }
-}
-
-function bailForbidden<T>(e: unknown): ActionResult<T> | null {
-  if (e instanceof Error && e.message === "forbidden") {
-    return err("forbidden", "Only admins can perform this action.");
-  }
-  return null;
-}
 
 /* ---------- invite ---------- */
 
@@ -67,35 +53,22 @@ export type InvitedUser = {
 export async function inviteUserAction(
   input: unknown,
 ): Promise<ActionResult<InvitedUser>> {
-  let ctx;
-  try {
-    ctx = await requireAdmin();
-  } catch (e) {
-    const f = bailForbidden<InvitedUser>(e);
-    if (f) return f;
-    throw e;
-  }
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
   const parsed = InviteSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
   const { email, role } = parsed.data;
 
   // Reject duplicates (the unique index would too, but a friendly error
   // is nicer than a Postgres constraint message).
-  const dup = await db
-    .select({ user_id: appUser.user_id })
-    .from(appUser)
-    .where(sql`LOWER(${appUser.email}) = ${email.toLowerCase()}`)
-    .limit(1);
-  if (dup[0]) {
+  const dup = await findAppUserByEmail(email);
+  if (dup) {
     return err("conflict", `A user with email ${email} already exists.`);
   }
 
   // Auto-link to employee_current by exact email match.
-  const empMatch = await db
-    .select({ employee_id: employeeCurrent.employee_id })
-    .from(employeeCurrent)
-    .where(sql`LOWER(${employeeCurrent.email}) = ${email.toLowerCase()}`)
-    .limit(1);
+  const employee_id = await findEmployeeIdByEmail(email);
 
   // Two paths:
   //
@@ -134,28 +107,21 @@ export async function inviteUserAction(
     }
   }
 
-  const inserted = await db
-    .insert(appUser)
-    .values({
-      cognito_sub,
-      email,
-      role,
-      employee_id: empMatch[0]?.employee_id ?? null,
-    })
-    .returning({
-      user_id: appUser.user_id,
-      email: appUser.email,
-      role: appUser.role,
-    });
+  const inserted = await insertAppUser({
+    cognito_sub,
+    email,
+    role,
+    employee_id,
+  });
 
   await audit(ctx, {
     action: "user_invited",
     target_type: "app_user",
-    target_id: inserted[0].user_id,
+    target_id: inserted.user_id,
   });
 
   revalidatePath("/settings/users");
-  return ok({ ...inserted[0] });
+  return ok({ ...inserted });
 }
 
 /* ---------- change role ---------- */
@@ -168,23 +134,14 @@ const SetRoleSchema = z.object({
 export async function setUserRoleAction(
   input: unknown,
 ): Promise<ActionResult<{ user_id: string; role: "admin" | "manager" | "employee" }>> {
-  let ctx;
-  try {
-    ctx = await requireAdmin();
-  } catch (e) {
-    const f = bailForbidden<{
-      user_id: string;
-      role: "admin" | "manager" | "employee";
-    }>(e);
-    if (f) return f;
-    throw e;
-  }
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
   const parsed = SetRoleSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
   // MFA is mandatory for everyone; nothing role-specific to set here.
-  const updates: Record<string, unknown> = { role: parsed.data.role };
-
+  //
   // Wrap the last-admin check + the role write in a transaction with
   // `SELECT ... FOR UPDATE` on the admin rows. Two admins demoting each
   // other concurrently used to both pass the count check and both
@@ -193,64 +150,11 @@ export async function setUserRoleAction(
   const demotingSelf =
     parsed.data.user_id === ctx.user_id && parsed.data.role !== "admin";
 
-  type RoleChange = {
-    user_id: string;
-    role: "admin" | "manager" | "employee";
-    email: string;
-    cognito_sub: string;
-    previous_role: "admin" | "manager" | "employee";
-  };
-  type TxOutcome =
-    | { kind: "ok"; data: RoleChange }
-    | { kind: "last_admin_guard" }
-    | { kind: "not_found" };
-
-  // Return the outcome from the transaction directly so TypeScript can
-  // narrow on a discriminated union. Reassigning a `let` inside the
-  // callback breaks TS flow analysis after the await (sees only the
-  // initializer, infers `never` after the null-check).
-  const txOutcome: TxOutcome = await db.transaction(
-    async (tx): Promise<TxOutcome> => {
-      if (demotingSelf) {
-        const admins = await tx
-          .select({ user_id: appUser.user_id })
-          .from(appUser)
-          .where(eq(appUser.role, "admin"))
-          .for("update");
-        if (admins.length <= 1) return { kind: "last_admin_guard" };
-      }
-      // Capture current state before the update so we can sync Cognito
-      // groups afterwards (need the OLD role for
-      // AdminRemoveUserFromGroup + the email for both group calls +
-      // the cognito_sub to know whether to skip the Cognito hop in
-      // dev mode).
-      const before = await tx
-        .select({
-          email: appUser.email,
-          role: appUser.role,
-          cognito_sub: appUser.cognito_sub,
-        })
-        .from(appUser)
-        .where(eq(appUser.user_id, parsed.data.user_id))
-        .limit(1);
-      if (!before[0]) return { kind: "not_found" };
-      const updated = await tx
-        .update(appUser)
-        .set(updates)
-        .where(eq(appUser.user_id, parsed.data.user_id))
-        .returning({ user_id: appUser.user_id, role: appUser.role });
-      if (!updated[0]) return { kind: "not_found" };
-      return {
-        kind: "ok",
-        data: {
-          ...updated[0],
-          email: before[0].email,
-          cognito_sub: before[0].cognito_sub,
-          previous_role: before[0].role,
-        },
-      };
-    },
-  );
+  const txOutcome = await updateUserRoleWithLastAdminGuard({
+    user_id: parsed.data.user_id,
+    role: parsed.data.role,
+    demotingSelf,
+  });
 
   if (txOutcome.kind === "last_admin_guard") {
     // Audit the *attempt* — without this, repeated probing of
@@ -330,14 +234,9 @@ const SetDisabledSchema = z.object({
 export async function setUserDisabledAction(
   input: unknown,
 ): Promise<ActionResult<{ user_id: string; is_disabled: boolean }>> {
-  let ctx;
-  try {
-    ctx = await requireAdmin();
-  } catch (e) {
-    const f = bailForbidden<{ user_id: string; is_disabled: boolean }>(e);
-    if (f) return f;
-    throw e;
-  }
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
   const parsed = SetDisabledSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
@@ -352,24 +251,13 @@ export async function setUserDisabledAction(
 
   // Capture email + cognito_sub before the update so we can mirror the
   // change in Cognito (AdminDisableUser + AdminUserGlobalSignOut).
-  const before = await db
-    .select({
-      email: appUser.email,
-      cognito_sub: appUser.cognito_sub,
-    })
-    .from(appUser)
-    .where(eq(appUser.user_id, parsed.data.user_id))
-    .limit(1);
+  const before = await getAppUserEmailAndSub(parsed.data.user_id);
 
-  const updated = await db
-    .update(appUser)
-    .set({ is_disabled: parsed.data.disabled })
-    .where(eq(appUser.user_id, parsed.data.user_id))
-    .returning({
-      user_id: appUser.user_id,
-      is_disabled: appUser.is_disabled,
-    });
-  if (!updated[0] || !before[0]) {
+  const updated = await setAppUserDisabled(
+    parsed.data.user_id,
+    parsed.data.disabled,
+  );
+  if (!updated || !before) {
     await audit(ctx, {
       action: "user_disable_denied",
       target_type: "app_user",
@@ -401,14 +289,14 @@ export async function setUserDisabledAction(
   // AdminDisableUser doesn't revoke tokens — only blocks new sign-ins
   // — so pair with AdminUserGlobalSignOut on disable.
   const isDev = process.env.AUTH_DEV_MODE === "true";
-  const isDevStub = before[0].cognito_sub.startsWith("dev:");
+  const isDevStub = before.cognito_sub.startsWith("dev:");
   if (!isDev && !isDevStub) {
     try {
       if (parsed.data.disabled) {
-        await adminDisableCognitoUser(before[0].email);
-        await adminGlobalSignOut(before[0].email);
+        await adminDisableCognitoUser(before.email);
+        await adminGlobalSignOut(before.email);
       } else {
-        await adminEnableCognitoUser(before[0].email);
+        await adminEnableCognitoUser(before.email);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -425,7 +313,7 @@ export async function setUserDisabledAction(
   }
 
   revalidatePath("/settings/users");
-  return ok(updated[0]);
+  return ok(updated);
 }
 
 /* ---------- delete user ---------- */
@@ -437,14 +325,9 @@ const DeleteSchema = z.object({
 export async function deleteUserAction(
   input: unknown,
 ): Promise<ActionResult<{ user_id: string }>> {
-  let ctx;
-  try {
-    ctx = await requireAdmin();
-  } catch (e) {
-    const f = bailForbidden<{ user_id: string }>(e);
-    if (f) return f;
-    throw e;
-  }
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
   // Scoped rate limit on the destructive admin actions. The global
   // ceiling already fired in requireSession; this `expensive` tier
   // (20/min) bounds how many users a compromised admin token can wipe
@@ -464,17 +347,7 @@ export async function deleteUserAction(
 
   // Look up the email + disabled flag before deleting; we need the email
   // to call AdminDeleteUser, and the disabled flag to enforce the gate.
-  const rows = await db
-    .select({
-      user_id: appUser.user_id,
-      email: appUser.email,
-      is_disabled: appUser.is_disabled,
-      cognito_sub: appUser.cognito_sub,
-    })
-    .from(appUser)
-    .where(eq(appUser.user_id, parsed.data.user_id))
-    .limit(1);
-  const target = rows[0];
+  const target = await getAppUserForDelete(parsed.data.user_id);
   if (!target) {
     await audit(ctx, {
       action: "user_delete_denied",
@@ -525,7 +398,7 @@ export async function deleteUserAction(
     }
   }
 
-  await db.delete(appUser).where(eq(appUser.user_id, parsed.data.user_id));
+  await deleteAppUser(parsed.data.user_id);
 
   revalidatePath("/settings/users");
   return ok({ user_id: parsed.data.user_id });
@@ -540,26 +413,16 @@ const ResendSchema = z.object({
 export async function resendInvitationAction(
   input: unknown,
 ): Promise<ActionResult<{ user_id: string }>> {
-  let ctx;
-  try {
-    ctx = await requireAdmin();
-  } catch (e) {
-    const f = bailForbidden<{ user_id: string }>(e);
-    if (f) return f;
-    throw e;
-  }
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
   // Each call sends a real Cognito email via SES — bound at 20/min so
   // a compromised admin token can't blast invitations / burn SES quota.
   enforceRateLimit(ctx, "user_admin_resend", "expensive");
   const parsed = ResendSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const rows = await db
-    .select({ email: appUser.email, last_login_at: appUser.last_login_at })
-    .from(appUser)
-    .where(eq(appUser.user_id, parsed.data.user_id))
-    .limit(1);
-  const target = rows[0];
+  const target = await getAppUserEmailAndLastLogin(parsed.data.user_id);
   if (!target) {
     await audit(ctx, {
       action: "user_invitation_resend_denied",
@@ -609,14 +472,9 @@ const ResetPasswordSchema = z.object({
 export async function resetPasswordAction(
   input: unknown,
 ): Promise<ActionResult<{ user_id: string }>> {
-  let ctx;
-  try {
-    ctx = await requireAdmin();
-  } catch (e) {
-    const f = bailForbidden<{ user_id: string }>(e);
-    if (f) return f;
-    throw e;
-  }
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
   // Triggers AdminResetUserPassword → SES email + invalidates the
   // user's current password. Compromised admin token + a loop here =
   // every user locked out + SES quota gone. 20/min cap.
@@ -624,12 +482,7 @@ export async function resetPasswordAction(
   const parsed = ResetPasswordSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const rows = await db
-    .select({ email: appUser.email, last_login_at: appUser.last_login_at })
-    .from(appUser)
-    .where(eq(appUser.user_id, parsed.data.user_id))
-    .limit(1);
-  const target = rows[0];
+  const target = await getAppUserEmailAndLastLogin(parsed.data.user_id);
   if (!target) {
     await audit(ctx, {
       action: "user_password_reset_denied",
@@ -680,26 +533,17 @@ const LinkEmployeeSchema = z.object({
 export async function setUserEmployeeAction(
   input: unknown,
 ): Promise<ActionResult<{ user_id: string; employee_id: number | null }>> {
-  let ctx;
-  try {
-    ctx = await requireAdmin();
-  } catch (e) {
-    const f = bailForbidden<{ user_id: string; employee_id: number | null }>(e);
-    if (f) return f;
-    throw e;
-  }
+  const auth = await requireActionRole("admin");
+  if (!auth.ok) return auth.result;
+  const ctx = auth.ctx;
   const parsed = LinkEmployeeSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
 
-  const updated = await db
-    .update(appUser)
-    .set({ employee_id: parsed.data.employee_id })
-    .where(eq(appUser.user_id, parsed.data.user_id))
-    .returning({
-      user_id: appUser.user_id,
-      employee_id: appUser.employee_id,
-    });
-  if (!updated[0]) return err("not_found", "User not found.");
+  const updated = await setAppUserEmployee(
+    parsed.data.user_id,
+    parsed.data.employee_id,
+  );
+  if (!updated) return err("not_found", "User not found.");
 
   await audit(ctx, {
     action: "user_employee_linked",
@@ -708,5 +552,5 @@ export async function setUserEmployeeAction(
   });
 
   revalidatePath("/settings/users");
-  return ok(updated[0]);
+  return ok(updated);
 }
