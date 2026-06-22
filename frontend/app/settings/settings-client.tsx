@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Plug, ScrollText, Users } from "lucide-react";
+import { Plug, RefreshCw, ScrollText, Users } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +15,6 @@ import {
   type Setting,
 } from "@/lib/api/settings";
 import { TeamsCard } from "@/components/team/teams-card";
-import { SyncCard } from "@/components/settings/sync-card";
 
 export function SettingsClient() {
   const { data, isLoading, isError, error } = useSettings();
@@ -89,9 +88,26 @@ export function SettingsClient() {
             </Link>
           </CardContent>
         </Card>
+        <Card>
+          <CardContent className="flex items-center justify-between gap-3 py-4">
+            <div className="flex items-center gap-3">
+              <RefreshCw className="size-5 text-muted-foreground" />
+              <div>
+                <div className="text-sm font-medium">Run sync</div>
+                <div className="text-xs text-muted-foreground">
+                  Pull fresh Personio + awork data into the database.
+                </div>
+              </div>
+            </div>
+            <Link
+              href="/settings/sync"
+              className={buttonVariants({ size: "sm", variant: "outline" })}
+            >
+              Open
+            </Link>
+          </CardContent>
+        </Card>
       </div>
-
-      <SyncCard />
 
       <TeamsCard />
 
