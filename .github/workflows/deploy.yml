@@ -47,7 +47,7 @@ jobs:
     outputs:
       image_uri: ${{ steps.tag.outputs.image_uri }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -156,7 +156,7 @@ jobs:
           fi
 
       # --- Sync Lambda bundle ----------------------------------------
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -169,7 +169,7 @@ jobs:
           npm run build:sync-lambda
 
       - name: Upload Lambda bundle for the apply job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sync-lambda
           path: frontend/dist/lambda/dante-sync-lambda.zip
@@ -190,7 +190,7 @@ jobs:
       run:
         working-directory: terraform/envs/prod
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -203,7 +203,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Download Lambda bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: sync-lambda
           # download-artifact's `path:` is resolved relative to
@@ -241,7 +241,7 @@ jobs:
           exit "$rc"
 
       - name: Upload plan
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: terraform-plan
           # Only the plan binary travels via artifact. The apply job
@@ -278,7 +278,7 @@ jobs:
       run:
         working-directory: terraform/envs/prod
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -291,7 +291,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Download Lambda bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: sync-lambda
           # download-artifact's `path:` is resolved relative to
@@ -303,7 +303,7 @@ jobs:
           path: frontend/dist/lambda
 
       - name: Download terraform plan
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: terraform-plan
           path: terraform/envs/prod
