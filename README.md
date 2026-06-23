@@ -219,14 +219,14 @@ retention, SES, SNS, S3 state) totals well under €10/mo.
 **Cost assumptions** baked into the current setup, each of which is a
 deliberate trade and a future lever if you need to cut further:
 
-- **NAT instance** over NAT Gateway saves ~€30/mo at the cost of
-  self-managed packet forwarding on a single `t4g.nano`. If the
-  instance dies, the next `terraform apply` rebuilds it (~5 min of
-  NAT-dependent outbound disrupted: daily sync would slip a day,
-  Secrets Manager + KMS keep working because they're on VPC
-  endpoints). Switch to NAT Gateway by setting
-  `vpc.nat_mode = "gateway"` if the operational simplicity ever earns
-  back its €30/mo.
+- **NAT Gateway today; NAT instance available** (`vpc.nat_mode =
+  "instance"`) — switching saves ~€30/mo but requires a non-Free-Tier
+  ARM instance type that the AWS 2025 Free Plan blocks
+  (`InvalidParameterCombination: The specified instance type is not
+  eligible for Free Tier`). The terraform variable is plumbed; flip
+  it once IT upgrades the billing tier. NAT instance is single-AZ,
+  single-instance — if it dies, the next `terraform apply` rebuilds
+  it (~5 min of NAT-dependent outbound disrupted).
 - **Single-AZ NAT** for both modes — one NAT in `eu-central-1a`, both
   app AZs route through it. AZ outage on `1a` means no outbound from
   either AZ. Toggle `vpc.single_nat_gateway = false` if multi-AZ
@@ -293,6 +293,13 @@ functionality is degraded or missing from production:
   ECR basic scanning doesn't support arm64 / Graviton, and Inspector
   v2 enhanced scanning needs a Free-Plan-blocked subscription
   (`SubscriptionRequiredException` on `inspector2:Enable`).
+
+**Cost optimisations blocked by Free Plan**
+- **NAT instance** (`vpc.nat_mode = "instance"`) — saves ~€30/mo over
+  NAT Gateway but needs a non-Free-Tier instance type. The Free Plan
+  rejects `RunInstances` for anything outside `t2.micro` /
+  `t3.micro`, both x86. Plumbed in terraform but defaulted off until
+  the billing tier lifts.
 
 **What is *not* affected**
 - WAF, IAM, KMS, Secrets Manager, ALB, Cognito itself, ECR pushes,

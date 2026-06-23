@@ -38,9 +38,9 @@ variable "single_nat_gateway" {
 }
 
 variable "nat_mode" {
-  description = "`gateway` provisions managed AWS NAT Gateway(s) (~€32/mo each, fully managed, HA within an AZ). `instance` provisions a t4g.nano EC2 instance running iptables MASQUERADE (~€3/mo each, single-instance — terraform apply rebuilds it if it dies). For a 40-user internal tool the NAT instance is the right cost/complexity trade. Flip to `gateway` if SLA / managed-service requirements demand it."
+  description = "`gateway` provisions managed AWS NAT Gateway(s) (~€32/mo each, fully managed, HA within an AZ). `instance` provisions an EC2 instance running iptables MASQUERADE (~€3/mo on t4g.nano). For a 40-user internal tool the NAT instance is the right cost trade — once the AWS Free Plan is lifted. Free Plan 2025 only permits Free Tier eligible instance types, which excludes the ARM Graviton family we'd use here; default stays on `gateway` until that lifts."
   type        = string
-  default     = "instance"
+  default     = "gateway"
   validation {
     condition     = contains(["gateway", "instance"], var.nat_mode)
     error_message = "nat_mode must be either 'gateway' or 'instance'."

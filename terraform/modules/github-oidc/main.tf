@@ -167,6 +167,19 @@ data "aws_iam_policy_document" "deploy" {
     resources = [var.ecr_repository_arn]
   }
 
+  # EC2 — full management on the network + compute primitives terraform
+  # touches. VPC endpoints, NAT (gateway OR instance), security groups,
+  # network interfaces, EIPs, EC2 instances, routes, tags. Enumerating
+  # the dozen-plus required actions each time terraform grows a new
+  # resource type is a maintenance treadmill; the deploy role's real
+  # trust boundary is the OIDC main-branch condition. Reads come from
+  # the ReadOnlyAccess attachment further down.
+  statement {
+    effect    = "Allow"
+    actions   = ["ec2:*"]
+    resources = ["*"]
+  }
+
   # ECS — register new task definition revisions, deregister old ones
   # (terraform rotates them every apply), tag them, and force-roll
   # services. Tag/Untag are required because RegisterTaskDefinition

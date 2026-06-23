@@ -55,8 +55,27 @@ function needsCsp(pathname: string): boolean {
   return !pathname.startsWith("/api/");
 }
 
-function attachCsp(req: NextRequest, response: NextResponse): NextResponse {
-  if (!needsCsp(req.nextUrl.pathname)) return response;
+type CspResult = {
+  requestHeaders: Headers;
+  responseHeaders: Headers;
+};
+
+/** Build the CSP + nonce for an HTML request and return both the
+ * request and response header sets that need it.
+ *
+ * The crucial bit (and the one easy to get wrong): Next.js extracts
+ * the nonce from the `Content-Security-Policy` header on the *request*
+ * during render, then attaches it to its bootstrap scripts. Setting
+ * CSP only on the response — which feels intuitive — means the
+ * browser sees the strict policy but Next never tagged its scripts
+ * with the nonce, so the browser blocks the bootstrap, hydration
+ * dies, the page renders without client-side JS, dev Fast Refresh
+ * stops working, and Tailwind utility-styling appears broken because
+ * dev mode injects styles via JS. The forwarded request header is
+ * the load-bearing line.
+ */
+function buildCsp(req: NextRequest): CspResult | null {
+  if (!needsCsp(req.nextUrl.pathname)) return null;
 
   const isDev = process.env.NODE_ENV === "development";
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
@@ -64,61 +83,80 @@ function attachCsp(req: NextRequest, response: NextResponse): NextResponse {
   const directives = [
     "default-src 'self'",
     // `'strict-dynamic'` lets nonced scripts dynamically import more
-    // scripts without us having to enumerate hosts. In dev, React debug
-    // helpers use `eval` so `'unsafe-eval'` has to be present.
+    // scripts without us having to enumerate hosts. Dev mode needs
+    // `'unsafe-eval'` for React's enhanced error-overlay debugger and
+    // Turbopack/Webpack HMR.
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ""}`,
     // Tailwind utility classes + Recharts inline transforms produce
-    // inline `<style>` tags we can't nonce. Keep `'unsafe-inline'` for
-    // style-src — style-injection XSS is narrow (can't exfiltrate on
-    // its own).
+    // inline `<style>` tags we can't nonce.
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
-    "connect-src 'self'",
+    // Dev needs a WebSocket back to the Turbopack/Webpack HMR server
+    // — `ws://localhost:*` covers it. In prod the app only talks to
+    // itself for fetch/XHR.
+    `connect-src 'self'${isDev ? " ws: wss:" : ""}`,
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",
     "object-src 'none'",
-    "upgrade-insecure-requests",
-    // Tell the browser where to POST violation reports. Legacy
-    // `report-uri` + modern `report-to` covers both old + new browsers
-    // (the modern Reporting API requires the `Report-To` response
-    // header set below). Reports land in CloudWatch via
-    // `/api/csp-report` so we can spot pentest probes or accidental
-    // CSP-blocking of a legitimate dependency.
+    // `upgrade-insecure-requests` rewrites every `http://` URL the
+    // browser sees to `https://` — perfect in prod (HSTS-enforced),
+    // broken in dev (localhost serves over plain HTTP, so CSS, nav,
+    // every fetch fails the upgrade). Prod-only.
+    ...(isDev ? [] : ["upgrade-insecure-requests"]),
     "report-uri /api/csp-report",
     "report-to csp-endpoint",
   ];
   const csp = directives.join("; ");
 
-  response.headers.set("Content-Security-Policy", csp);
-  // Reporting API endpoint group — pairs with `report-to csp-endpoint`
-  // in the CSP directive above.
-  response.headers.set(
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set("x-nonce", nonce);
+  // Next.js's renderer reads the nonce off the request CSP header.
+  requestHeaders.set("Content-Security-Policy", csp);
+
+  const responseHeaders = new Headers();
+  responseHeaders.set("Content-Security-Policy", csp);
+  responseHeaders.set(
     "Reporting-Endpoints",
     'csp-endpoint="/api/csp-report"',
   );
-  // Forward the nonce so Server Components / <Script> tags can read it
-  // via `headers().get('x-nonce')`. Next.js internal bootstrap scripts
-  // pick it up automatically from the request header.
-  response.headers.set("x-nonce", nonce);
+  responseHeaders.set("x-nonce", nonce);
+
+  return { requestHeaders, responseHeaders };
+}
+
+function nextWithCsp(req: NextRequest): NextResponse {
+  const csp = buildCsp(req);
+  if (!csp) return NextResponse.next();
+  const response = NextResponse.next({
+    request: { headers: csp.requestHeaders },
+  });
+  csp.responseHeaders.forEach((value, key) => response.headers.set(key, value));
+  return response;
+}
+
+function redirectWithCsp(req: NextRequest, url: URL): NextResponse {
+  const csp = buildCsp(req);
+  const response = NextResponse.redirect(url);
+  if (csp) {
+    csp.responseHeaders.forEach((value, key) =>
+      response.headers.set(key, value),
+    );
+  }
   return response;
 }
 
 export const proxy = auth((req) => {
   const { pathname, search } = req.nextUrl;
 
-  if (isPublic(pathname)) {
-    return attachCsp(req, NextResponse.next());
-  }
-  if (req.auth) {
-    return attachCsp(req, NextResponse.next());
-  }
+  if (isPublic(pathname)) return nextWithCsp(req);
+  if (req.auth) return nextWithCsp(req);
 
   // Preserve the original destination so post-login we can route them back.
   const callbackUrl = encodeURIComponent(pathname + search);
   const loginUrl = new URL(`/login?callbackUrl=${callbackUrl}`, req.nextUrl);
-  return attachCsp(req, NextResponse.redirect(loginUrl));
+  return redirectWithCsp(req, loginUrl);
 });
 
 export const config = {

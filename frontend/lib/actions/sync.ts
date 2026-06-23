@@ -78,11 +78,29 @@ export async function runSyncAction(
   });
 
   const functionName = process.env.DANTE_SYNC_LAMBDA_NAME;
+  // Local-dev fallback: when there's no Lambda wired (i.e. running
+  // `npm run dev` with no AWS plumbing), run the sync in-process via
+  // the same `runSync()` the Lambda uses. The Secrets-Manager
+  // isolation argument doesn't apply outside prod, and the alternative
+  // is "no sync button in dev" which makes integration changes
+  // painful to verify.
   if (!functionName) {
-    return err(
-      "internal_error",
-      "DANTE_SYNC_LAMBDA_NAME is not set on the task. Wire it via the ECS task definition (terraform/envs/prod/main.tf).",
-    );
+    const { runSync } = await import("@/lib/sync/run");
+    const lines: string[] = [];
+    const started = Date.now();
+    try {
+      await runSync({ source: parsed.data.source }, (line) => lines.push(line));
+    } catch (e) {
+      return err(
+        "internal_error",
+        `${e instanceof Error ? e.message : String(e)}\n\n${lines.join("\n")}`,
+      );
+    }
+    return ok({
+      source: parsed.data.source,
+      duration_ms: Date.now() - started,
+      log: lines.join("\n"),
+    });
   }
 
   const started = Date.now();
