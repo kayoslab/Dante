@@ -413,8 +413,112 @@ function BenchSection({
             )}
           </div>
         )}
+        {bench.consultants.length > 0 && (
+          <TeamUtilizationTable consultants={bench.consultants} />
+        )}
       </div>
     </section>
+  );
+}
+
+/** Per-team rollup of the same bench data. Lets a manager spot which
+ * department is carrying the loaded-cost waste, not just which
+ * individual consultant — useful when the action lives at the team
+ * level (re-staff, sales push, role conversion) rather than per-head.
+ *
+ * Aggregates client-side from the consultant rows the API already
+ * ships; no extra fetch. Consultants with no team land in a "(no team)"
+ * bucket so the row totals match the parent KPI grid. */
+function TeamUtilizationTable({
+  consultants,
+}: {
+  consultants: NonNullable<
+    ReturnType<typeof usePortfolioMonthly>["data"]
+  >["bench"]["consultants"];
+}) {
+  type TeamRow = {
+    team: string;
+    headcount: number;
+    loaded_cost: number;
+    unallocated_cost: number;
+    utilization_pct: number; // 0–1
+  };
+
+  const teams: TeamRow[] = (() => {
+    const buckets = new Map<
+      string,
+      { headcount: number; loaded: number; unalloc: number }
+    >();
+    for (const c of consultants) {
+      const key = c.team ?? "(no team)";
+      const b = buckets.get(key) ?? { headcount: 0, loaded: 0, unalloc: 0 };
+      b.headcount += 1;
+      b.loaded += Number(c.monthly_cost);
+      b.unalloc += Number(c.unallocated_cost);
+      buckets.set(key, b);
+    }
+    return Array.from(buckets, ([team, b]) => ({
+      team,
+      headcount: b.headcount,
+      loaded_cost: b.loaded,
+      unallocated_cost: b.unalloc,
+      utilization_pct: b.loaded > 0 ? 1 - b.unalloc / b.loaded : 1,
+    })).sort((a, b) => b.unallocated_cost - a.unallocated_cost);
+  })();
+
+  if (teams.length === 0) return null;
+
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        Per team
+      </div>
+      <div className="overflow-x-auto rounded-md border bg-background">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium">Team</th>
+              <th className="px-3 py-2 text-right font-medium">Headcount</th>
+              <th className="px-3 py-2 text-right font-medium">Loaded cost</th>
+              <th className="px-3 py-2 text-right font-medium">Util %</th>
+              <th className="px-3 py-2 text-right font-medium">Unallocated</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {teams.map((t) => {
+              const utilTone =
+                t.utilization_pct === 0
+                  ? "text-red-700"
+                  : t.utilization_pct < 0.75
+                    ? "text-amber-700"
+                    : "text-emerald-700";
+              return (
+                <tr key={t.team} className="hover:bg-muted/20">
+                  <td className="px-3 py-2">{t.team}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {t.headcount}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {formatEUR(t.loaded_cost.toFixed(2))}
+                  </td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-right tabular-nums",
+                      utilTone,
+                    )}
+                  >
+                    {(t.utilization_pct * 100).toFixed(0)}%
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {formatEUR(t.unallocated_cost.toFixed(2))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

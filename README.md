@@ -181,10 +181,11 @@ sessions without checking passwords. Roles come from
 `AUTH_DEV_ADMIN_EMAILS` / `AUTH_DEV_MANAGER_EMAILS` in `.env`.
 
 Useful npm scripts:
-- `npm run check` — type-check + read-only guard on the awork integration
+- `npm run check` — type-check + awork read-only guard + DB-locality guard + tests
 - `npm run sync` — full pull of Personio + awork
 - `npm run build:sync-lambda` — bundle the sync Lambda zip
 - `npm run check:awork-readonly` — fails if any code outside `lib/sync/awork/auth.ts` issues a POST to awork
+- `npm run check:db-locality` — fails if any code outside `lib/db/` opens a `db.execute`/`db.select`/`db.insert`/`db.update`/`db.delete`/`db.transaction` call. API routes, Server Actions and Server Component pages call named query functions from `lib/db/queries/*` only
 
 ---
 
