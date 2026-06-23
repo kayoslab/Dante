@@ -17,6 +17,7 @@ import {
 import { formatEUR, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { isoMonthOf, monthLabel, shiftMonth } from "@/lib/month";
+import { teamSlug } from "@/lib/team-slug";
 import { Kpi, KpiGrid } from "@/components/ui/kpi";
 
 export function PortfolioMonthlyCard() {
@@ -367,7 +368,16 @@ function BenchSection({
                           </Link>
                         </td>
                         <td className="px-3 py-2 text-muted-foreground">
-                          {c.team ?? "—"}
+                          {c.team ? (
+                            <Link
+                              href={`/teams/${teamSlug(c.team)}`}
+                              className="hover:text-foreground hover:underline"
+                            >
+                              {c.team}
+                            </Link>
+                          ) : (
+                            "—"
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums">
                           {formatEUR(c.monthly_cost)}
@@ -492,9 +502,21 @@ function TeamUtilizationTable({
                   : t.utilization_pct < 0.75
                     ? "text-amber-700"
                     : "text-emerald-700";
+              const isReal = t.team !== "(no team)";
               return (
                 <tr key={t.team} className="hover:bg-muted/20">
-                  <td className="px-3 py-2">{t.team}</td>
+                  <td className="px-3 py-2">
+                    {isReal ? (
+                      <Link
+                        href={`/teams/${teamSlug(t.team)}`}
+                        className="hover:underline"
+                      >
+                        {t.team}
+                      </Link>
+                    ) : (
+                      t.team
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {t.headcount}
                   </td>

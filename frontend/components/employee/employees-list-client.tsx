@@ -14,6 +14,7 @@ import {
   useEmployeeTeams,
   type EmployeeListItem,
 } from "@/lib/api/employees";
+import { teamSlug } from "@/lib/team-slug";
 import { cn } from "@/lib/utils";
 
 /** Client half of the employees list page. Owns filter state; the SSR
@@ -174,7 +175,16 @@ export function EmployeesListClient({
                       )}
                     </td>
                   <td className="px-3 py-2 text-muted-foreground">
-                    {e.team ?? "—"}
+                    {e.team && canViewDetail ? (
+                      <Link
+                        href={`/teams/${teamSlug(e.team)}`}
+                        className="hover:text-foreground hover:underline"
+                      >
+                        {e.team}
+                      </Link>
+                    ) : (
+                      (e.team ?? "—")
+                    )}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
                     {e.position ?? "—"}
