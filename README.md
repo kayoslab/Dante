@@ -93,26 +93,53 @@ version of this is wrong. That's why this exists.
 ```
 
 - **Frontend + API:** Next.js 16 (App Router, Server Components, Server
-  Actions) on ECS Fargate. Two tasks across two AZs.
+  Actions) on ECS Fargate, ARM64 / Graviton. Two tasks across two AZs.
+  A per-request `proxy.ts` issues a CSP nonce + gates unauthenticated
+  routes before the app sees them.
 - **Database:** RDS PostgreSQL 16, single-AZ on day-one, Multi-AZ flip
   when traffic justifies it. Master credential rotated into Secrets
   Manager and never seen by the operator.
 - **Sync:** A Lambda fires daily at 06:00 UTC, pulls Personio + awork,
   upserts via typed Drizzle inserts, purges audit log entries older than
-  30 days. Failures land in an SQS DLQ; CloudWatch alarms publish to
-  an SNS topic.
-- **Auth:** AWS Cognito user pool with hosted UI. MFA is mandatory for
-  every user (`mfa_configuration = "ON"`); TOTP via any authenticator
-  app. Auth.js receives the OIDC token after Cognito has already
-  enforced the factor.
+  30 days. Failures throw, surface as CloudWatch `Errors`, land in an
+  SQS DLQ, and trigger SNS alarm emails. The `/settings/sync` button
+  reuses the same Lambda via synchronous invoke — the web-app task role
+  doesn't hold Personio credentials directly.
+- **Auth:** AWS Cognito user pool with hosted UI on the custom domain
+  `auth.dante.example.com` (own ACM cert in `us-east-1` per Cognito
+  requirement). MFA is mandatory for every user
+  (`mfa_configuration = "ON"`); TOTP via any authenticator app. The
+  pool runs on the **Plus tier** with Threat Protection set to
+  `ENFORCED` — adaptive auth + IP throttling + compromised-credentials
+  detection in front of the hosted UI. Auth.js receives the OIDC token
+  after Cognito has already enforced the factor; the JWT cookie carries
+  the Cognito access + refresh tokens server-side only (never reaches
+  the client) for self-service flows.
 - **Secrets:** AWS Secrets Manager for Personio creds, awork OAuth client
   + rotating tokens, the Auth.js JWT signing key, and the RDS master
   credential. The app composes connection strings at boot from the
   managed RDS secret; nothing sensitive lives in the task definition or
-  CloudWatch.
+  CloudWatch. Web-app task role holds awork OAuth tokens (read for
+  status UI, write for the callback) and Cognito client secret only;
+  Personio creds are exclusive to the sync Lambda. The deploy role's
+  Secrets Manager perms are split read-write (only the cognito_client
+  secret terraform manages) vs describe-only on everything else.
+- **Email:** Cognito invitation / reset / MFA-setup emails route through
+  SES from `noreply@dante.example.com` (domain identity verified with
+  Easy-DKIM; DKIM CNAMEs in Route 53). SES is in sandbox until AWS
+  approves production access — see "What is not available" below.
 - **WAF:** Managed rule groups (Common, KnownBadInputs, IpReputation,
   SQLi) plus rate limits on `/api/auth/*` (100/5min) and globally
   (2000/5min). Optional geo allow-list.
+- **Observability:** App audit rows mirror to CloudWatch as
+  `audit_event` log lines; metric filters + alarms fire on spikes in
+  `view_inspect_payload` (Personio raw data reads) and `view_salary`
+  reads. Alarm SNS topic is the same one the sync Lambda uses.
+- **State backend:** Terraform state lives in S3 (`dante-tfstate`,
+  versioned + SSE-AES256 + TLS-only bucket policy + public-access
+  block) with DynamoDB-backed state locking. The bootstrap stack that
+  creates them is the only one with local state. Both GitHub Actions
+  and the operator's laptop share the same state file.
 - **Region:** `eu-central-1` (Frankfurt). Region-locked at the
   Terraform variable layer — overriding requires legal review.
 
@@ -178,9 +205,48 @@ Cliff notes:
 5. `terraform apply -var app_image_uri=<repo>:<sha>` rolls the service.
 6. Confirm SNS subscription emails for the alarm topics.
 
-Steady-state monthly cost in `eu-central-1` is roughly **€135** —
-dominated by the always-on NAT gateway, the four interface VPC
-endpoints, and two Fargate tasks.
+### Cost
+
+Steady-state monthly cost in `eu-central-1` is roughly **€75 – €85**.
+Biggest line items: the two Fargate tasks (~€40/mo combined for the
+default 0.5 vCPU / 1 GB sizing), the ALB (~€18/mo), the two interface
+VPC endpoints — `kms` + `secretsmanager` — across both AZs (~€38/mo
+combined), and the NAT instance (~€3/mo on `t4g.nano`). Cognito Plus
+tier adds ~€2/mo at 40 MAU. Everything else (RDS `db.t4g.micro`,
+ECR, Secrets Manager containers, Route 53 zone, CloudWatch logs at
+retention, SES, SNS, S3 state) totals well under €10/mo.
+
+**Cost assumptions** baked into the current setup, each of which is a
+deliberate trade and a future lever if you need to cut further:
+
+- **NAT instance** over NAT Gateway saves ~€30/mo at the cost of
+  self-managed packet forwarding on a single `t4g.nano`. If the
+  instance dies, the next `terraform apply` rebuilds it (~5 min of
+  NAT-dependent outbound disrupted: daily sync would slip a day,
+  Secrets Manager + KMS keep working because they're on VPC
+  endpoints). Switch to NAT Gateway by setting
+  `vpc.nat_mode = "gateway"` if the operational simplicity ever earns
+  back its €30/mo.
+- **Single-AZ NAT** for both modes — one NAT in `eu-central-1a`, both
+  app AZs route through it. AZ outage on `1a` means no outbound from
+  either AZ. Toggle `vpc.single_nat_gateway = false` if multi-AZ
+  outbound is required.
+- **Two interface endpoints (`kms` + `secretsmanager`) in both AZs**,
+  not the four originally provisioned. `logs` and `sts` were dropped
+  — call volumes are too small to repay the ~€19/mo each. Both
+  removed services now flow through the NAT.
+- **Two AZs for the kept endpoints** instead of one. AZ-halving would
+  save another ~€19/mo but means one specific AZ failure briefly
+  breaks KMS / Secrets-Manager calls until traffic re-routes through
+  NAT. Documented here as a deferred lever.
+- **Single Fargate task** instead of two-task HA would save another
+  ~€20/mo. Not done yet — the ECS deployment circuit breaker still
+  catches failed rollouts on a single task, but you'd see ~30-60s
+  unavailability during each deploy and zero HA against a task crash.
+  Worth considering for stretch-cost runs.
+- **CloudWatch log retention** caps app logs at 7 days, audit logs
+  at 30 days (see migration 0014). Keep an eye on the log group size
+  if `DANTE_LOG_LEVEL` is ever set to `debug` in prod.
 
 ### What is *not* available right now (AWS account state, June 2026)
 
@@ -200,6 +266,17 @@ functionality is degraded or missing from production:
   taken before the incident. If no manual snapshot exists, the data is
   gone. **Do not load real employee or salary data into prod until
   this is restored.**
+
+**Email deliverability**
+- **SES is in sandbox**, so Cognito invitation / password-reset / MFA
+  setup emails only reach addresses that have been individually
+  pre-verified as SES identities. New hires invited via
+  `/settings/users` do not receive their welcome email — the action
+  succeeds at the API layer but SES silently drops delivery. The
+  workaround is to verify each new email address as an SES identity
+  in the AWS console before inviting, or — properly — open the
+  SES production-access request. Once approved, the sandbox restriction
+  lifts and every recipient gets mail.
 
 **Runtime safety nets**
 - **No concurrency cap on the sync Lambda**

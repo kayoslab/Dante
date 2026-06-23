@@ -32,9 +32,25 @@ variable "az_count" {
 }
 
 variable "single_nat_gateway" {
-  description = "When true, provision ONE NAT gateway in the first AZ that ALL private subnets route through. Saves ~€32/month vs one-per-AZ but creates a SPOF (AZ outage = no outbound for the other AZs). For a 40-person internal tool the cost win is worth the risk."
+  description = "When true, provision ONE NAT in the first AZ that ALL private subnets route through. Saves ~€32/month vs one-per-AZ but creates a SPOF (AZ outage = no outbound for the other AZs). For a 40-person internal tool the cost win is worth the risk."
   type        = bool
   default     = true
+}
+
+variable "nat_mode" {
+  description = "`gateway` provisions managed AWS NAT Gateway(s) (~€32/mo each, fully managed, HA within an AZ). `instance` provisions a t4g.nano EC2 instance running iptables MASQUERADE (~€3/mo each, single-instance — terraform apply rebuilds it if it dies). For a 40-user internal tool the NAT instance is the right cost/complexity trade. Flip to `gateway` if SLA / managed-service requirements demand it."
+  type        = string
+  default     = "instance"
+  validation {
+    condition     = contains(["gateway", "instance"], var.nat_mode)
+    error_message = "nat_mode must be either 'gateway' or 'instance'."
+  }
+}
+
+variable "nat_instance_type" {
+  description = "EC2 instance type for the NAT instance when `nat_mode = instance`. t4g.nano (ARM64, 2 vCPU burst, 0.5 GB RAM) handles ~5 Gbps NAT for negligible cost; t4g.micro for higher throughput environments. Personio + awork sync at our scale is well within t4g.nano's headroom."
+  type        = string
+  default     = "t4g.nano"
 }
 
 variable "enable_flow_logs" {
@@ -44,13 +60,11 @@ variable "enable_flow_logs" {
 }
 
 variable "interface_endpoint_services" {
-  description = "AWS service names to expose via VPC interface endpoints (~€7/mo each). These let the app/Lambda reach AWS APIs without crossing the NAT, which dominates monthly cost. The defaults cover what the sync Lambda actually uses."
+  description = "AWS service names to expose via VPC interface endpoints (~€9.50/mo per AZ — so ~€19/mo each in a 2-AZ deployment). These keep the app/Lambda → AWS-API traffic on AWS's private backbone instead of crossing the NAT. The defaults cover only the services where call volume / data sensitivity justifies the cost. Lower-volume control-plane services (sts, logs) are deliberately left to NAT — the TLS-over-NAT-IP path is equally secure and the data charges are negligible at our scale."
   type        = list(string)
   default = [
     "secretsmanager",
     "kms",
-    "logs",
-    "sts",
   ]
 }
 

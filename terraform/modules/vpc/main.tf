@@ -95,10 +95,20 @@ resource "aws_subnet" "data" {
   }
 }
 
-# --- NAT gateway(s) ---------------------------------------------------------
+# --- NAT (gateway OR instance) ----------------------------------------------
 
+locals {
+  nat_count        = var.single_nat_gateway ? 1 : var.az_count
+  use_nat_gateway  = var.nat_mode == "gateway"
+  use_nat_instance = var.nat_mode == "instance"
+}
+
+# Elastic IPs are shared between both NAT modes — the AWS NAT Gateway
+# attaches one directly; the NAT instance uses one via the network
+# interface below. Static IP matters because Personio + awork allowlist
+# our outbound source IP.
 resource "aws_eip" "nat" {
-  count  = var.single_nat_gateway ? 1 : var.az_count
+  count  = local.nat_count
   domain = "vpc"
 
   tags = {
@@ -106,14 +116,148 @@ resource "aws_eip" "nat" {
   }
 }
 
+# Managed NAT Gateway (mode = "gateway"). Fully managed, ~€32/mo each,
+# scales transparently. Pick this when the operations cost of a NAT
+# instance starts to outweigh the savings.
 resource "aws_nat_gateway" "this" {
-  count         = var.single_nat_gateway ? 1 : var.az_count
+  count         = local.use_nat_gateway ? local.nat_count : 0
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
 
-  # IGW must exist before the NAT can route out — otherwise destroy/create
-  # races leave a NAT briefly unable to reach the internet.
   depends_on = [aws_internet_gateway.this]
+
+  tags = {
+    Name = "${local.name}-nat-${count.index}"
+  }
+}
+
+# NAT instance (mode = "instance"). ~€3/mo each on t4g.nano. One job:
+# forward packets from private subnets to the internet via iptables
+# MASQUERADE on the public interface.
+#
+# Self-healing: this is a single EC2 instance, not an ASG. If it dies,
+# the next `terraform apply` recreates it; ~5 minutes of NAT downtime
+# during which the daily sync would fail (rolled over to the next day's
+# run) and AWS-API calls that DON'T go via VPC endpoints (we keep
+# Secrets Manager + KMS on endpoints) would fail. Acceptable for a
+# 40-user internal tool. Upgrade to an ASG-backed setup if that ever
+# stops being true.
+data "aws_ami" "nat_instance" {
+  count       = local.use_nat_instance ? 1 : 0
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023*-arm64"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
+  }
+}
+
+resource "aws_security_group" "nat_instance" {
+  count       = local.use_nat_instance ? 1 : 0
+  name        = "${local.name}-nat-instance"
+  description = "NAT instance: forwards from VPC CIDR to internet."
+  vpc_id      = aws_vpc.this.id
+
+  ingress {
+    description = "All TCP from VPC (private subnets need NAT for outbound)."
+    from_port   = 0
+    to_port     = 65535
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.this.cidr_block]
+  }
+
+  ingress {
+    description = "All UDP from VPC (DNS, NTP, etc.)."
+    from_port   = 0
+    to_port     = 65535
+    protocol    = "udp"
+    cidr_blocks = [aws_vpc.this.cidr_block]
+  }
+
+  ingress {
+    description = "ICMP from VPC (traceroute / MTU discovery)."
+    from_port   = -1
+    to_port     = -1
+    protocol    = "icmp"
+    cidr_blocks = [aws_vpc.this.cidr_block]
+  }
+
+  egress {
+    description = "All egress to the internet (this is the whole point)."
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${local.name}-nat-instance"
+  }
+}
+
+resource "aws_network_interface" "nat_instance" {
+  count             = local.use_nat_instance ? local.nat_count : 0
+  subnet_id         = aws_subnet.public[count.index].id
+  security_groups   = [aws_security_group.nat_instance[0].id]
+  source_dest_check = false # NAT MUST forward packets it didn't originate.
+
+  tags = {
+    Name = "${local.name}-nat-eni-${count.index}"
+  }
+}
+
+resource "aws_eip_association" "nat_instance" {
+  count                = local.use_nat_instance ? local.nat_count : 0
+  network_interface_id = aws_network_interface.nat_instance[count.index].id
+  allocation_id        = aws_eip.nat[count.index].id
+}
+
+resource "aws_instance" "nat" {
+  count         = local.use_nat_instance ? local.nat_count : 0
+  ami           = data.aws_ami.nat_instance[0].id
+  instance_type = var.nat_instance_type
+
+  network_interface {
+    network_interface_id = aws_network_interface.nat_instance[count.index].id
+    device_index         = 0
+  }
+
+  # Enable IPv4 forwarding + MASQUERADE so packets from the private
+  # subnets get their source rewritten to this instance's public IP on
+  # the way out. Survives reboots via /etc/sysctl.d and the iptables
+  # service. AL2023 has nftables; we use the iptables-nft compat layer.
+  user_data = <<-EOT
+    #!/bin/bash
+    set -euo pipefail
+    dnf install -y iptables-services
+    sysctl -w net.ipv4.ip_forward=1
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-nat.conf
+    iptables -t nat -A POSTROUTING -o $(ip route get 1.1.1.1 | awk '{print $5; exit}') -j MASQUERADE
+    iptables-save > /etc/sysconfig/iptables
+    systemctl enable --now iptables
+  EOT
+
+  # AL2023 sets imdsv2-required by default already, but pin explicitly
+  # so we don't drift on a future AMI rev.
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  # Encrypt the root volume — there's nothing sensitive on a NAT
+  # instance, but defaults matter when someone else copies this module.
+  root_block_device {
+    encrypted   = true
+    volume_size = 8
+    volume_type = "gp3"
+  }
 
   tags = {
     Name = "${local.name}-nat-${count.index}"
@@ -144,13 +288,20 @@ resource "aws_route_table_association" "public" {
 
 # One private route table per AZ. With single_nat_gateway = true, they all
 # point at the same NAT in AZ-a; with one-per-AZ, each AZ stays local.
+# The default-route target is either the NAT Gateway or the NAT
+# instance's primary ENI, depending on `var.nat_mode`.
 resource "aws_route_table" "app" {
   count  = var.az_count
   vpc_id = aws_vpc.this.id
 
   route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.this[var.single_nat_gateway ? 0 : count.index].id
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = local.use_nat_gateway ? (
+      aws_nat_gateway.this[var.single_nat_gateway ? 0 : count.index].id
+    ) : null
+    network_interface_id = local.use_nat_instance ? (
+      aws_network_interface.nat_instance[var.single_nat_gateway ? 0 : count.index].id
+    ) : null
   }
 
   tags = {
