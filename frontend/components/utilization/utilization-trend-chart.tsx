@@ -26,51 +26,56 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useTeamMonthlySeries } from "@/lib/api/team-series";
-import { isoMonthOf, shiftMonth, shortLabel } from "@/lib/month";
+import { useUtilizationSeries } from "@/lib/api/utilization";
 import { formatEUR } from "@/lib/format";
+import { isoMonthOf, shiftMonth, shortLabel } from "@/lib/month";
 
-const MONTHS_BACK = 6; // → 6 prior + current + 3 forecast = 10 points
+const MONTHS_BACK = 12; // → 12 prior + current + 3 forecast = 16 points
 const MONTHS_FORWARD = 3;
 
 const config = {
-  cost: { label: "Cost", color: "var(--chart-1)" },
-  revenue_above_cost: {
-    label: "Revenue (above cost)",
-    color: "var(--chart-2)",
+  allocated_cost: { label: "Allocated", color: "var(--chart-2)" },
+  unallocated_cost: { label: "Bench", color: "var(--chart-1)" },
+  util_pct_eur: { label: "Util % (€)", color: "var(--chart-3)" },
+  util_pct_headcount: {
+    label: "Util % (headcount)",
+    color: "var(--chart-4)",
   },
-  margin_pct: { label: "Margin %", color: "var(--chart-3)" },
 } satisfies ChartConfig;
 
-export function TeamMonthlyPLChart({ slug }: { slug: string }) {
+/** Read-only trailing-window utilization trend. Stacked bars (allocated
+ * bottom + bench top = loaded payroll) plus two utilization lines: the
+ * EUR-weighted ("are we recovering payroll?") and the headcount-weighted
+ * ("are people busy?"). Same anchored-at-now window as the portfolio
+ * rentability chart. */
+export function UtilizationTrendChart() {
   const currentMonth = isoMonthOf(new Date());
   const fromMonth = shiftMonth(currentMonth, -MONTHS_BACK);
   const toMonth = shiftMonth(currentMonth, MONTHS_FORWARD);
-  const { data, isLoading, isError, error } = useTeamMonthlySeries(
-    slug,
+  const { data, isLoading, isError, error } = useUtilizationSeries(
     fromMonth,
     toMonth,
   );
 
-  /** Recharts wants two stacked bar series. The bottom is `cost`, the
-   * top is `max(revenue - cost, 0)` — together they show "revenue
-   * standing tall over cost" when the team is profitable, and just the
-   * cost bar when the team is losing money (revenue stack stays at 0,
-   * margin% line goes negative). Recharts doesn't render negative
-   * stacks gracefully so we keep them clamped at 0 and rely on the
-   * margin% line + tooltip for the loss signal. */
   const chartData = useMemo(() => {
     return (data?.points ?? []).map((p) => {
-      const cost = Number(p.cost);
-      const revenue = Number(p.revenue);
-      const margin_pct = p.margin_pct === null ? null : Number(p.margin_pct);
+      const loaded = Number(p.totals.loaded_cost);
+      const unallocated = Number(p.totals.unallocated_cost);
+      const allocated = Math.max(0, loaded - unallocated);
+      const util_pct_eur =
+        p.totals.util_pct_eur === null ? null : Number(p.totals.util_pct_eur);
+      const util_pct_headcount =
+        p.totals.util_pct_headcount === null
+          ? null
+          : Number(p.totals.util_pct_headcount);
       return {
         month: p.month,
         label: shortLabel(p.month),
-        cost,
-        revenue,
-        revenue_above_cost: Math.max(0, revenue - cost),
-        margin_pct,
+        allocated_cost: allocated,
+        unallocated_cost: unallocated,
+        loaded_cost: loaded,
+        util_pct_eur,
+        util_pct_headcount,
         is_forecast: p.is_forecast,
       };
     });
@@ -89,14 +94,15 @@ export function TeamMonthlyPLChart({ slug }: { slug: string }) {
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          Monthly P&amp;L — last {MONTHS_BACK} months + {MONTHS_FORWARD}-month forecast
+          Utilization trend — last {MONTHS_BACK} months + {MONTHS_FORWARD}-month forecast
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         {isLoading && <Skeleton className="h-72 w-full" />}
         {isError && (
           <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-            Failed to load series: {error instanceof Error ? error.message : "unknown"}
+            Failed to load series:{" "}
+            {error instanceof Error ? error.message : "unknown"}
           </div>
         )}
         {data && chartData.length > 0 && (
@@ -115,10 +121,7 @@ export function TeamMonthlyPLChart({ slug }: { slug: string }) {
                     yAxisId="pct"
                     orientation="right"
                     tickFormatter={(v: number) => `${v.toFixed(0)}%`}
-                    domain={[
-                      (d: number) => Math.min(0, Math.floor(d / 10) * 10),
-                      (d: number) => Math.max(50, Math.ceil(d / 10) * 10),
-                    ]}
+                    domain={[0, 110]}
                   />
                   <ChartTooltip
                     content={
@@ -131,21 +134,27 @@ export function TeamMonthlyPLChart({ slug }: { slug: string }) {
                             ? `${label} (forecast)`
                             : (label as string);
                         }}
-                        formatter={(value, name, item) => {
-                          if (name === "margin_pct") {
+                        formatter={(value, name) => {
+                          if (
+                            name === "util_pct_eur" ||
+                            name === "util_pct_headcount"
+                          ) {
                             return [
                               value === null
                                 ? "—"
                                 : `${Number(value).toFixed(1)}%`,
-                              item.payload?.margin_pct === null
-                                ? ""
-                                : "Margin %",
+                              name === "util_pct_eur"
+                                ? "Util % (€)"
+                                : "Util % (headcount)",
                             ];
                           }
-                          if (name === "cost" || name === "revenue_above_cost") {
+                          if (
+                            name === "allocated_cost" ||
+                            name === "unallocated_cost"
+                          ) {
                             return [
                               formatEUR(Number(value).toFixed(2)),
-                              name === "cost" ? "Cost" : "Revenue (above cost)",
+                              name === "allocated_cost" ? "Allocated" : "Bench",
                             ];
                           }
                           return [String(value), String(name)];
@@ -154,47 +163,58 @@ export function TeamMonthlyPLChart({ slug }: { slug: string }) {
                     }
                   />
                   <ChartLegend content={<ChartLegendContent />} />
-                  {/* Vertical line between the last actual month and the
-                      first forecast month so the eye knows where the
-                      uncommitted territory starts. */}
-                  {lastActualIdx >= 0 && lastActualIdx < chartData.length - 1 && (
-                    <ReferenceLine
-                      yAxisId="eur"
-                      x={chartData[lastActualIdx].label}
-                      stroke="var(--muted-foreground)"
-                      strokeDasharray="2 2"
-                    />
-                  )}
+                  {lastActualIdx >= 0 &&
+                    lastActualIdx < chartData.length - 1 && (
+                      <ReferenceLine
+                        yAxisId="eur"
+                        x={chartData[lastActualIdx].label}
+                        stroke="var(--muted-foreground)"
+                        strokeDasharray="2 2"
+                      />
+                    )}
                   <Bar
                     yAxisId="eur"
-                    dataKey="cost"
-                    stackId="pl"
-                    fill="var(--color-cost)"
+                    dataKey="allocated_cost"
+                    stackId="loaded"
+                    fill="var(--color-allocated_cost)"
                     fillOpacity={0.85}
                   />
                   <Bar
                     yAxisId="eur"
-                    dataKey="revenue_above_cost"
-                    stackId="pl"
-                    fill="var(--color-revenue_above_cost)"
+                    dataKey="unallocated_cost"
+                    stackId="loaded"
+                    fill="var(--color-unallocated_cost)"
                     fillOpacity={0.85}
                   />
                   <Line
                     yAxisId="pct"
                     type="monotone"
-                    dataKey="margin_pct"
-                    stroke="var(--color-margin_pct)"
+                    dataKey="util_pct_eur"
+                    stroke="var(--color-util_pct_eur)"
                     strokeWidth={2}
+                    dot={false}
+                    connectNulls
+                  />
+                  <Line
+                    yAxisId="pct"
+                    type="monotone"
+                    dataKey="util_pct_headcount"
+                    stroke="var(--color-util_pct_headcount)"
+                    strokeWidth={2}
+                    strokeDasharray="4 4"
                     dot={false}
                     connectNulls
                   />
               </ComposedChart>
             </ChartContainer>
             <p className="text-xs text-muted-foreground">
-              Forecast months use the same engine as history — they sum
-              committed assignment rows only, no speculative pipeline. The
-              dashed vertical line marks the transition from actuals to
-              forecast.
+              Bars stack to total loaded payroll (allocated + bench).
+              Solid line is EUR-weighted utilization (1 − bench / loaded);
+              dashed is headcount-weighted (avg of per-employee util %).
+              The two diverge when underused consultants are also the
+              expensive ones, or when juniors are overbooked while
+              seniors sit. Forecast extends the same engine from
+              committed assignments; dashed vertical marks the boundary.
             </p>
           </>
         )}

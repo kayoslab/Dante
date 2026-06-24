@@ -10,7 +10,7 @@
  *
  * Usage:
  *   import { log } from "@/lib/logger";
- *   log.error("portfolio_monthly_failed", { route: "/api/portfolio/monthly", err });
+ *   log.error("portfolio_rentability_failed", { route: "/api/reports/portfolio-rentability/month", err });
  *
  * The first arg is the event slug — keep it terse and snake_case so it's
  * groupable in logs. Put variable detail in the fields object.

@@ -19,9 +19,10 @@ const LINKS: NavLink[] = [
   { href: "/", label: "Home" },
   { href: "/customers", label: "Customers", minRole: "manager" },
   { href: "/calendar", label: "Calendar" },
+  { href: "/teams", label: "Teams", minRole: "manager" },
   { href: "/employees", label: "Employees" },
   { href: "/freelancers", label: "Freelancers", minRole: "manager" },
-  { href: "/salary", label: "Salary", minRole: "manager" },
+  { href: "/reports", label: "Reports", minRole: "manager" },
   { href: "/settings", label: "Settings", minRole: "admin" },
 ];
 

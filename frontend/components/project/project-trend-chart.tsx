@@ -8,7 +8,6 @@ import {
   ComposedChart,
   Line,
   ReferenceLine,
-  ResponsiveContainer,
   XAxis,
   YAxis,
 } from "recharts";

@@ -49,7 +49,7 @@ export type ActiveProjectRow = {
 
 /** All active projects with their customer name, ordered the way the
  * portfolio page expects (customer asc, project asc). Used by
- * `/api/portfolio/monthly` to fan out per-project breakdowns. */
+ * `computeProjectMonthlyRows` to fan out per-project breakdowns. */
 export async function listActiveProjectsForPortfolio(): Promise<
   ActiveProjectRow[]
 > {
@@ -79,8 +79,7 @@ export type UnallocatedPayrollEmployeeRow = {
 };
 
 /** Active, real, project-contributing employees whose contract overlaps
- * the given month. Drives the bench / unallocated-payroll summary on
- * `/api/portfolio/monthly`. */
+ * the given month. Drives `computeMonthlyBenchTotals`. */
 export async function listUnallocatedPayrollEmployees(
   month_start: string,
   month_end: string,

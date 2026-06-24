@@ -5,7 +5,7 @@ import { buttonVariants } from "@/components/ui/button";
 
 /** Root-level handler for `forbidden()` from `next/navigation`. Rendered
  * with HTTP 403 when a server component calls `forbidden()` (e.g.
- * `/salary`, `/settings/*`, `/projects/[id]` when the SDM check fails).
+ * `/reports/salary`, `/settings/*`, `/projects/[id]` when the SDM check fails).
  *
  * Friendlier than the generic error boundary and not perceived as a
  * crash — the user just lacks the role/grant. */

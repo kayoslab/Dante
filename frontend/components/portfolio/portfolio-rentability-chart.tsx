@@ -26,11 +26,11 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useTeamMonthlySeries } from "@/lib/api/team-series";
-import { isoMonthOf, shiftMonth, shortLabel } from "@/lib/month";
+import { usePortfolioRentabilitySeries } from "@/lib/api/portfolio-rentability-series";
 import { formatEUR } from "@/lib/format";
+import { isoMonthOf, shiftMonth, shortLabel } from "@/lib/month";
 
-const MONTHS_BACK = 6; // → 6 prior + current + 3 forecast = 10 points
+const MONTHS_BACK = 12; // → 12 prior + current + 3 forecast = 16 points
 const MONTHS_FORWARD = 3;
 
 const config = {
@@ -42,23 +42,20 @@ const config = {
   margin_pct: { label: "Margin %", color: "var(--chart-3)" },
 } satisfies ChartConfig;
 
-export function TeamMonthlyPLChart({ slug }: { slug: string }) {
+/** Read-only trailing-window trend chart for the portfolio-rentability
+ * report. Window is anchored at "now" and does not shift when the
+ * selected detail month changes — by design (user request: chart is
+ * an at-a-glance direction indicator, scrubbing happens on the detail
+ * block below). Same engine + visual grammar as the team P&L chart. */
+export function PortfolioRentabilityChart() {
   const currentMonth = isoMonthOf(new Date());
   const fromMonth = shiftMonth(currentMonth, -MONTHS_BACK);
   const toMonth = shiftMonth(currentMonth, MONTHS_FORWARD);
-  const { data, isLoading, isError, error } = useTeamMonthlySeries(
-    slug,
+  const { data, isLoading, isError, error } = usePortfolioRentabilitySeries(
     fromMonth,
     toMonth,
   );
 
-  /** Recharts wants two stacked bar series. The bottom is `cost`, the
-   * top is `max(revenue - cost, 0)` — together they show "revenue
-   * standing tall over cost" when the team is profitable, and just the
-   * cost bar when the team is losing money (revenue stack stays at 0,
-   * margin% line goes negative). Recharts doesn't render negative
-   * stacks gracefully so we keep them clamped at 0 and rely on the
-   * margin% line + tooltip for the loss signal. */
   const chartData = useMemo(() => {
     return (data?.points ?? []).map((p) => {
       const cost = Number(p.cost);
@@ -89,14 +86,15 @@ export function TeamMonthlyPLChart({ slug }: { slug: string }) {
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          Monthly P&amp;L — last {MONTHS_BACK} months + {MONTHS_FORWARD}-month forecast
+          Portfolio P&amp;L — last {MONTHS_BACK} months + {MONTHS_FORWARD}-month forecast
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         {isLoading && <Skeleton className="h-72 w-full" />}
         {isError && (
           <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-            Failed to load series: {error instanceof Error ? error.message : "unknown"}
+            Failed to load series:{" "}
+            {error instanceof Error ? error.message : "unknown"}
           </div>
         )}
         {data && chartData.length > 0 && (
@@ -142,10 +140,15 @@ export function TeamMonthlyPLChart({ slug }: { slug: string }) {
                                 : "Margin %",
                             ];
                           }
-                          if (name === "cost" || name === "revenue_above_cost") {
+                          if (
+                            name === "cost" ||
+                            name === "revenue_above_cost"
+                          ) {
                             return [
                               formatEUR(Number(value).toFixed(2)),
-                              name === "cost" ? "Cost" : "Revenue (above cost)",
+                              name === "cost"
+                                ? "Cost"
+                                : "Revenue (above cost)",
                             ];
                           }
                           return [String(value), String(name)];
@@ -154,17 +157,15 @@ export function TeamMonthlyPLChart({ slug }: { slug: string }) {
                     }
                   />
                   <ChartLegend content={<ChartLegendContent />} />
-                  {/* Vertical line between the last actual month and the
-                      first forecast month so the eye knows where the
-                      uncommitted territory starts. */}
-                  {lastActualIdx >= 0 && lastActualIdx < chartData.length - 1 && (
-                    <ReferenceLine
-                      yAxisId="eur"
-                      x={chartData[lastActualIdx].label}
-                      stroke="var(--muted-foreground)"
-                      strokeDasharray="2 2"
-                    />
-                  )}
+                  {lastActualIdx >= 0 &&
+                    lastActualIdx < chartData.length - 1 && (
+                      <ReferenceLine
+                        yAxisId="eur"
+                        x={chartData[lastActualIdx].label}
+                        stroke="var(--muted-foreground)"
+                        strokeDasharray="2 2"
+                      />
+                    )}
                   <Bar
                     yAxisId="eur"
                     dataKey="cost"
@@ -191,10 +192,15 @@ export function TeamMonthlyPLChart({ slug }: { slug: string }) {
               </ComposedChart>
             </ChartContainer>
             <p className="text-xs text-muted-foreground">
-              Forecast months use the same engine as history — they sum
-              committed assignment rows only, no speculative pipeline. The
-              dashed vertical line marks the transition from actuals to
-              forecast.
+              Cost is <span className="font-medium">loaded payroll</span>{" "}
+              — the full company salary burden including bench — so margin
+              reflects real profitability, not just project P&amp;L. The KPI
+              grid below shows project-allocated cost instead, which is
+              why its numbers won&rsquo;t match this chart. Revenue is
+              T&amp;M plus FP recognized; forecast months extend the engine
+              from committed assignments; per-month FP is volatile (lumpy
+              recognition); the dashed line marks the actual/forecast
+              boundary.
             </p>
           </>
         )}

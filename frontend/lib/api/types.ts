@@ -240,36 +240,11 @@ export type AworkUserItem = {
     };
 
 
-export type BenchConsultant = {
-        /** Employee Id */
-        employee_id: number;
-        /** Who Name */
-        who_name: string;
-        /** Team */
-        team?: string | null;
-        /** Monthly Cost */
-        monthly_cost: string;
-        /** Utilization Pct */
-        utilization_pct: string;
-        /** Unallocated Cost */
-        unallocated_cost: string;
-    };
-
 export type BenchSummary = {
         /** Total Loaded Cost */
         total_loaded_cost: string;
         /** Total Unallocated Cost */
         total_unallocated_cost: string;
-        /** Total Unallocated Pct */
-        total_unallocated_pct?: string | null;
-        /** N Full Bench */
-        n_full_bench: number;
-        /** N Partial Bench */
-        n_partial_bench: number;
-        /** N Fully Utilized */
-        n_fully_utilized: number;
-        /** Consultants */
-        consultants: BenchConsultant[];
     };
 
 export type EmployeeRef = {
@@ -1377,15 +1352,16 @@ export type PersonioProjectItem = {
     };
 
 
+/** Per-month detail returned by `/api/reports/portfolio-rentability/month`.
+ * Mirrors the wire shape the report's income-statement client reads —
+ * trimmed to the fields actually rendered. Segment totals (T&M cost /
+ * margin, allocated total_cost), per-month FP recognized margin, and
+ * the bench head counts + consultants list were dropped when the page
+ * moved to an income-statement layout that derives everything from
+ * loaded payroll + per-segment revenue. */
 export type PortfolioMonthly = {
         /** Month */
         month: string;
-        /** Month Start */
-        month_start: string;
-        /** Month End */
-        month_end: string;
-        /** Working Days In Month */
-        working_days_in_month: number;
         /** N Active Projects */
         n_active_projects: number;
         /** N Tm Projects */
@@ -1394,28 +1370,12 @@ export type PortfolioMonthly = {
         n_fp_projects: number;
         /** Tm Revenue */
         tm_revenue: string;
-        /** Tm Cost */
-        tm_cost: string;
-        /** Tm Margin */
-        tm_margin: string;
-        /** Tm Margin Pct */
-        tm_margin_pct?: string | null;
-        /** Fp Cost This Month */
-        fp_cost_this_month?: string | null;
-        /** Fp Agreed Amount */
-        fp_agreed_amount?: string | null;
-        /** Fp Cumulative Cost */
-        fp_cumulative_cost?: string | null;
-        /** Fp Remaining Budget */
-        fp_remaining_budget?: string | null;
         /** Fp Recognized Revenue */
         fp_recognized_revenue?: string | null;
-        /** Fp Recognized Margin */
-        fp_recognized_margin?: string | null;
-        /** Fp Recognized Margin Pct */
-        fp_recognized_margin_pct?: string | null;
         /** Fp Cumulative Recognized */
         fp_cumulative_recognized?: string | null;
+        /** Fp Cumulative Cost */
+        fp_cumulative_cost?: string | null;
         /** Fp Cumulative Margin */
         fp_cumulative_margin?: string | null;
         /** Fp Cumulative Margin Pct */
@@ -1425,14 +1385,6 @@ export type PortfolioMonthly = {
          * @default 0
          */
         fp_n_over_budget: number;
-        /** Total Cost */
-        total_cost: string;
-        /** Total Revenue */
-        total_revenue?: string | null;
-        /** Total Margin */
-        total_margin?: string | null;
-        /** Total Margin Pct */
-        total_margin_pct?: string | null;
         bench: BenchSummary;
         /** Projects */
         projects: PortfolioProjectRow[];
@@ -1469,6 +1421,10 @@ export type PortfolioProjectRow = {
         over_budget: boolean;
         /** Pct Complete */
         pct_complete?: string | null;
+        /** Months since project start where a freelancer assignment was active
+         * but no `freelancer_time_entry` exists. Always-on across scopes
+         * (Home + report). 0 = no gaps. */
+        n_missing_freelancer_hours_months?: number;
     };
 
 export type Project = {

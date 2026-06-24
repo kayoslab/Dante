@@ -42,7 +42,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // Opt into the `forbidden()` / `unauthorized()` helpers from
   // `next/navigation`. Without this flag the helpers fall through to
-  // the generic error boundary (500), which is why /salary, /settings
+  // the generic error boundary (500), which is why /reports/salary, /settings
   // were surfacing as 500s for non-admin users.
   experimental: {
     authInterrupts: true,
