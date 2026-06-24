@@ -264,6 +264,40 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # SNS topic management. Subscribe / topic-attribute / tag actions
+  # carry a resource-level ARN constraint, so they scope to the
+  # specific topics terraform owns. Unsubscribe targets a subscription
+  # ARN (`arn:aws:sns:region:account:topic:subscription-id`) which
+  # AWS does NOT let us scope to a topic prefix — so it stays on `*`
+  # but is still bounded by the OIDC trust condition.
+  dynamic "statement" {
+    for_each = length(var.sns_topic_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "sns:Subscribe",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListSubscriptionsByTopic",
+      ]
+      resources = var.sns_topic_arns
+    }
+  }
+  dynamic "statement" {
+    for_each = length(var.sns_topic_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "sns:Unsubscribe",
+        "sns:GetSubscriptionAttributes",
+        "sns:SetSubscriptionAttributes",
+      ]
+      resources = ["*"]
+    }
+  }
+
   # Lambda — update sync Lambda's code from the rebuilt zip and let
   # terraform reconcile tags / config drift on every apply.
   dynamic "statement" {

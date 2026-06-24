@@ -745,6 +745,14 @@ module "github_oidc" {
     module.sync_lambda.schedule_rule_arn,
   ])
 
+  # SNS topics terraform manages — sync Lambda alarm topic + WAF
+  # alarm topic. Needed for Subscribe (email subscriptions) and tag
+  # reconciliation. Add new alarm topics here as modules are added.
+  sns_topic_arns = compact([
+    module.sync_lambda.alarm_topic_arn,
+    module.waf.alarm_topic_arn,
+  ])
+
   # Remote state lives in S3 (bucket + DynamoDB lock table created by
   # terraform/envs/bootstrap-state). GH Actions needs read+write on
   # both to run `terraform plan/apply` against the same state file the

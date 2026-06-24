@@ -71,6 +71,12 @@ variable "eventbridge_rule_arns" {
   default     = []
 }
 
+variable "sns_topic_arns" {
+  description = "SNS topic ARNs the deploy role may manage (Subscribe/Unsubscribe email recipients, Get/SetTopicAttributes, Tag/UntagResource). Pass every alarm topic terraform owns. Unsubscribe resource ARNs are subscription ARNs (not topic ARNs) and AWS doesn't support resource-level scoping for them — Unsubscribe + subscription-attribute reads are granted on `*`, gated by the OIDC trust condition."
+  type        = list(string)
+  default     = []
+}
+
 variable "terraform_state_bucket_arn" {
   description = "ARN of the S3 bucket holding Terraform remote state. Pass null while running on local backend; when you migrate to S3, plumb this through so the deploy role can read/write state."
   type        = string
