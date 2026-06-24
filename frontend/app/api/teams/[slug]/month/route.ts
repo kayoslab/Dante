@@ -81,7 +81,8 @@ export async function GET(
       employee_id: number;
       who_name: string;
       role_tier: string | null;
-      utilization_pct: string; // 0-1
+      utilization_pct: string; // 0-1, from assignment allocations
+      tracked_utilization_pct: string | null; // 0-N, from billable project tracked hours
       monthly_cost: string;
       monthly_revenue: string;
       monthly_margin: string;
@@ -158,6 +159,8 @@ export async function GET(
         who_name: m.who_name || `Employee #${m.employee_id}`,
         role_tier: m.role_tier,
         utilization_pct: util.toFixed(4),
+        tracked_utilization_pct:
+          (data.tracked_utilization_pct as string | null | undefined) ?? null,
         monthly_cost: cost.toFixed(2),
         monthly_revenue: revenue.toFixed(2),
         monthly_margin: margin.toFixed(2),

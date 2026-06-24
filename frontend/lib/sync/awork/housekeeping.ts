@@ -124,10 +124,16 @@ export async function applyAworkMoneyToImported(
         );
         result.project_rates_upserted += 1;
       }
-      // 3. time_budget_seconds → time_budget_hours (only if unset).
-      if (r.time_budget_seconds !== null && r.time_budget_hours === null) {
+      // 3. time_budget_seconds → time_budget_hours. Awork is the
+      // authoritative source — the previous "only if unset" guard
+      // froze stale values whenever a budget was edited in awork
+      // after initial sync (a large customer project hit this
+      // in prod: synced as 4h, awork later bumped to 4d/32h, our
+      // value stayed at 4h forever). Now: reconcile every run when
+      // the value differs.
+      if (r.time_budget_seconds !== null) {
         const hours = Math.floor(Number(r.time_budget_seconds) / 3600);
-        if (hours > 0) {
+        if (hours > 0 && hours !== r.time_budget_hours) {
           await conn.query(
             "UPDATE project SET time_budget_hours = $1, updated_at = $2 WHERE project_id = $3",
             [hours, now, r.project_id],

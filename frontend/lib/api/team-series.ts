@@ -54,7 +54,12 @@ export type TeamMonthRosterRow = {
   employee_id: number;
   who_name: string;
   role_tier: string | null;
+  /** 0–1 — from assignment allocations (manual + awork-planning). */
   utilization_pct: string;
+  /** 0–N — from billable project tracked hours / available contract hours.
+   * Can exceed 1 (tracked overtime). Null when there's no available time
+   * in the month (off-contract, full leave). */
+  tracked_utilization_pct: string | null;
   monthly_cost: string;
   monthly_revenue: string;
   monthly_margin: string;

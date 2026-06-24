@@ -572,6 +572,79 @@ export async function employeeTotalTrackedMinutesInMonth(
 }
 
 // ----------------------------------------------------------------------------
+// Project-only tracked minutes — same shape as the total helper above but
+// only counts entries linked to a Dante project. Powers the tracked-time
+// utilization metric on the team detail roster (sibling to the
+// assignment-based utilization), so under-allocation drift is visible.
+// ----------------------------------------------------------------------------
+
+export async function employeeProjectTrackedMinutesInMonth(
+  employee_id: number,
+  month_start: string,
+  month_end: string,
+): Promise<number> {
+  const r = await db.execute(sql`
+    WITH personio AS (
+      SELECT a.work_date, SUM(a.duration_minutes) AS minutes
+      FROM attendance a
+      JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
+      WHERE a.employee_id = ${employee_id}
+        AND a.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY a.work_date
+    ),
+    awork AS (
+      SELECT t.work_date, SUM(t.duration_minutes) AS minutes
+      FROM awork_time_entry t
+      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
+      JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
+      WHERE ul.employee_id = ${employee_id}
+        AND t.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY t.work_date
+    ),
+    per_day AS (
+      SELECT work_date, MAX(minutes) AS minutes
+      FROM (SELECT * FROM personio UNION ALL SELECT * FROM awork) u
+      GROUP BY work_date
+    )
+    SELECT COALESCE(SUM(minutes), 0) AS m FROM per_day
+  `);
+  const row = (r.rows as Array<{ m: number | string | null }>)[0];
+  return row?.m === null || row?.m === undefined ? 0 : Number(row.m);
+}
+
+/** Utilization based on tracked project hours instead of assignment
+ * allocation. Numerator = `employeeProjectTrackedMinutesInMonth`;
+ * denominator = (contract workdays − absence workdays) ×
+ * standard_daily_hours × 60. Returns null when there's no available
+ * time (entirely off-contract month, or entirely on holiday/leave).
+ * Returned ratio can exceed 1 — that's tracked overtime, real signal,
+ * not a bug to clamp. */
+export async function employeeTrackedUtilizationInMonth(
+  employee_id: number,
+  month_start: string,
+  month_end: string,
+  contract_workdays: string[],
+  absences: Set<string>,
+  standard_daily_hours: number,
+): Promise<Decimal | null> {
+  if (contract_workdays.length === 0) return null;
+  const available_workdays = contract_workdays.filter(
+    (d) => !absences.has(d),
+  ).length;
+  if (available_workdays === 0) return null;
+  const available_minutes = new Decimal(available_workdays)
+    .mul(standard_daily_hours)
+    .mul(60);
+  if (available_minutes.lte(0)) return null;
+  const tracked_minutes = await employeeProjectTrackedMinutesInMonth(
+    employee_id,
+    month_start,
+    month_end,
+  );
+  return new Decimal(tracked_minutes).div(available_minutes);
+}
+
+// ----------------------------------------------------------------------------
 // Project tracked hours through a date (Personio + awork, MAX dedup per
 // (employee, day))
 // ----------------------------------------------------------------------------

@@ -250,6 +250,16 @@ function Kpi({
 // Roster block
 // ---------------------------------------------------------------------------
 
+/** Shared tone scheme for both alloc and tracked utilization — same
+ * thresholds so the eye reads "this column is in the bad zone" the same
+ * way regardless of which metric it's showing. Above 1.0 (overtime on
+ * tracked) is emerald — we're recovering payroll then some. */
+function utilToneFor(u: number): string {
+  if (u === 0) return "text-red-700";
+  if (u < 1) return "text-amber-700";
+  return "text-emerald-700";
+}
+
 function RosterBlock({
   roster,
   show_now_signals,
@@ -285,7 +295,18 @@ function RosterBlock({
               <th className="px-3 py-2 text-left font-medium">
                 Current project
               </th>
-              <th className="px-3 py-2 text-right font-medium">Util %</th>
+              <th
+                className="px-3 py-2 text-right font-medium"
+                title="From assignment allocations (manual + awork-planning) — what we COMMITTED to."
+              >
+                Util % (alloc)
+              </th>
+              <th
+                className="px-3 py-2 text-right font-medium"
+                title="From billable project tracked hours / available contract hours — what actually got LOGGED on projects."
+              >
+                Util % (tracked)
+              </th>
               <th className="px-3 py-2 text-right font-medium">Cost</th>
               <th className="px-3 py-2 text-right font-medium">Margin</th>
             </tr>
@@ -293,13 +314,30 @@ function RosterBlock({
           <tbody className="divide-y">
             {roster.map((r) => {
               const util = Number(r.utilization_pct);
+              const trackedUtil =
+                r.tracked_utilization_pct === null
+                  ? null
+                  : Number(r.tracked_utilization_pct);
               const margin = Number(r.monthly_margin);
-              const utilTone =
-                util === 0
-                  ? "text-red-700"
-                  : util < 1
-                    ? "text-amber-700"
-                    : "text-emerald-700";
+              const utilTone = utilToneFor(util);
+              const trackedTone =
+                trackedUtil === null ? "" : utilToneFor(trackedUtil);
+              // Drift in percentage points between the two views. >25pp
+              // means assignment records don't reflect what the time
+              // tracker actually shows — a real under-allocation signal
+              // when tracked > alloc (consultant was on projects nobody
+              // wrote down), or an over-commit signal when tracked < alloc.
+              const driftPp =
+                trackedUtil === null
+                  ? null
+                  : Math.abs(trackedUtil - util) * 100;
+              const showDrift = driftPp !== null && driftPp > 25;
+              const driftDirection =
+                trackedUtil === null
+                  ? null
+                  : trackedUtil > util
+                    ? "under-allocated"
+                    : "over-committed";
               const marginTone =
                 margin < 0 ? "text-red-700" : "text-emerald-700";
               return (
@@ -314,6 +352,14 @@ function RosterBlock({
                     {show_now_signals && r.bench_since_days !== null && (
                       <span className="ml-2 text-xs text-amber-700">
                         (bench since {r.bench_since_days}d)
+                      </span>
+                    )}
+                    {showDrift && (
+                      <span
+                        className="ml-2 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800"
+                        title={`Tracked utilization differs from allocated by ${driftPp!.toFixed(0)}pp (${driftDirection}). Either assignments are missing/under-allocated or tracked hours aren't on billable projects.`}
+                      >
+                        Δ {driftPp!.toFixed(0)}pp
                       </span>
                     )}
                   </td>
@@ -355,6 +401,16 @@ function RosterBlock({
                     )}
                   >
                     {(util * 100).toFixed(0)}%
+                  </td>
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-right tabular-nums",
+                      trackedTone,
+                    )}
+                  >
+                    {trackedUtil === null
+                      ? "—"
+                      : `${(trackedUtil * 100).toFixed(0)}%`}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {formatEUR(r.monthly_cost)}

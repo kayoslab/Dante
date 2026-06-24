@@ -16,6 +16,7 @@ import {
   absencesForEmployee,
   burdenFactor,
   employeeFte,
+  employeeTrackedUtilizationInMonth,
   entityMonthlyCost,
   fmt,
   fpRecognizedRevenueForMonth,
@@ -106,6 +107,7 @@ export async function computeEmployeeMonthly(
       margin: "0.00",
       margin_pct: null,
       utilization_pct: "0.0000",
+      tracked_utilization_pct: null,
       fte: "0.000",
       rate_unresolved_days: 0,
       assignments: [],
@@ -115,8 +117,11 @@ export async function computeEmployeeMonthly(
     };
   }
 
-  const { monthly_cost: monthly_cost_full, basis: cost_basis } =
-    await entityMonthlyCost(employee_id, null, null, burden, month_start);
+  const {
+    monthly_cost: monthly_cost_full,
+    basis: cost_basis,
+    standard_daily_hours,
+  } = await entityMonthlyCost(employee_id, null, null, burden, month_start);
 
   const contract_clipped_start =
     hire_date !== null && hire_date > month_start ? hire_date : month_start;
@@ -291,6 +296,20 @@ export async function computeEmployeeMonthly(
     0,
   );
 
+  // Tracked-time-derived utilization (sibling to the assignment-based
+  // number above). Same denominator the bench cost uses — contract-clipped
+  // workdays minus absences, multiplied by standard daily hours — so the
+  // two metrics live on the same axis and divergence reads as
+  // "alloc records don't match the time that was logged."
+  const tracked_utilization = await employeeTrackedUtilizationInMonth(
+    employee_id,
+    month_start,
+    month_end,
+    contract_workdays,
+    absences,
+    standard_daily_hours,
+  );
+
   return {
     entity_kind: "employee",
     entity_id: employee_id,
@@ -308,6 +327,8 @@ export async function computeEmployeeMonthly(
     margin: fmt(margin, 2),
     margin_pct: margin_pct === null ? null : fmt(margin_pct, 2),
     utilization_pct: utilization.toFixed(4),
+    tracked_utilization_pct:
+      tracked_utilization === null ? null : fmt(tracked_utilization, 4),
     fte: fmt(fte, 3),
     rate_unresolved_days: total_rate_unresolved,
     assignments: assignment_rows,

@@ -34,6 +34,13 @@ const REPORTS: ReportTile[] = [
     minRole: "manager",
   },
   {
+    href: "/reports/fp-burndown",
+    title: "Fixed-price burn-down",
+    description:
+      "One row per active FP project — time-budget burn vs plan, with status badges and EUR strip. Sorted by risk. Navigate months to see historical snapshots.",
+    minRole: "manager",
+  },
+  {
     href: "/reports/utilization",
     title: "Utilization",
     description:
