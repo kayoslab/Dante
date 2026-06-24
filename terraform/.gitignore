@@ -17,6 +17,11 @@ crash.*.log
 # Sensitive variable values (the per-env email seed lives here)
 *.tfvars
 !*.tfvars.example
+# Per-env defaults that are NOT sensitive (public repo slug, hosted
+# zone ID). Pinning them here saves operator workstations from typos
+# at the prompt and from accidentally rewriting trust policies with
+# malformed values.
+!envs/prod/prod.auto.tfvars
 
 # CLI config overrides
 .terraformrc
