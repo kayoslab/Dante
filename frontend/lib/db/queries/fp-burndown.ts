@@ -9,8 +9,8 @@ import {
   fmt,
   fpRecognitionThrough,
   lastOfMonth,
+  projectFuturePlannedHours,
   projectTrackedHoursThrough,
-  shiftDay,
   workingDaysInRange,
 } from "../_monthly-helpers";
 
@@ -179,76 +179,6 @@ function pickRecognitionMethod(
     return "timeline";
   }
   return "none";
-}
-
-/** Future planned hours from `as_of` (exclusive) to `planned_end`
- * (inclusive). Iterates every assignment on the project that overlaps
- * the window, multiplies its `allocation_pct × standard_daily_hours`
- * (8h default for freelancers / employees without `weekly_working_hours`)
- * by the working-day count clipped to the window. Same dedup as the
- * weighted-alloc helpers — manual wins over awork-planning on
- * `(employee, project)`. */
-async function projectFuturePlannedHours(
-  project_id: number,
-  as_of: string,
-  planned_end_date: string | null,
-): Promise<Decimal> {
-  if (planned_end_date === null) return new Decimal(0);
-  const future_start = shiftDay(as_of, 1);
-  if (future_start > planned_end_date) return new Decimal(0);
-  const yStart = Number(future_start.slice(0, 4));
-  const yEnd = Number(planned_end_date.slice(0, 4));
-  const holidays = germanFederalHolidays(yStart, yEnd);
-  const window_workdays = workingDaysInRange(
-    future_start,
-    planned_end_date,
-    holidays,
-  );
-  if (window_workdays.length === 0) return new Decimal(0);
-
-  const r = await db.execute(sql`
-    SELECT a.employee_id, a.freelancer_id, a.allocation_pct,
-           a.start_date, a.end_date,
-           ec.weekly_working_hours
-    FROM assignment a
-    LEFT JOIN employee_current ec ON ec.employee_id = a.employee_id
-    WHERE a.project_id = ${project_id}
-      AND a.start_date <= ${planned_end_date}::date
-      AND (a.end_date IS NULL OR a.end_date >= ${future_start}::date)
-      AND NOT (
-        a.source = 'awork-planning'
-        AND EXISTS (
-          SELECT 1 FROM assignment m
-          WHERE m.employee_id = a.employee_id
-            AND m.project_id = a.project_id
-            AND m.source = 'manual'
-        )
-      )
-  `);
-
-  let total = new Decimal(0);
-  for (const raw of r.rows as Array<Record<string, unknown>>) {
-    const alloc = new Decimal(raw.allocation_pct as string);
-    const a_start = raw.start_date as string;
-    const a_end_raw = (raw.end_date as string | null) ?? null;
-    const wkh =
-      raw.weekly_working_hours === null ||
-      raw.weekly_working_hours === undefined
-        ? null
-        : Number(raw.weekly_working_hours);
-    const std_daily = wkh !== null && wkh > 0 ? wkh / 5 : 8;
-
-    const ws = a_start > future_start ? a_start : future_start;
-    const we =
-      a_end_raw === null || a_end_raw > planned_end_date
-        ? planned_end_date
-        : a_end_raw;
-
-    const active = window_workdays.filter((d) => d >= ws && d <= we).length;
-    if (active === 0) continue;
-    total = total.add(alloc.mul(active).mul(std_daily));
-  }
-  return total;
 }
 
 /** Working-day elapsed share of the project's planned window, clipped at

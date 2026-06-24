@@ -32,7 +32,9 @@ import {
   fpRecognitionThrough,
   holidaysForYearOf,
   lastOfMonth,
+  projectFuturePlannedHours,
   projectHasTimeMapping,
+  projectTrackedHoursThrough,
   resolveRateForDay,
   shiftDay,
   trackedMinutesPerEmployeeInMonth,
@@ -524,6 +526,31 @@ export async function computeProjectMonthly(
   let pct_complete: Decimal | null = null;
   let recognition_method: "tracked_hours" | "timeline" | "none" | null = null;
   let over_budget = false;
+  // SDM-facing additions: lifetime tracked hours (across all months),
+  // future planned hours (from today to planned_end), and projected
+  // end-of-project cost/margin in both allocated and burdened bases.
+  // Projection uses the average past cost-per-tracked-hour × future
+  // planned hours as the simplest defensible directional estimate;
+  // exact future cost would need per-employee future iteration which
+  // adds compute for diminishing precision.
+  let tracked_hours_lifetime: Decimal | null = null;
+  let projected_cost: Decimal | null = null;
+  let projected_burdened_cost: Decimal | null = null;
+  let projected_margin: Decimal | null = null;
+  let projected_margin_pct: Decimal | null = null;
+  let projected_burdened_margin: Decimal | null = null;
+  let projected_burdened_margin_pct: Decimal | null = null;
+  // Future planned hours from today through planned_end — useful for
+  // both FP (budget projection) and T&M (forward-look revenue + ending
+  // assignments preview). Project may have no planned_end (open-ended
+  // T&M); the helper returns 0 in that case so the UI hides the section.
+  const future_planned_hours_for_proj = await projectFuturePlannedHours(
+    project_id,
+    new Date().toISOString().slice(0, 10),
+    planned_end,
+  );
+  let future_planned_hours: Decimal | null = future_planned_hours_for_proj;
+
   if (billing === "fixed_price") {
     cumulative_cost = await cumulativeProjectCost(
       project_id,
@@ -585,6 +612,59 @@ export async function computeProjectMonthly(
         }
       }
     }
+
+    // Lifetime tracked hours through today + projected cost and
+    // margin (allocated and burdened). FP-specific because the
+    // projection assumes an end date and a tracked-hours rate basis.
+    // Future planned hours move OUT of this block below since T&M
+    // wants them too for its forward-look.
+    const today_iso = new Date().toISOString().slice(0, 10);
+    tracked_hours_lifetime = await projectTrackedHoursThrough(
+      project_id,
+      today_iso,
+    );
+
+    // Project cost forward: average past cost-per-hour × future planned.
+    // Only attempt when we have a non-trivial denominator; otherwise
+    // the projected fields stay null and the UI hides them.
+    if (
+      cumulative_cost !== null &&
+      tracked_hours_lifetime.gt(0) &&
+      future_planned_hours.gt(0)
+    ) {
+      const avg_cost_per_hour = cumulative_cost.div(tracked_hours_lifetime);
+      projected_cost = cumulative_cost.add(
+        avg_cost_per_hour.mul(future_planned_hours),
+      );
+      if (agreed_amount !== null) {
+        projected_margin = agreed_amount.sub(projected_cost);
+        if (agreed_amount.gt(0)) {
+          projected_margin_pct = projected_margin
+            .div(agreed_amount)
+            .mul(100);
+        }
+      }
+    }
+    if (
+      cumulative_burdened_cost !== null &&
+      tracked_hours_lifetime.gt(0) &&
+      future_planned_hours.gt(0)
+    ) {
+      const avg_burdened_per_hour = cumulative_burdened_cost.div(
+        tracked_hours_lifetime,
+      );
+      projected_burdened_cost = cumulative_burdened_cost.add(
+        avg_burdened_per_hour.mul(future_planned_hours),
+      );
+      if (agreed_amount !== null) {
+        projected_burdened_margin = agreed_amount.sub(projected_burdened_cost);
+        if (agreed_amount.gt(0)) {
+          projected_burdened_margin_pct = projected_burdened_margin
+            .div(agreed_amount)
+            .mul(100);
+        }
+      }
+    }
   }
 
   const total_rate_unresolved =
@@ -642,6 +722,9 @@ export async function computeProjectMonthly(
     working_days_in_month: n_wd,
     working_days_elapsed,
     month_status,
+    time_budget_hours: time_budget_hours,
+    planned_start_date: planned_start,
+    planned_end_date: planned_end,
     agreed_amount_eur:
       agreed_amount === null ? null : fmt(agreed_amount, 2),
     revenue:
@@ -688,6 +771,29 @@ export async function computeProjectMonthly(
       cumulative_burdened_margin_pct === null
         ? null
         : fmt(cumulative_burdened_margin_pct, 2),
+    tracked_hours_lifetime:
+      tracked_hours_lifetime === null
+        ? null
+        : fmt(tracked_hours_lifetime, 2),
+    future_planned_hours:
+      future_planned_hours === null ? null : fmt(future_planned_hours, 2),
+    projected_cost: projected_cost === null ? null : fmt(projected_cost, 2),
+    projected_burdened_cost:
+      projected_burdened_cost === null
+        ? null
+        : fmt(projected_burdened_cost, 2),
+    projected_margin:
+      projected_margin === null ? null : fmt(projected_margin, 2),
+    projected_margin_pct:
+      projected_margin_pct === null ? null : fmt(projected_margin_pct, 2),
+    projected_burdened_margin:
+      projected_burdened_margin === null
+        ? null
+        : fmt(projected_burdened_margin, 2),
+    projected_burdened_margin_pct:
+      projected_burdened_margin_pct === null
+        ? null
+        : fmt(projected_burdened_margin_pct, 2),
     pct_complete: pct_complete === null ? null : fmt(pct_complete, 4),
     recognition_method,
     over_budget,

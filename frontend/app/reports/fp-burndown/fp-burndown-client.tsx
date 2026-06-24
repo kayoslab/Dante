@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { TimeBudgetBar } from "@/components/project/time-budget-bar";
 import {
   Card,
   CardContent,
@@ -190,35 +191,11 @@ function BurnBar({ p }: { p: FpBurndownProject }) {
     const tracked = Number(p.tracked_hours);
     const futurePlanned = Number(p.future_planned_hours ?? "0");
     const budget = p.time_budget_hours;
-    const trackedRaw = tracked / budget;
-    const projectedRaw = Number(p.projected_pct ?? "0");
     const remainingHours = Math.max(budget - tracked, 0);
     const overrunHours =
       tracked + futurePlanned > budget
         ? tracked + futurePlanned - budget
         : 0;
-
-    // Two-segment bar — tracked (left, solid) + future planned
-    // (continuing right, semi-transparent). Both clamp at 100% visually;
-    // anything beyond gets called out in the overrun label below.
-    const trackedClamped = Math.min(trackedRaw, 1);
-    const plannedClamped = Math.min(
-      Math.max(projectedRaw - trackedRaw, 0),
-      1 - trackedClamped,
-    );
-    const tone =
-      trackedRaw >= 1
-        ? "bg-red-500/70"
-        : projectedRaw > 1.1
-          ? "bg-amber-500/70"
-          : "bg-emerald-500/70";
-    const plannedTone =
-      projectedRaw > 1
-        ? "bg-red-300/60"
-        : projectedRaw > 1.1
-          ? "bg-amber-300/60"
-          : "bg-emerald-300/60";
-
     return (
       <div className="mt-3">
         <div className="mb-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs">
@@ -242,20 +219,11 @@ function BurnBar({ p }: { p: FpBurndownProject }) {
             </span>
           )}
         </div>
-        <div className="relative flex h-3 overflow-hidden rounded bg-muted">
-          <div
-            className={cn("h-full", tone)}
-            style={{ width: `${trackedClamped * 100}%` }}
-            title={`Tracked ${tracked.toFixed(0)}h (${(trackedRaw * 100).toFixed(0)}%)`}
-          />
-          {plannedClamped > 0 && (
-            <div
-              className={cn("h-full", plannedTone)}
-              style={{ width: `${plannedClamped * 100}%` }}
-              title={`Planned future ${futurePlanned.toFixed(0)}h`}
-            />
-          )}
-        </div>
+        <TimeBudgetBar
+          trackedHours={tracked}
+          budgetHours={budget}
+          futurePlannedHours={futurePlanned}
+        />
       </div>
     );
   }

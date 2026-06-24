@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Kpi, KpiGrid } from "@/components/ui/kpi";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TimeBudgetBar } from "@/components/project/time-budget-bar";
 import { useProjectMonthly } from "@/lib/api/projects";
 import { formatEUR, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -93,30 +94,242 @@ function TmBreakdown({
 }: {
   data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
 }) {
-  const margin = data.margin ? Number(data.margin) : null;
-  const marginTone = margin === null ? null : margin >= 0 ? "positive" : "negative";
-
   return (
     <div className="space-y-5">
-      <KpiGrid>
-        <Kpi label="Revenue" value={formatEUR(data.revenue)} emphasize />
-        <Kpi label="Cost" value={formatEUR(data.cost)} emphasize />
-        <Kpi
-          label="Margin"
-          value={formatEUR(data.margin)}
-          emphasize
-          tone={marginTone}
-        />
-        <Kpi
-          label="Margin %"
-          value={formatPercent(data.margin_pct)}
-          emphasize
-          tone={marginTone}
-        />
-      </KpiGrid>
+      <TmStatusBanner data={data} />
+      <TmMoneyBlock data={data} />
+      <TmEffortBlock data={data} />
       <AssignmentTable data={data} mode="tm" />
       <UnassignedTrackedTable data={data} />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// T&M status banner — at-a-glance health
+// ---------------------------------------------------------------------------
+
+type TmStatus = "on_track" | "rate_unresolved" | "margin_negative" | "no_data";
+
+function deriveTmStatus(
+  data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>,
+): TmStatus {
+  const tracked = Number(data.tracked_hours ?? "0");
+  if (tracked === 0) return "no_data";
+  const margin = data.margin ? Number(data.margin) : null;
+  if (margin !== null && margin < 0) return "margin_negative";
+  if (data.rate_unresolved_days > 0) return "rate_unresolved";
+  return "on_track";
+}
+
+const TM_STATUS_LABEL: Record<TmStatus, string> = {
+  on_track: "On track",
+  rate_unresolved: "Rate gap",
+  margin_negative: "Margin negative",
+  no_data: "No tracked time yet",
+};
+
+const TM_STATUS_TONE: Record<TmStatus, string> = {
+  on_track: "bg-emerald-100 text-emerald-800",
+  rate_unresolved: "bg-amber-100 text-amber-800",
+  margin_negative: "bg-red-100 text-red-800",
+  no_data: "bg-muted text-muted-foreground",
+};
+
+function TmStatusBanner({
+  data,
+}: {
+  data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
+}) {
+  const status = deriveTmStatus(data);
+  const marginPct =
+    data.margin_pct !== null && data.margin_pct !== undefined
+      ? Number(data.margin_pct)
+      : null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-4 py-3 text-sm">
+      <span
+        className={cn(
+          "rounded px-2 py-0.5 text-xs font-medium",
+          TM_STATUS_TONE[status],
+        )}
+      >
+        {TM_STATUS_LABEL[status]}
+      </span>
+      <span className="tabular-nums">
+        <span className="text-muted-foreground">Revenue this month: </span>
+        <span className="font-medium">{formatEUR(data.revenue ?? "0")}</span>
+      </span>
+      {marginPct !== null && (
+        <span className="tabular-nums">
+          <span className="text-muted-foreground">Margin: </span>
+          <span
+            className={cn(
+              "font-medium",
+              marginPct < 0
+                ? "text-red-700"
+                : marginPct < 10
+                  ? "text-amber-700"
+                  : "text-emerald-700",
+            )}
+          >
+            {marginPct >= 0 ? "" : "−"}
+            {Math.abs(marginPct).toFixed(1)}%
+          </span>
+        </span>
+      )}
+      {data.rate_unresolved_days > 0 && (
+        <span
+          className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800"
+          title="Days where an assignment had no project_rate or framework rate to resolve to — revenue couldn't be calculated for these days. Configure the role-tier rate to fix."
+        >
+          {data.rate_unresolved_days}d unresolved rate
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// T&M Money block — dual P&L (Project + True)
+// ---------------------------------------------------------------------------
+
+function TmMoneyBlock({
+  data,
+}: {
+  data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
+}) {
+  const revenue = data.revenue ? Number(data.revenue) : 0;
+  const allocatedCost = Number(data.cost);
+  const allocatedMargin = revenue - allocatedCost;
+  const allocatedMarginPct =
+    revenue > 0 ? (allocatedMargin / revenue) * 100 : null;
+
+  const burdenedCost = Number(data.burdened_cost);
+  const burdenedMargin = revenue - burdenedCost;
+  const burdenedMarginPct =
+    revenue > 0 ? (burdenedMargin / revenue) * 100 : null;
+
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Money this month
+        </h3>
+        <span className="text-xs text-muted-foreground">
+          billable revenue vs. cost
+        </span>
+      </div>
+      <div className="rounded-md border bg-background">
+        <div className="border-b bg-muted/20 px-4 py-2 text-sm">
+          <span className="text-muted-foreground">Revenue this month: </span>
+          <span className="font-medium tabular-nums">
+            {formatEUR(data.revenue ?? "0")}
+          </span>
+        </div>
+        <div className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+          <PLPanel
+            title="Project P&L"
+            subtitle="allocated salary (no burden)"
+            costLabel="Cost"
+            costValue={allocatedCost}
+            marginNow={allocatedMargin}
+            marginNowPct={allocatedMarginPct}
+            marginProjected={null}
+            marginProjectedPct={null}
+            tooltip="Allocated salary cost: each consultant's salary share based on their assignment allocation to this project. Treats bench time as someone else's problem."
+          />
+          <PLPanel
+            title="True P&L"
+            subtitle="burdened (real org cost)"
+            costLabel="Burdened cost"
+            costValue={burdenedCost}
+            marginNow={burdenedMargin}
+            marginNowPct={burdenedMarginPct}
+            marginProjected={null}
+            marginProjectedPct={null}
+            tooltip="Burdened cost: each consultant's full salary share for the months they were on this project. Bench drag they incurred while assigned here is absorbed onto this project."
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// T&M Effort & forward look
+// ---------------------------------------------------------------------------
+
+function TmEffortBlock({
+  data,
+}: {
+  data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
+}) {
+  const trackedThisMonth = Number(data.tracked_hours ?? "0");
+  const futurePlanned = Number(data.future_planned_hours ?? "0");
+  const futurePlannedShown = futurePlanned > 0;
+  const trackedRevenue = data.tracked_revenue
+    ? Number(data.tracked_revenue)
+    : null;
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Effort &amp; forward look
+        </h3>
+        <span className="text-xs text-muted-foreground">
+          delivered hours and what&rsquo;s committed next
+        </span>
+      </div>
+      <div className="grid gap-3 rounded-md border bg-background p-3 sm:grid-cols-3">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+            Tracked hours this month
+          </div>
+          <div className="mt-0.5 text-base font-semibold tabular-nums">
+            {trackedThisMonth.toFixed(0)}h
+          </div>
+          {trackedRevenue !== null && (
+            <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+              ≈ {formatEUR(trackedRevenue.toFixed(2))} at prevailing rates
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+            Planned future hours
+          </div>
+          <div className="mt-0.5 text-base font-semibold tabular-nums">
+            {futurePlannedShown ? `${futurePlanned.toFixed(0)}h` : "—"}
+          </div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            {data.planned_end_date
+              ? `through planned end (${data.planned_end_date})`
+              : "no planned end on file"}
+          </div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+            Rate-unresolved days
+          </div>
+          <div
+            className={cn(
+              "mt-0.5 text-base font-semibold tabular-nums",
+              data.rate_unresolved_days > 0
+                ? "text-amber-700"
+                : "text-emerald-700",
+            )}
+          >
+            {data.rate_unresolved_days}d
+          </div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            {data.rate_unresolved_days > 0
+              ? "days that didn't resolve to a billable rate"
+              : "all days billed at a resolved rate"}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -125,281 +338,581 @@ function FpBreakdown({
 }: {
   data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
 }) {
-  const remaining = data.remaining_budget ? Number(data.remaining_budget) : null;
-  const remainingTone =
-    remaining === null ? null : remaining >= 0 ? "positive" : "negative";
-
   return (
     <div className="space-y-5">
-      <KpiGrid>
-        <Kpi
-          label="Agreed amount"
-          value={
-            data.agreed_amount_eur ? formatEUR(data.agreed_amount_eur) : "—"
-          }
-          emphasize
-        />
-        <Kpi label="Cost this month" value={formatEUR(data.cost)} emphasize />
-        <Kpi
-          label="Cumulative cost"
-          value={formatEUR(data.cumulative_cost)}
-          emphasize
-        />
-        <Kpi
-          label="Remaining budget"
-          value={
-            data.remaining_budget !== null
-              ? formatEUR(data.remaining_budget)
-              : "—"
-          }
-          emphasize
-          tone={remainingTone}
-        />
-      </KpiGrid>
-      <FpRecognitionBlock data={data} />
-      <FpProgressBar data={data} />
-      <KpiGrid className="rounded-md border border-dashed border-muted-foreground/20 bg-muted/20 p-3">
-        <Kpi
-          label="Burdened cost"
-          value={formatEUR(data.burdened_cost)}
-          emphasize
-        />
-        <div className="sm:col-span-3 text-xs leading-snug text-muted-foreground">
-          Fully-loaded cost for the month: each consultant&apos;s full salary
-          distributed across their active projects by share-of-allocation.
-          Bench time and vacation get absorbed by the live projects. Compare
-          against <span className="font-medium">Cost this month</span> — when
-          burdened &gt; direct, the gap is bench drag this project is
-          quietly carrying.
-        </div>
-      </KpiGrid>
+      <FpStatusBanner data={data} />
+      <FpTimeBudgetBlock data={data} />
+      <FpMoneyBlock data={data} />
+      <FpScheduleBlock data={data} />
+      <FpAccountingDisclosure data={data} />
       <AssignmentTable data={data} mode="fp" />
       <UnassignedTrackedTable data={data} />
     </div>
   );
 }
 
-function FpRecognitionBlock({
+// ---------------------------------------------------------------------------
+// Status banner — at-a-glance health summary
+// ---------------------------------------------------------------------------
+
+type FpStatus =
+  | "on_track"
+  | "at_risk"
+  | "time_exhausted"
+  | "margin_negative"
+  | "no_rule";
+
+function deriveFpStatus(
+  data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>,
+): FpStatus {
+  if (!data.recognition_method || data.recognition_method === "none") {
+    return "no_rule";
+  }
+  const recognized = Number(data.cumulative_recognized_revenue ?? "0");
+  const cost = Number(data.cumulative_cost ?? "0");
+  // Margin_negative now = projected end margin is negative (forward
+  // looking). Mid-flight cumulative_margin lagging recognition isn't
+  // a real-money loss signal — that's the trap the rework is fixing.
+  const projectedMargin =
+    data.projected_margin !== null && data.projected_margin !== undefined
+      ? Number(data.projected_margin)
+      : null;
+  if (projectedMargin !== null && projectedMargin < 0) return "margin_negative";
+  if (recognized > 0 && cost > recognized * 1.1 && projectedMargin === null) {
+    // Fallback when projection isn't possible (no tracked hours yet)
+    // and cost is already meaningfully above recognized.
+    return "margin_negative";
+  }
+  if (data.over_budget) return "time_exhausted";
+  const trackedH = Number(data.tracked_hours_lifetime ?? "0");
+  const budgetH = data.time_budget_hours ?? null;
+  if (budgetH && trackedH > 0) {
+    const projectedTotal = trackedH + Number(data.future_planned_hours ?? "0");
+    if (projectedTotal > budgetH * 1.1) return "at_risk";
+  }
+  return "on_track";
+}
+
+const STATUS_LABEL: Record<FpStatus, string> = {
+  on_track: "On track",
+  at_risk: "At risk",
+  time_exhausted: "Time exhausted",
+  margin_negative: "Margin negative",
+  no_rule: "No recognition rule",
+};
+
+const STATUS_TONE: Record<FpStatus, string> = {
+  on_track: "bg-emerald-100 text-emerald-800",
+  at_risk: "bg-amber-100 text-amber-800",
+  time_exhausted: "bg-red-100 text-red-800",
+  margin_negative: "bg-red-100 text-red-800",
+  no_rule: "bg-amber-50 text-amber-800",
+};
+
+function FpStatusBanner({
   data,
 }: {
   data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
 }) {
-  const method = data.recognition_method;
-  if (method === "none" || method == null) {
-    return (
-      <div className="rounded-md border border-dashed border-muted-foreground/20 bg-muted/20 p-3 text-xs text-muted-foreground">
-        No revenue recognition rule available. Set{" "}
-        <span className="font-medium">time_budget_hours</span> or a{" "}
-        <span className="font-medium">planned start/end</span> on the project
-        to enable recognized revenue and margin.
-      </div>
-    );
-  }
-  const recMargin = data.recognized_margin ? Number(data.recognized_margin) : null;
-  const recMarginTone =
-    recMargin === null ? null : recMargin >= 0 ? "positive" : "negative";
-  const cumMargin = data.cumulative_margin ? Number(data.cumulative_margin) : null;
-  const cumMarginTone =
-    cumMargin === null ? null : cumMargin >= 0 ? "positive" : "negative";
-  const methodLabel =
-    method === "tracked_hours"
-      ? "tracked hours vs. time budget"
-      : "linear over planned window";
-
+  const status = deriveFpStatus(data);
+  const tracked = Number(data.tracked_hours_lifetime ?? "0");
+  const budget = data.time_budget_hours ?? null;
+  const trackedPct =
+    budget && budget > 0 ? Math.min((tracked / budget) * 100, 999) : null;
+  const projectedMarginPct =
+    data.projected_margin_pct !== null && data.projected_margin_pct !== undefined
+      ? Number(data.projected_margin_pct)
+      : null;
   return (
-    <div className="space-y-3 rounded-md border border-dashed border-muted-foreground/20 bg-muted/20 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-xs uppercase tracking-wide text-muted-foreground">
-          Revenue recognition
-        </div>
-        <div className="flex items-center gap-2">
-          {data.over_budget && (
-            <span
-              className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-800"
-              title="Tracked hours have exceeded the time budget. Recognized revenue is capped at the agreed amount; further effort lands as pure cost."
-            >
-              over budget
+    <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-4 py-3 text-sm">
+      <span
+        className={cn(
+          "rounded px-2 py-0.5 text-xs font-medium",
+          STATUS_TONE[status],
+        )}
+      >
+        {STATUS_LABEL[status]}
+      </span>
+      {budget !== null && (
+        <span className="tabular-nums">
+          <span className="text-muted-foreground">Time: </span>
+          <span className="font-medium">
+            {tracked.toFixed(0)}h / {budget}h
+          </span>
+          {trackedPct !== null && (
+            <span className="ml-1 text-muted-foreground">
+              ({trackedPct.toFixed(0)}%)
             </span>
           )}
-          <span className="text-xs text-muted-foreground">
-            via {methodLabel}
-          </span>
-        </div>
-      </div>
-      <div>
-        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-          Lifetime (real-money P&amp;L)
-        </div>
-        <KpiGrid>
-          <Kpi
-            label="Cumulative recognized"
-            value={formatEUR(data.cumulative_recognized_revenue)}
-            emphasize
-          />
-          <Kpi
-            label="Cumulative cost"
-            value={formatEUR(data.cumulative_cost)}
-            emphasize
-          />
-          <Kpi
-            label="Cumulative margin"
-            value={formatEUR(data.cumulative_margin)}
-            emphasize
-            tone={cumMarginTone}
-          />
-          <Kpi
-            label="Cumulative margin %"
-            value={formatPercent(data.cumulative_margin_pct)}
-            emphasize
-            tone={cumMarginTone}
-          />
-        </KpiGrid>
-      </div>
-      <FpBurdenedLifetime data={data} />
-      <div>
-        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-          This month{" "}
+        </span>
+      )}
+      {projectedMarginPct !== null && (
+        <span className="tabular-nums">
+          <span className="text-muted-foreground">Projected margin: </span>
           <span
-            className="ml-1 inline-flex items-center text-muted-foreground/70"
-            title="Per-month recognized margin is volatile: cost accrues continuously from allocations × salary, but tracked hours are often logged in bursts (end of month, after vacation, after the budget cap). A negative current-month margin does NOT mean the project is unprofitable — read the lifetime row above for the real answer."
+            className={cn(
+              "font-medium",
+              projectedMarginPct < 0
+                ? "text-red-700"
+                : projectedMarginPct < 10
+                  ? "text-amber-700"
+                  : "text-emerald-700",
+            )}
           >
-            ⓘ
+            {projectedMarginPct >= 0 ? "" : "−"}
+            {Math.abs(projectedMarginPct).toFixed(1)}%
           </span>
-        </div>
-        <KpiGrid cols={3}>
-          <Kpi
-            label="Recognized this month"
-            value={formatEUR(data.recognized_revenue)}
-          />
-          <Kpi
-            label="Recognized margin"
-            value={formatEUR(data.recognized_margin)}
-            tone={recMarginTone}
-          />
-          <Kpi
-            label="Recognized margin %"
-            value={formatPercent(data.recognized_margin_pct)}
-            tone={recMarginTone}
-          />
-        </KpiGrid>
-      </div>
+        </span>
+      )}
     </div>
   );
 }
 
-function FpBurdenedLifetime({
+// ---------------------------------------------------------------------------
+// Time budget — burn-down bar with tracked + planned future segments
+// ---------------------------------------------------------------------------
+
+function FpTimeBudgetBlock({
   data,
 }: {
   data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
 }) {
-  if (data.cumulative_burdened_cost == null) return null;
-  const direct = data.cumulative_cost ? Number(data.cumulative_cost) : null;
-  const burdened = Number(data.cumulative_burdened_cost);
-  const burdenedMargin =
-    data.cumulative_burdened_margin != null
-      ? Number(data.cumulative_burdened_margin)
-      : null;
-  const tone =
-    burdenedMargin == null
-      ? null
-      : burdenedMargin >= 0
-        ? "positive"
-        : "negative";
-  // Highlight gap between direct and burdened: > 5% means bench drag is
-  // material, > 50% means it dominates.
-  const ratio = direct && direct > 0 ? burdened / direct : null;
-  const gapNote =
-    ratio == null
-      ? null
-      : ratio > 1.5
-        ? `Burdened is ${ratio.toFixed(1)}× direct — heavy bench drag absorbed from the consultants working here.`
-        : ratio > 1.05
-          ? `Burdened is ${((ratio - 1) * 100).toFixed(0)}% above direct — some bench drag.`
-          : "Burdened ≈ direct — the consultants here were near fully utilized.";
+  const budget = data.time_budget_hours ?? null;
+  if (!budget || budget <= 0) {
+    return (
+      <section>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Time budget
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          No time budget set. Configure <code>time_budget_hours</code> on the
+          project to enable the burn-down view.
+        </p>
+      </section>
+    );
+  }
+  const tracked = Number(data.tracked_hours_lifetime ?? "0");
+  const planned = Number(data.future_planned_hours ?? "0");
+  const remaining = Math.max(budget - tracked, 0);
+  const overrun =
+    tracked + planned > budget ? tracked + planned - budget : 0;
 
   return (
-    <div>
-      <div className="mb-1 flex items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        Lifetime (fully-loaded)
+    <section>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Time budget
+        </h3>
+        <span className="text-xs text-muted-foreground">
+          how much delivery effort is left
+        </span>
+      </div>
+      <div className="space-y-2 rounded-md border bg-background p-3">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+          <span className="font-medium tabular-nums">
+            {tracked.toFixed(0)}h{" "}
+            <span className="font-normal text-muted-foreground">tracked</span>
+          </span>
+          <span className="tabular-nums">
+            <span className="text-muted-foreground">of </span>
+            <span className="font-medium">{budget}h budget</span>
+          </span>
+          <span className="tabular-nums">
+            <span className="text-muted-foreground">remaining </span>
+            <span className="font-medium">{remaining.toFixed(0)}h</span>
+          </span>
+          <span className="tabular-nums">
+            <span className="text-muted-foreground">planned ahead </span>
+            <span className="font-medium">{planned.toFixed(0)}h</span>
+          </span>
+          {overrun > 0 && (
+            <span className="font-medium tabular-nums text-red-700">
+              +{overrun.toFixed(0)}h over budget
+            </span>
+          )}
+        </div>
+        <TimeBudgetBar
+          trackedHours={tracked}
+          budgetHours={budget}
+          futurePlannedHours={planned}
+        />
+        <p className="text-xs text-muted-foreground">
+          Solid bar = hours already tracked. Lighter extension = hours
+          committed to future assignments. Gap to the right = unplanned
+          remaining budget. The tick at the right edge marks the
+          contracted cap.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Money — Project P&L (allocated) + True P&L (burdened) side by side
+// ---------------------------------------------------------------------------
+
+function FpMoneyBlock({
+  data,
+}: {
+  data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
+}) {
+  const agreed = data.agreed_amount_eur
+    ? Number(data.agreed_amount_eur)
+    : null;
+  const allocatedCost = Number(data.cumulative_cost ?? "0");
+  const allocatedMargin = agreed === null ? null : agreed - allocatedCost;
+  const allocatedMarginPct =
+    agreed !== null && agreed > 0 && allocatedMargin !== null
+      ? (allocatedMargin / agreed) * 100
+      : null;
+
+  const burdenedCost = data.cumulative_burdened_cost
+    ? Number(data.cumulative_burdened_cost)
+    : null;
+  const burdenedMargin =
+    agreed === null || burdenedCost === null ? null : agreed - burdenedCost;
+  const burdenedMarginPct =
+    agreed !== null && agreed > 0 && burdenedMargin !== null
+      ? (burdenedMargin / agreed) * 100
+      : null;
+
+  const projectedMargin =
+    data.projected_margin !== null && data.projected_margin !== undefined
+      ? Number(data.projected_margin)
+      : null;
+  const projectedMarginPct =
+    data.projected_margin_pct !== null &&
+    data.projected_margin_pct !== undefined
+      ? Number(data.projected_margin_pct)
+      : null;
+  const projectedBurdenedMargin =
+    data.projected_burdened_margin !== null &&
+    data.projected_burdened_margin !== undefined
+      ? Number(data.projected_burdened_margin)
+      : null;
+  const projectedBurdenedMarginPct =
+    data.projected_burdened_margin_pct !== null &&
+    data.projected_burdened_margin_pct !== undefined
+      ? Number(data.projected_burdened_margin_pct)
+      : null;
+
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Money: do we make money on this project?
+        </h3>
+        <span className="text-xs text-muted-foreground">
+          forward-looking projections in <span className="italic">italic</span>
+        </span>
+      </div>
+      <div className="rounded-md border bg-background">
+        <div className="border-b bg-muted/20 px-4 py-2 text-sm">
+          <span className="text-muted-foreground">Contracted price: </span>
+          <span className="font-medium tabular-nums">
+            {agreed === null ? "—" : formatEUR(agreed.toFixed(2))}
+          </span>
+        </div>
+        <div className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+          <PLPanel
+            title="Project P&L"
+            subtitle="allocated salary (no burden)"
+            costLabel="Cost so far"
+            costValue={allocatedCost}
+            marginNow={allocatedMargin}
+            marginNowPct={allocatedMarginPct}
+            marginProjected={projectedMargin}
+            marginProjectedPct={projectedMarginPct}
+            tooltip="Allocated salary cost: each consultant's salary share based on their assignment allocation to this project. Treats bench time as someone else's problem."
+          />
+          <PLPanel
+            title="True P&L"
+            subtitle="burdened (real org cost)"
+            costLabel="Burdened cost so far"
+            costValue={burdenedCost}
+            marginNow={burdenedMargin}
+            marginNowPct={burdenedMarginPct}
+            marginProjected={projectedBurdenedMargin}
+            marginProjectedPct={projectedBurdenedMarginPct}
+            tooltip="Burdened cost: each consultant's full salary share for the months they were on this project. Bench drag they incurred while assigned here is absorbed onto this project. Reflects what the firm actually spent."
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PLPanel({
+  title,
+  subtitle,
+  costLabel,
+  costValue,
+  marginNow,
+  marginNowPct,
+  marginProjected,
+  marginProjectedPct,
+  tooltip,
+}: {
+  title: string;
+  subtitle: string;
+  costLabel: string;
+  costValue: number | null;
+  marginNow: number | null;
+  marginNowPct: number | null;
+  marginProjected: number | null;
+  marginProjectedPct: number | null;
+  tooltip: string;
+}) {
+  return (
+    <div className="space-y-2 p-4">
+      <div className="flex items-baseline gap-1">
+        <div className="text-sm font-medium">{title}</div>
+        <div className="text-xs text-muted-foreground">· {subtitle}</div>
         <span
-          className="inline-flex items-center text-muted-foreground/70 normal-case tracking-normal"
-          title={
-            "Burdened cost replaces direct cost with each consultant's full salary " +
-            "share for the months they were on this project. Bench drag they incurred " +
-            "while assigned here is absorbed onto this project. A negative burdened " +
-            "margin while direct margin is positive means the project priced its " +
-            "billable time well, but the firm carried bench drag from the people we " +
-            "put on it."
-          }
+          className="ml-auto cursor-help text-xs text-muted-foreground/70"
+          title={tooltip}
         >
           ⓘ
         </span>
       </div>
-      <KpiGrid>
-        <Kpi
-          label="Cumulative burdened cost"
-          value={formatEUR(data.cumulative_burdened_cost)}
-        />
-        <Kpi
-          label="Burdened margin"
-          value={formatEUR(data.cumulative_burdened_margin)}
-          tone={tone}
-        />
-        <Kpi
-          label="Burdened margin %"
-          value={formatPercent(data.cumulative_burdened_margin_pct)}
-          tone={tone}
-        />
-        {gapNote && (
-          <div className="text-xs leading-snug text-muted-foreground">
-            {gapNote}
-          </div>
-        )}
-      </KpiGrid>
+      <PLRow
+        label={costLabel}
+        value={costValue}
+        muted
+      />
+      <PLRow label="Margin so far" value={marginNow} pct={marginNowPct} />
+      <PLRow
+        label="Projected end margin"
+        value={marginProjected}
+        pct={marginProjectedPct}
+        italic
+        emphasize
+      />
     </div>
   );
 }
 
-function FpProgressBar({
+function PLRow({
+  label,
+  value,
+  pct,
+  muted,
+  italic,
+  emphasize,
+}: {
+  label: string;
+  value: number | null;
+  pct?: number | null;
+  muted?: boolean;
+  italic?: boolean;
+  emphasize?: boolean;
+}) {
+  const tone =
+    value === null
+      ? ""
+      : value < 0
+        ? "text-red-700"
+        : value < (Math.abs(value) * 0.0001) // dummy never-true; keep neutral when positive
+          ? ""
+          : "";
+  const moneyTone =
+    value === null ? "" : value < 0 ? "text-red-700" : "text-emerald-700";
+  return (
+    <div
+      className={cn(
+        "flex items-baseline justify-between gap-2 text-sm",
+        italic && "italic",
+        muted && "text-muted-foreground",
+      )}
+    >
+      <span className={cn(emphasize && "font-medium")}>{label}</span>
+      <span className="tabular-nums">
+        <span
+          className={cn(
+            emphasize && "font-medium",
+            !muted && moneyTone,
+            !muted && tone,
+          )}
+        >
+          {value === null
+            ? "—"
+            : `${value < 0 ? "−" : ""}${formatEUR(Math.abs(value).toFixed(2))}`}
+        </span>
+        {pct !== undefined && pct !== null && (
+          <span
+            className={cn(
+              "ml-1 text-xs",
+              !muted && (pct < 0 ? "text-red-700" : "text-muted-foreground"),
+            )}
+          >
+            ({pct >= 0 ? "" : "−"}
+            {Math.abs(pct).toFixed(1)}%)
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Schedule — planned dates + elapsed share
+// ---------------------------------------------------------------------------
+
+function FpScheduleBlock({
   data,
 }: {
   data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
 }) {
-  if (data.pct_complete == null) return null;
-  const pct = Number(data.pct_complete);
-  const capped = Math.min(1, Math.max(0, pct));
-  const pctLabel = `${(pct * 100).toFixed(1)}%`;
-  const overFill = pct > 1 ? Math.min(1, pct - 1) : 0;
+  if (!data.planned_start_date || !data.planned_end_date) {
+    return null;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const start = data.planned_start_date;
+  const end = data.planned_end_date;
+  const startMs = new Date(`${start}T00:00:00Z`).getTime();
+  const endMs = new Date(`${end}T00:00:00Z`).getTime();
+  const todayMs = new Date(`${today}T00:00:00Z`).getTime();
+  const totalDays = Math.max(
+    Math.round((endMs - startMs) / 86_400_000),
+    1,
+  );
+  const elapsed = Math.max(
+    0,
+    Math.min(
+      Math.round((todayMs - startMs) / 86_400_000),
+      totalDays,
+    ),
+  );
+  const elapsedPct = (elapsed / totalDays) * 100;
+  const daysLeft = Math.max(
+    Math.round((endMs - todayMs) / 86_400_000),
+    0,
+  );
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>Progress</span>
-        <span className="tabular-nums">
-          {pctLabel}
-          {pct > 1 && (
-            <span className="ml-1 font-medium text-red-700">over</span>
-          )}
+    <section>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Schedule
+        </h3>
+        <span className="text-xs text-muted-foreground">
+          where on the timeline are we?
         </span>
       </div>
-      <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all",
-            pct > 1 ? "bg-emerald-700" : "bg-emerald-500",
-          )}
-          style={{ width: `${capped * 100}%` }}
-        />
-        {overFill > 0 && (
-          <div
-            className="absolute top-0 left-0 h-full rounded-full bg-red-500/70"
-            style={{ width: `${overFill * 100}%` }}
-            title={`${((pct - 1) * 100).toFixed(0)}% over budget`}
-          />
-        )}
+      <div className="space-y-2 rounded-md border bg-background p-3">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+          <span className="tabular-nums">
+            <span className="text-muted-foreground">Planned: </span>
+            <span className="font-medium">
+              {start} → {end}
+            </span>
+          </span>
+          <span className="tabular-nums">
+            <span className="text-muted-foreground">Elapsed: </span>
+            <span className="font-medium">{elapsedPct.toFixed(0)}%</span>
+          </span>
+          <span className="tabular-nums">
+            <span className="text-muted-foreground">
+              {todayMs > endMs ? "Ended " : "Days remaining: "}
+            </span>
+            <span className="font-medium">
+              {todayMs > endMs
+                ? Math.round((todayMs - endMs) / 86_400_000) + "d ago"
+                : daysLeft + "d"}
+            </span>
+          </span>
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Accounting recognition disclosure — finance-only detail
+// ---------------------------------------------------------------------------
+
+function FpAccountingDisclosure({
+  data,
+}: {
+  data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
+}) {
+  if (
+    !data.recognition_method ||
+    data.recognition_method === "none" ||
+    !data.cumulative_recognized_revenue
+  ) {
+    return null;
+  }
+  const method = data.recognition_method;
+  const methodLabel =
+    method === "tracked_hours"
+      ? "tracked hours vs. time budget"
+      : "linear over planned window";
+  const cumRecognized = data.cumulative_recognized_revenue
+    ? Number(data.cumulative_recognized_revenue)
+    : null;
+  const cumMargin = data.cumulative_margin
+    ? Number(data.cumulative_margin)
+    : null;
+  const cumBurdenedMargin = data.cumulative_burdened_margin
+    ? Number(data.cumulative_burdened_margin)
+    : null;
+
+  return (
+    <section>
+      <details className="group rounded-md border bg-background p-3">
+        <summary className="flex cursor-pointer items-baseline gap-2 text-sm">
+          <span className="font-medium">Accounting recognition</span>
+          <span className="text-xs text-muted-foreground">
+            (for finance — separate from the SDM steering view above)
+          </span>
+          <span className="ml-auto text-xs text-muted-foreground group-open:hidden">
+            ▸
+          </span>
+          <span className="ml-auto hidden text-xs text-muted-foreground group-open:inline">
+            ▾
+          </span>
+        </summary>
+        <div className="mt-3 space-y-3 text-sm">
+          <p className="text-xs text-muted-foreground">
+            Recognition method: <span className="font-medium">{methodLabel}</span>
+            . Recognized revenue is the share of the agreed amount that the
+            accounting model says we&rsquo;ve <em>earned</em> so far —
+            ramps up gradually instead of being booked upfront.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <PLRow
+              label="Cumulative recognized"
+              value={cumRecognized}
+              muted
+            />
+            <PLRow
+              label="Cumulative margin (recognized − allocated cost)"
+              value={cumMargin}
+            />
+            <PLRow
+              label="Cumulative margin (recognized − burdened cost)"
+              value={cumBurdenedMargin}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            <strong>When does negative cumulative margin actually
+            matter?</strong> Only when tracked hours have reached the time
+            budget — recognition is then capped at the agreed amount, so
+            further cost is pure loss. While tracked is still climbing
+            toward the budget, a negative cumulative margin is just
+            recognition lag (cost accrues continuously, recognition
+            catches up at end). For the real &ldquo;is this project
+            profitable?&rdquo; read, use <span className="font-medium">
+              Money: do we make money on this project?
+            </span>{" "}
+            above.
+          </p>
+        </div>
+      </details>
+    </section>
+  );
+}
+
 
 function UnassignedTrackedTable({
   data,

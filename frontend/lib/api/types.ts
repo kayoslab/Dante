@@ -1178,6 +1178,12 @@ export type MonthlyBreakdown = {
         month_end: string;
         /** Working Days In Month */
         working_days_in_month: number;
+        /** Time budget hours configured on the project (FP). */
+        time_budget_hours?: number | null;
+        /** Planned start date (FP — drives schedule + recognition). */
+        planned_start_date?: string | null;
+        /** Planned end date (FP — drives schedule + recognition). */
+        planned_end_date?: string | null;
         /** Agreed Amount Eur */
         agreed_amount_eur?: string | null;
         /** Revenue */
@@ -1196,14 +1202,6 @@ export type MonthlyBreakdown = {
         burdened_margin_pct?: string | null;
         /** Cumulative Cost */
         cumulative_cost?: string | null;
-        /** Remaining Budget */
-        remaining_budget?: string | null;
-        /** Recognized Revenue */
-        recognized_revenue?: string | null;
-        /** Recognized Margin */
-        recognized_margin?: string | null;
-        /** Recognized Margin Pct */
-        recognized_margin_pct?: string | null;
         /** Cumulative Recognized Revenue */
         cumulative_recognized_revenue?: string | null;
         /** Cumulative Margin */
@@ -1216,6 +1214,22 @@ export type MonthlyBreakdown = {
         cumulative_burdened_margin?: string | null;
         /** Cumulative Burdened Margin Pct */
         cumulative_burdened_margin_pct?: string | null;
+        /** Lifetime tracked hours on the project (FP only). */
+        tracked_hours_lifetime?: string | null;
+        /** Future planned hours from today to planned_end (FP only). */
+        future_planned_hours?: string | null;
+        /** Projected end-of-project allocated cost (FP only). */
+        projected_cost?: string | null;
+        /** Projected end-of-project burdened cost (FP only). */
+        projected_burdened_cost?: string | null;
+        /** agreed_amount − projected_cost (FP only). */
+        projected_margin?: string | null;
+        /** projected_margin / agreed_amount × 100 (FP only). */
+        projected_margin_pct?: string | null;
+        /** agreed_amount − projected_burdened_cost (FP only). */
+        projected_burdened_margin?: string | null;
+        /** projected_burdened_margin / agreed_amount × 100 (FP only). */
+        projected_burdened_margin_pct?: string | null;
         /** Pct Complete */
         pct_complete?: string | null;
         /** Recognition Method */
