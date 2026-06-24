@@ -41,9 +41,9 @@ variable "sync_lambda_alarm_emails" {
 }
 
 variable "sync_lambda_schedule_expression" {
-  description = "EventBridge schedule for the sync Lambda. Default: 06:00 UTC daily, which is 07:00–08:00 Frankfurt local time (winter/summer) — before the working day starts."
+  description = "EventBridge schedule for the sync Lambda. Default: 04:00 UTC daily, which is 05:00–06:00 Frankfurt local time (winter/summer) — well before the 08:00 standup so even a slow run finishes before people start working."
   type        = string
-  default     = "cron(0 6 * * ? *)"
+  default     = "cron(0 4 * * ? *)"
 }
 
 # --- VPC ---------------------------------------------------------------

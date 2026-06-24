@@ -27,6 +27,13 @@ const REPORTS: ReportTile[] = [
     minRole: "manager",
   },
   {
+    href: "/reports/customer-rentability",
+    title: "Customer rentability",
+    description:
+      "Who carries us, and how concentrated is the risk. Top-5 customer margin trend, Pareto table, concentration metrics (HHI included), and ending-project radar.",
+    minRole: "manager",
+  },
+  {
     href: "/reports/utilization",
     title: "Utilization",
     description:

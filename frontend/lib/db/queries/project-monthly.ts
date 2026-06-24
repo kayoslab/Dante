@@ -44,6 +44,7 @@ export type ActiveProjectRow = {
   project_id: number;
   name: string;
   billing_model: string;
+  customer_id: number;
   customer_name: string;
 };
 
@@ -54,7 +55,8 @@ export async function listActiveProjectsForPortfolio(): Promise<
   ActiveProjectRow[]
 > {
   const r = await db.execute(sql`
-    SELECT p.project_id, p.name, p.billing_model, c.name AS customer_name
+    SELECT p.project_id, p.name, p.billing_model,
+           c.customer_id, c.name AS customer_name
     FROM project p
     JOIN customer c ON c.customer_id = p.customer_id
     WHERE p.status = 'active'
@@ -64,6 +66,7 @@ export async function listActiveProjectsForPortfolio(): Promise<
     project_id: row.project_id as number,
     name: row.name as string,
     billing_model: row.billing_model as string,
+    customer_id: row.customer_id as number,
     customer_name: row.customer_name as string,
   }));
 }
@@ -245,7 +248,7 @@ export async function computeProjectMonthly(
     const employee_office = (raw.employee_office as string | null) ?? null;
 
     const { monthly_cost, who_name, standard_daily_hours } =
-      await entityMonthlyCost(emp_id, fl_id, cost_ov, burden);
+      await entityMonthlyCost(emp_id, fl_id, cost_ov, burden, month_start);
     const effective_profile = profile ?? role_tier;
     const fte = emp_id !== null ? await employeeFte(emp_id) : new Decimal(1);
 

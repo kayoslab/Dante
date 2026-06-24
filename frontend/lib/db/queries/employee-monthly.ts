@@ -116,7 +116,7 @@ export async function computeEmployeeMonthly(
   }
 
   const { monthly_cost: monthly_cost_full, basis: cost_basis } =
-    await entityMonthlyCost(employee_id, null, null, burden);
+    await entityMonthlyCost(employee_id, null, null, burden, month_start);
 
   const contract_clipped_start =
     hire_date !== null && hire_date > month_start ? hire_date : month_start;

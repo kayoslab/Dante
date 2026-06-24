@@ -122,7 +122,7 @@ module "cognito" {
   # at `dante.example.com` can only be used at sign-in if the hosted
   # UI lives on the same eTLD+1. The default `*.amazoncognito.com`
   # domain is on a different eTLD+1 and breaks WebAuthn.
-  custom_domain_name = "auth.${var.domain}"
+  custom_domain_name     = "auth.${var.domain}"
   custom_domain_cert_arn = aws_acm_certificate_validation.cognito_custom.certificate_arn
 
   # SES sender. Without this Cognito falls back to its default sender
@@ -308,7 +308,11 @@ module "sync_lambda" {
 
   # App secrets — Personio creds, awork client, awork rotating tokens.
   secret_arns = module.secrets.all_secret_arns
-  kms_key_arn = null
+  # Only the awork tokens secret is writable from the sync — the OAuth
+  # refresh flow PutSecretValues the rotated refresh_token back each run.
+  # Reads of Personio creds + awork client are scoped via secret_arns.
+  writable_secret_arns = [module.secrets.awork_tokens_secret_arn]
+  kms_key_arn          = null
 
   # RDS-managed master credential — read at boot and composed into
   # DATABASE_URL by `lib/sync/db.ts::resolveDatabaseUrl`.
@@ -473,9 +477,9 @@ module "app" {
     DANTE_DATABASE_NAME     = module.rds.database_name
 
     # Auth.js — Cognito pointers; CLIENT_SECRET + AUTH_SECRET arrive via `secrets:` below.
-    AUTH_TRUST_HOST      = "true"
-    COGNITO_CLIENT_ID    = module.cognito.client_id
-    COGNITO_ISSUER       = module.cognito.issuer_url
+    AUTH_TRUST_HOST   = "true"
+    COGNITO_CLIENT_ID = module.cognito.client_id
+    COGNITO_ISSUER    = module.cognito.issuer_url
     # Used by admin-side calls (e.g. AdminCreateUser from /settings/users)
     # via `lib/auth/cognito-admin.ts`.
     COGNITO_USER_POOL_ID = module.cognito.user_pool_id

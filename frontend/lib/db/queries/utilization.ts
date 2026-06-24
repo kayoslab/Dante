@@ -120,6 +120,7 @@ async function computeEmployeeLoad(
     null,
     null,
     ctx.burden,
+    ctx.month_start,
   );
   if (monthly_cost === null) return null;
 

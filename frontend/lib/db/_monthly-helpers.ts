@@ -163,13 +163,58 @@ export async function entityMonthlyCost(
   freelancer_id: number | null,
   daily_cost_override: Decimal | null,
   burden: number,
+  /** When provided, look up the salary in effect on `month_start` from
+   * `compensation_event` instead of using `employee_current`'s "now"
+   * values. Makes historical / forecast monthly cost honest — a Q1
+   * 2024 report should use Q1 2024 salaries, not today's. When the
+   * employee has no compensation_event on or before `month_start` (no
+   * Personio history sync, or hired after the date), the function
+   * falls back to `employee_current` so we don't silently zero them
+   * out. Omit `month_start` to preserve the legacy "use current"
+   * behavior — still needed by cumulative project-cost callers that
+   * span many months at once. */
+  month_start?: string,
 ): Promise<EntityCost> {
   if (employee_id !== null) {
-    const r = await db.execute(sql`
-      SELECT first_name, last_name, fix_salary, fix_salary_interval,
-             hourly_salary, weekly_working_hours
-      FROM employee_current WHERE employee_id = ${employee_id}
-    `);
+    // Two query shapes: bare employee_current (legacy / no month
+    // context), and employee_current LEFT JOIN LATERAL the latest
+    // compensation_event on or before month_start with a base-pay
+    // category. Tie-break by compensation_id DESC for determinism
+    // when two events share the same effective_from.
+    const r =
+      month_start === undefined
+        ? await db.execute(sql`
+            SELECT first_name, last_name,
+                   fix_salary, fix_salary_interval,
+                   hourly_salary, weekly_working_hours,
+                   NULL::text AS asof_category,
+                   NULL::numeric AS asof_amount,
+                   NULL::text AS asof_interval,
+                   NULL::double precision AS asof_wkh
+            FROM employee_current
+            WHERE employee_id = ${employee_id}
+          `)
+        : await db.execute(sql`
+            SELECT ec.first_name, ec.last_name,
+                   ec.fix_salary, ec.fix_salary_interval,
+                   ec.hourly_salary, ec.weekly_working_hours,
+                   ce.category AS asof_category,
+                   ce.amount_value AS asof_amount,
+                   ce.interval AS asof_interval,
+                   ce.weekly_working_hours AS asof_wkh
+            FROM employee_current ec
+            LEFT JOIN LATERAL (
+              SELECT category, amount_value, interval, weekly_working_hours
+              FROM compensation_event
+              WHERE employee_id = ec.employee_id
+                AND category IN ('FIXED_SALARY', 'HOURLY_SALARY')
+                AND effective_from IS NOT NULL
+                AND effective_from <= ${month_start}::date
+              ORDER BY effective_from DESC, compensation_id DESC
+              LIMIT 1
+            ) ce ON TRUE
+            WHERE ec.employee_id = ${employee_id}
+          `);
     const row = (r.rows as Array<Record<string, unknown>>)[0];
     if (!row) {
       return {
@@ -181,18 +226,53 @@ export async function entityMonthlyCost(
     }
     const fn = row.first_name as string | null;
     const ln = row.last_name as string | null;
-    const fix = row.fix_salary === null ? null : Number(row.fix_salary);
-    const interval = row.fix_salary_interval as string | null;
-    const hourly = row.hourly_salary === null ? null : Number(row.hourly_salary);
-    const wkh = row.weekly_working_hours === null ? null : Number(row.weekly_working_hours);
     const who = `${fn ?? ""} ${ln ?? ""}`.trim();
+
+    // Pick as-of values when a compensation_event was found; otherwise
+    // fall back to employee_current's "now" values. Personio sends
+    // interval as 'YEARLY' / 'MONTHLY' / 'HOURLY' (uppercase); the
+    // legacy column is lowercase, so normalize before comparing.
+    const asofCategory = (row.asof_category as string | null) ?? null;
+    let fix: number | null;
+    let interval: string | null;
+    let hourly: number | null;
+    let wkh: number | null;
+    let asofUsed = false;
+    if (asofCategory === "FIXED_SALARY") {
+      fix = row.asof_amount === null ? null : Number(row.asof_amount);
+      const rawInterval = (row.asof_interval as string | null) ?? null;
+      interval = rawInterval === null ? null : rawInterval.toLowerCase();
+      hourly = null;
+      wkh = row.asof_wkh === null ? null : Number(row.asof_wkh);
+      asofUsed = true;
+    } else if (asofCategory === "HOURLY_SALARY") {
+      fix = null;
+      interval = null;
+      hourly = row.asof_amount === null ? null : Number(row.asof_amount);
+      wkh = row.asof_wkh === null ? null : Number(row.asof_wkh);
+      asofUsed = true;
+    } else {
+      fix = row.fix_salary === null ? null : Number(row.fix_salary);
+      interval = row.fix_salary_interval as string | null;
+      hourly =
+        row.hourly_salary === null ? null : Number(row.hourly_salary);
+      wkh =
+        row.weekly_working_hours === null
+          ? null
+          : Number(row.weekly_working_hours);
+    }
     // 5-day work week assumption matches the workingDaysInRange helper.
     const standard_daily_hours = wkh !== null && wkh > 0 ? wkh / 5 : 8;
+    const asofTag = asofUsed
+      ? ` (as-of ${month_start})`
+      : month_start !== undefined
+        ? ` (current; no event ≤ ${month_start})`
+        : "";
 
     if (fix !== null && fix > 0 && interval === "yearly") {
       return {
         monthly_cost: new Decimal(fix).div(12).mul(burden),
-        basis: `fix_salary ${fix.toFixed(0)}/yr × burden ×${burden}`,
+        basis: `fix_salary ${fix.toFixed(0)}/yr × burden ×${burden}${asofTag}`,
         who_name: who,
         standard_daily_hours,
       };
@@ -200,7 +280,7 @@ export async function entityMonthlyCost(
     if (fix !== null && fix > 0 && interval === "monthly") {
       return {
         monthly_cost: new Decimal(fix).mul(burden),
-        basis: `fix_salary ${fix.toFixed(0)}/mo × burden ×${burden}`,
+        basis: `fix_salary ${fix.toFixed(0)}/mo × burden ×${burden}${asofTag}`,
         who_name: who,
         standard_daily_hours,
       };
@@ -209,14 +289,14 @@ export async function entityMonthlyCost(
       const cost = new Decimal(hourly).mul(wkh).mul(WEEKS_PER_MONTH).mul(burden);
       return {
         monthly_cost: cost,
-        basis: `hourly ${hourly.toFixed(2)} × ${wkh}h × 52/12 × burden ×${burden}`,
+        basis: `hourly ${hourly.toFixed(2)} × ${wkh}h × 52/12 × burden ×${burden}${asofTag}`,
         who_name: who,
         standard_daily_hours,
       };
     }
     return {
       monthly_cost: null,
-      basis: "no salary on file",
+      basis: `no salary on file${asofTag}`,
       who_name: who,
       standard_daily_hours,
     };
@@ -855,6 +935,7 @@ export async function unassignedTrackedForProject(
         null,
         null,
         burden,
+        month_start,
       );
       if (monthly_cost !== null) {
         // Option A — proportional cap. Denominator is max(employee's TOTAL
@@ -997,6 +1078,12 @@ export async function cumulativeProjectCost(
         ? null
         : new Decimal(raw.daily_cost_override_eur as string);
 
+    // TODO(as-of-rate): cumulative project cost iterates an assignment
+    // across many months. Honest pricing requires looking up each
+    // (employee, month)'s salary separately; the current single-rate
+    // approximation here uses "now" across the full window. Acceptable
+    // for FP lifetime margin display; revisit when CFO asks for true
+    // historical cumulative numbers.
     const { monthly_cost, standard_daily_hours } = await entityMonthlyCost(
       emp_id,
       fl_id,
@@ -1166,6 +1253,10 @@ export async function cumulativeProjectBurdenedCost(
         ? null
         : new Decimal(raw.daily_cost_override_eur as string);
 
+    // TODO(as-of-rate): same caveat as cumulativeProjectCost — the
+    // burdened lifetime sum uses today's salary across all months
+    // within an assignment. Fix in lock-step with the cumulative
+    // cost helper.
     const { monthly_cost, standard_daily_hours } = await entityMonthlyCost(emp_id, fl_id, cost_ov, burden);
     if (monthly_cost === null) continue;
     const a_end_eff =

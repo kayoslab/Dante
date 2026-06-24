@@ -25,6 +25,12 @@ variable "secret_arns" {
   type        = list(string)
 }
 
+variable "writable_secret_arns" {
+  description = "Subset of Secrets Manager ARNs the Lambda may write to via PutSecretValue. Today only the awork rotating-tokens secret — the OAuth refresh on every sync writes the rotated tokens back. Keep this list as small as possible; reads are governed separately by `secret_arns`."
+  type        = list(string)
+  default     = []
+}
+
 variable "kms_key_arn" {
   description = "Customer-managed KMS key ARN used to decrypt the app secrets. Pass `module.secrets.kms_key_arn` or null if using the AWS-managed key."
   type        = string

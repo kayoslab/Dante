@@ -66,6 +66,7 @@ export async function computeMonthlyBenchTotals(
       null,
       null,
       burden,
+      month_start,
     );
     if (monthly_cost === null) continue;
 
@@ -184,6 +185,7 @@ export async function computePortfolioMonthlyTotals(
 export type ProjectMonthlyRow = {
   project_id: number;
   project_name: string;
+  customer_id: number;
   customer_name: string;
   billing_model: "time_and_material" | "fixed_price";
   n_assignments: number;
@@ -326,6 +328,7 @@ export async function computeProjectMonthlyRows(
     rows.push({
       project_id: raw.project_id,
       project_name: raw.name,
+      customer_id: raw.customer_id,
       customer_name: raw.customer_name,
       billing_model:
         raw.billing_model === "fixed_price"

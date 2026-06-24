@@ -57,6 +57,18 @@ data "aws_iam_policy_document" "secrets" {
       var.database_secret_arn == null ? [] : [var.database_secret_arn],
     )
   }
+  # Write access — scoped to the explicit subset in `writable_secret_arns`
+  # so a misconfiguration can't accidentally let the sync overwrite a
+  # static secret. Currently the awork token-rotation path is the only
+  # writer.
+  dynamic "statement" {
+    for_each = length(var.writable_secret_arns) == 0 ? [] : [var.writable_secret_arns]
+    content {
+      effect    = "Allow"
+      actions   = ["secretsmanager:PutSecretValue"]
+      resources = statement.value
+    }
+  }
   # KMS decrypt on the app secrets' customer-managed key (no-op when null —
   # the AWS-managed Secrets Manager key authorizes implicitly).
   dynamic "statement" {
@@ -125,7 +137,7 @@ resource "aws_lambda_function" "sync" {
         # AWS_REGION is reserved by the Lambda runtime — it injects the
         # function's region automatically and rejects an explicit value.
         # The SDK reads it the same way either way.
-        NODE_ENV                  = "production"
+        NODE_ENV = "production"
       },
       # DB config — the Lambda runtime fetches credentials from the
       # managed secret, then composes DATABASE_URL using the host/db/port

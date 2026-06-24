@@ -124,7 +124,7 @@ export async function computeFreelancerMonthly(
     );
 
     const { monthly_cost: monthly_cost_full, standard_daily_hours } =
-      await entityMonthlyCost(null, freelancer_id, cost_ov, burden);
+      await entityMonthlyCost(null, freelancer_id, cost_ov, burden, month_start);
     let cost_share = new Decimal(0);
     const entered = enteredHours.get(asn_id);
     if (entered !== undefined && monthly_cost_full !== null) {

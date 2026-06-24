@@ -1395,6 +1395,8 @@ export type PortfolioProjectRow = {
         project_id: number;
         /** Project Name */
         project_name: string;
+        /** Customer Id (optional for backwards compatibility) */
+        customer_id?: number;
         /** Customer Name */
         customer_name: string;
         /**
