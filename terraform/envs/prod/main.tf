@@ -726,6 +726,25 @@ module "github_oidc" {
     "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${module.sync_lambda.function_name}",
   ]
 
+  # Inline-policy writes on the sync Lambda role. The sync's `secrets`
+  # inline policy changes when we add/remove a secret ARN or a write
+  # grant (e.g. PutSecretValue on the rotating awork tokens). The
+  # deploy role's own ARN is intentionally absent here — terraform
+  # rewrites it during apply but a compromised deploy token must not
+  # be able to self-escalate.
+  managed_iam_role_arns = [
+    module.sync_lambda.role_arn,
+  ]
+
+  # EventBridge rule maintenance — the sync Lambda's schedule. PutRule
+  # is needed whenever we change the cron expression (e.g. moving
+  # from 06:00 UTC to 04:00 UTC); TagResource is required because
+  # terraform tags the rule with the standard App/Environment/
+  # DataClass set.
+  eventbridge_rule_arns = compact([
+    module.sync_lambda.schedule_rule_arn,
+  ])
+
   # Remote state lives in S3 (bucket + DynamoDB lock table created by
   # terraform/envs/bootstrap-state). GH Actions needs read+write on
   # both to run `terraform plan/apply` against the same state file the

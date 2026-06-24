@@ -23,6 +23,11 @@ output "schedule_rule_name" {
   value       = try(aws_cloudwatch_event_rule.schedule[0].name, null)
 }
 
+output "schedule_rule_arn" {
+  description = "EventBridge schedule rule ARN, or null if no schedule was configured. Pass into the github-oidc module's `eventbridge_rule_arns` so the deploy role can update the rule / its tags on every apply."
+  value       = try(aws_cloudwatch_event_rule.schedule[0].arn, null)
+}
+
 output "dlq_arn" {
   description = "ARN of the SQS DLQ that catches failed async-invocations."
   value       = aws_sqs_queue.dlq.arn

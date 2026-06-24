@@ -59,6 +59,18 @@ variable "task_role_arns_passable" {
   default     = []
 }
 
+variable "managed_iam_role_arns" {
+  description = "IAM role ARNs whose INLINE policies the deploy role may write via iam:PutRolePolicy / DeleteRolePolicy. Needed when a module's inline policy (e.g. sync-lambda's secrets statement) is modified by terraform on apply. Scope tightly — granting blanket iam:PutRolePolicy lets a compromised deploy token rewrite arbitrary role permissions. The deploy role's own ARN MUST NOT appear here (would allow self-modification)."
+  type        = list(string)
+  default     = []
+}
+
+variable "eventbridge_rule_arns" {
+  description = "EventBridge rule ARNs the deploy role may modify (PutRule, DeleteRule, PutTargets, RemoveTargets, TagResource, UntagResource). Pass the sync Lambda's schedule rule ARN here so terraform can update the cron expression or rule tags on apply."
+  type        = list(string)
+  default     = []
+}
+
 variable "terraform_state_bucket_arn" {
   description = "ARN of the S3 bucket holding Terraform remote state. Pass null while running on local backend; when you migrate to S3, plumb this through so the deploy role can read/write state."
   type        = string

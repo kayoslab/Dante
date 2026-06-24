@@ -223,6 +223,47 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # iam:PutRolePolicy / DeleteRolePolicy on specific role ARNs — needed
+  # when a module's inline policy (e.g. sync-lambda's secrets
+  # statement) is modified by `terraform apply`. Scoped to the
+  # explicit list so a compromised deploy token can't rewrite
+  # arbitrary IAM. The deploy role's own ARN must never appear in
+  # this list (would allow self-escalation).
+  dynamic "statement" {
+    for_each = length(var.managed_iam_role_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+      ]
+      resources = var.managed_iam_role_arns
+    }
+  }
+
+  # EventBridge rule + target maintenance. Scoped to specific rule
+  # ARNs (currently just the sync Lambda's schedule). PutTargets /
+  # RemoveTargets are required even though the cron expression
+  # itself is on PutRule — terraform reconciles the target wiring
+  # on every apply. TagResource / UntagResource are mandatory: PutRule
+  # rejects calls that include tags if the principal lacks
+  # events:TagResource.
+  dynamic "statement" {
+    for_each = length(var.eventbridge_rule_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "events:PutRule",
+        "events:DeleteRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:TagResource",
+        "events:UntagResource",
+      ]
+      resources = var.eventbridge_rule_arns
+    }
+  }
+
   # Lambda — update sync Lambda's code from the rebuilt zip and let
   # terraform reconcile tags / config drift on every apply.
   dynamic "statement" {
