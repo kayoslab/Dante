@@ -683,6 +683,58 @@ export async function employeeProjectTrackedMinutesInMonth(
   return row?.m === null || row?.m === undefined ? 0 : Number(row.m);
 }
 
+/** Per-project tracked minutes for a single employee in a single
+ * month. Returns Map<project_id, minutes>. Mirrors
+ * `employeeProjectTrackedMinutesInMonth` (which sums across every
+ * mapped project) but keeps the per-project axis so per-assignment
+ * revenue can multiply by the right tracked total. Personio + awork
+ * with MAX dedup per (project, day) so a double-logged day doesn't
+ * count twice. */
+export async function trackedMinutesByProjectForEmployee(
+  employee_id: number,
+  month_start: string,
+  month_end: string,
+): Promise<Map<number, number>> {
+  const r = await db.execute(sql`
+    WITH personio AS (
+      SELECT pl.project_id, a.work_date,
+             SUM(a.duration_minutes) AS minutes
+      FROM attendance a
+      JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
+      WHERE a.employee_id = ${employee_id}
+        AND a.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY pl.project_id, a.work_date
+    ),
+    awork AS (
+      SELECT apl.project_id, t.work_date,
+             SUM(t.duration_minutes) AS minutes
+      FROM awork_time_entry t
+      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
+      JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
+      WHERE ul.employee_id = ${employee_id}
+        AND t.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY apl.project_id, t.work_date
+    ),
+    per_project_day AS (
+      SELECT project_id, work_date, MAX(minutes) AS minutes
+      FROM (SELECT * FROM personio UNION ALL SELECT * FROM awork) u
+      GROUP BY project_id, work_date
+    )
+    SELECT project_id, COALESCE(SUM(minutes), 0) AS m
+    FROM per_project_day
+    GROUP BY project_id
+  `);
+  const out = new Map<number, number>();
+  for (const row of r.rows as Array<{
+    project_id: number;
+    m: number | string | null;
+  }>) {
+    if (row.m === null || row.m === undefined) continue;
+    out.set(row.project_id, Number(row.m));
+  }
+  return out;
+}
+
 /** Utilization based on tracked project hours instead of assignment
  * allocation. Numerator = `employeeProjectTrackedMinutesInMonth`;
  * denominator = (contract workdays − absence workdays) ×

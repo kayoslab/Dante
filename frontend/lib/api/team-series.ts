@@ -61,7 +61,11 @@ export type TeamMonthRosterRow = {
    * in the month (off-contract, full leave). */
   tracked_utilization_pct: string | null;
   monthly_cost: string;
+  /** Billable revenue (T&M tracked × rate + FP recognition share). */
   monthly_revenue: string;
+  /** Forward-looking sibling: T&M allocation × rate. The gap vs
+   * monthly_revenue surfaces under-tracking. */
+  monthly_allocation_revenue: string;
   monthly_margin: string;
   primary_assignment: TeamMonthAssignment | null;
   bench_since_days: number | null;
@@ -78,6 +82,7 @@ export type TeamMonthProjectMixRow = {
 
 export type TeamMonthKpis = {
   revenue: string;
+  allocation_revenue: string;
   cost: string;
   margin: string;
   margin_pct: string | null;

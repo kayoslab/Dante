@@ -109,14 +109,26 @@ function TmBreakdown({
 // T&M status banner — at-a-glance health
 // ---------------------------------------------------------------------------
 
-type TmStatus = "on_track" | "rate_unresolved" | "margin_negative" | "no_data";
+type TmStatus =
+  | "on_track"
+  | "rate_unresolved"
+  | "margin_negative"
+  | "staffed_no_tracking"
+  | "no_data";
 
 function deriveTmStatus(
   data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>,
 ): TmStatus {
   const tracked = Number(data.tracked_hours ?? "0");
-  if (tracked === 0) return "no_data";
+  const cost = Number(data.cost ?? "0");
   const margin = data.margin ? Number(data.margin) : null;
+  // Staffed-but-not-tracking is the case the engine fix surfaces:
+  // someone is allocated (cost > 0) but nobody has logged time
+  // (tracked = 0). Revenue is correctly zero — this used to read as
+  // "no tracked time yet" with a healthy looking allocation-revenue
+  // headline. Now it reads red.
+  if (tracked === 0 && cost > 0) return "staffed_no_tracking";
+  if (tracked === 0) return "no_data";
   if (margin !== null && margin < 0) return "margin_negative";
   if (data.rate_unresolved_days > 0) return "rate_unresolved";
   return "on_track";
@@ -126,13 +138,15 @@ const TM_STATUS_LABEL: Record<TmStatus, string> = {
   on_track: "On track",
   rate_unresolved: "Rate gap",
   margin_negative: "Margin negative",
-  no_data: "No tracked time yet",
+  staffed_no_tracking: "Staffed, not tracking",
+  no_data: "No activity",
 };
 
 const TM_STATUS_TONE: Record<TmStatus, string> = {
   on_track: "bg-emerald-100 text-emerald-800",
   rate_unresolved: "bg-amber-100 text-amber-800",
   margin_negative: "bg-red-100 text-red-800",
+  staffed_no_tracking: "bg-red-100 text-red-800",
   no_data: "bg-muted text-muted-foreground",
 };
 
@@ -200,6 +214,16 @@ function TmMoneyBlock({
   data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
 }) {
   const revenue = data.revenue ? Number(data.revenue) : 0;
+  const allocationRevenue = data.allocation_revenue
+    ? Number(data.allocation_revenue)
+    : null;
+  // Under-tracking gap = what we committed to bill − what we actually
+  // tracked. Surface it whenever it's materially larger than a rounding
+  // glitch so SDMs see the missing billable hours instead of guessing.
+  const undertrackedGap =
+    allocationRevenue !== null && allocationRevenue - revenue > 1
+      ? allocationRevenue - revenue
+      : null;
   const allocatedCost = Number(data.cost);
   const allocatedMargin = revenue - allocatedCost;
   const allocatedMarginPct =
@@ -222,10 +246,29 @@ function TmMoneyBlock({
       </div>
       <div className="rounded-md border bg-background">
         <div className="border-b bg-muted/20 px-4 py-2 text-sm">
-          <span className="text-muted-foreground">Revenue this month: </span>
-          <span className="font-medium tabular-nums">
-            {formatEUR(data.revenue ?? "0")}
-          </span>
+          <div>
+            <span className="text-muted-foreground">
+              Billable revenue this month:{" "}
+            </span>
+            <span
+              className="font-medium tabular-nums"
+              title="Tracked hours × rate. This is what the customer is invoiced — allocation that wasn't tracked produces no revenue here."
+            >
+              {formatEUR(data.revenue ?? "0")}
+            </span>
+          </div>
+          {undertrackedGap !== null && (
+            <div
+              className="mt-0.5 text-xs text-amber-700 tabular-nums"
+              title="Allocation × rate × billable days. Going from allocation to billable requires the assigned consultants to log their hours."
+            >
+              Allocation projected{" "}
+              {formatEUR(allocationRevenue!.toFixed(2))} ·{" "}
+              <span className="font-medium">
+                {formatEUR(undertrackedGap.toFixed(2))} not yet tracked
+              </span>
+            </div>
+          )}
         </div>
         <div className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0">
           <PLPanel
@@ -1269,7 +1312,17 @@ function AssignmentTable({
                 )}
                 {mode === "tm" && (
                   <>
-                    <td className="px-3 py-2 text-right tabular-nums">
+                    <td
+                      className="px-3 py-2 text-right tabular-nums"
+                      title={
+                        a.allocation_revenue &&
+                        Number(a.allocation_revenue) -
+                          (a.revenue ? Number(a.revenue) : 0) >
+                          1
+                          ? `Tracked revenue ${formatEUR(a.revenue ?? "0")} · allocation projected ${formatEUR(a.allocation_revenue)} — ${formatEUR((Number(a.allocation_revenue) - (a.revenue ? Number(a.revenue) : 0)).toFixed(2))} not yet tracked.`
+                          : "Tracked hours × rate (what the customer is invoiced)."
+                      }
+                    >
                       {formatEUR(a.revenue)}
                     </td>
                     <td

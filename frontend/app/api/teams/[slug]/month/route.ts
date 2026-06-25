@@ -69,6 +69,7 @@ export async function GET(
       : [];
 
     let totalRevenue = 0;
+    let totalAllocationRevenue = 0;
     let totalCost = 0;
     let totalUtilSum = 0;
     let nUtilCounted = 0;
@@ -85,6 +86,7 @@ export async function GET(
       tracked_utilization_pct: string | null; // 0-N, from billable project tracked hours
       monthly_cost: string;
       monthly_revenue: string;
+      monthly_allocation_revenue: string;
       monthly_margin: string;
       primary_assignment: AssignmentSummary | null;
       bench_since_days: number | null;
@@ -103,11 +105,15 @@ export async function GET(
       if (!data) continue;
 
       const revenue = Number(data.revenue ?? "0");
+      const allocationRevenue = Number(
+        data.allocation_revenue ?? data.revenue ?? "0",
+      );
       const cost = Number(data.monthly_cost_full ?? "0");
       const margin = revenue - cost;
       const util = Number(data.utilization_pct ?? "0");
 
       totalRevenue += revenue;
+      totalAllocationRevenue += allocationRevenue;
       totalCost += cost;
       if (data.under_contract) {
         totalUtilSum += util;
@@ -163,6 +169,7 @@ export async function GET(
           (data.tracked_utilization_pct as string | null | undefined) ?? null,
         monthly_cost: cost.toFixed(2),
         monthly_revenue: revenue.toFixed(2),
+        monthly_allocation_revenue: allocationRevenue.toFixed(2),
         monthly_margin: margin.toFixed(2),
         primary_assignment: primary,
         bench_since_days,
@@ -204,6 +211,7 @@ export async function GET(
       n_members: members.length,
       kpis: {
         revenue: totalRevenue.toFixed(2),
+        allocation_revenue: totalAllocationRevenue.toFixed(2),
         cost: totalCost.toFixed(2),
         margin: totalMargin.toFixed(2),
         margin_pct: marginPct === null ? null : marginPct.toFixed(2),

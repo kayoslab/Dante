@@ -200,7 +200,17 @@ function EmployeeBody({
           emphasize
           hint={data.monthly_cost_basis}
         />
-        <Kpi label="Revenue" value={formatEUR(data.revenue)} emphasize />
+        <Kpi
+          label="Revenue"
+          value={formatEUR(data.revenue)}
+          emphasize
+          hint={
+            data.allocation_revenue &&
+            Number(data.allocation_revenue) - Number(data.revenue) > 1
+              ? `Billable revenue (tracked × rate). Allocation projected ${formatEUR(data.allocation_revenue)} — ${formatEUR((Number(data.allocation_revenue) - Number(data.revenue)).toFixed(2))} not yet tracked.`
+              : "Billable revenue: tracked hours × rate (T&M) + recognized share (FP). Allocation alone doesn't bill."
+          }
+        />
         <Kpi
           label="Margin"
           value={formatEUR(data.margin)}

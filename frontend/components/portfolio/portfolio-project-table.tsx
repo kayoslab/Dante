@@ -100,7 +100,17 @@ export function ProjectTable({ rows }: { rows: PortfolioProjectRow[] }) {
                 <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
                   {p.n_assignments}
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums">
+                <td
+                  className="px-3 py-2 text-right tabular-nums"
+                  title={
+                    !isFp &&
+                    p.allocation_revenue &&
+                    p.revenue &&
+                    Number(p.allocation_revenue) - Number(p.revenue) > 1
+                      ? `Tracked × rate (billable). Allocation projected ${formatEUR(p.allocation_revenue)} — ${formatEUR((Number(p.allocation_revenue) - Number(p.revenue)).toFixed(2))} not yet tracked.`
+                      : undefined
+                  }
+                >
                   {p.revenue ? formatEUR(p.revenue) : "—"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">

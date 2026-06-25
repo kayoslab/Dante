@@ -73,12 +73,16 @@ export async function GET(
           member_ids.map((id) => computeEmployeeMonthly(id, monthYm)),
         );
         let revenue = 0;
+        let allocation_revenue = 0;
         let cost = 0;
         let util = 0;
         let n = 0;
         for (const d of per) {
           if (!d) continue;
           revenue += Number(d.revenue ?? "0");
+          allocation_revenue += Number(
+            d.allocation_revenue ?? d.revenue ?? "0",
+          );
           cost += Number(d.monthly_cost_full ?? "0");
           if (d.under_contract) {
             util += Number(d.utilization_pct ?? "0");
@@ -93,6 +97,7 @@ export async function GET(
         return {
           month: monthYm,
           revenue: revenue.toFixed(2),
+          allocation_revenue: allocation_revenue.toFixed(2),
           cost: cost.toFixed(2),
           margin: margin.toFixed(2),
           margin_pct: margin_pct === null ? null : margin_pct.toFixed(2),

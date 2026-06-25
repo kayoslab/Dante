@@ -189,7 +189,11 @@ export type ProjectMonthlyRow = {
   customer_name: string;
   billing_model: "time_and_material" | "fixed_price";
   n_assignments: number;
+  /** T&M: tracked × rate (billable). FP: recognized revenue. */
   revenue: string | null;
+  /** T&M forward-looking: allocation × rate. Null for FP (recognition
+   * already encodes commitment). Use to show the under-tracking gap. */
+  allocation_revenue: string | null;
   cost: string;
   margin: string | null;
   margin_pct: string | null;
@@ -276,6 +280,11 @@ export async function computeProjectMonthlyRows(
       breakdown.revenue === null || breakdown.revenue === undefined
         ? null
         : new Decimal(breakdown.revenue as string);
+    const allocation_revenue =
+      breakdown.allocation_revenue === null ||
+      breakdown.allocation_revenue === undefined
+        ? null
+        : new Decimal(breakdown.allocation_revenue as string);
     const margin =
       breakdown.margin === null || breakdown.margin === undefined
         ? null
@@ -336,6 +345,11 @@ export async function computeProjectMonthlyRows(
           : "time_and_material",
       n_assignments: assignments.length,
       revenue: row_revenue === null ? null : fmt(row_revenue, 2),
+      allocation_revenue:
+        raw.billing_model === "time_and_material" &&
+        allocation_revenue !== null
+          ? fmt(allocation_revenue, 2)
+          : null,
       cost: fmt(cost, 2),
       margin: row_margin === null ? null : fmt(row_margin, 2),
       margin_pct: row_margin_pct === null ? null : fmt(row_margin_pct, 2),

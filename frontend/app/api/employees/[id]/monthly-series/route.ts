@@ -51,6 +51,7 @@ export async function GET(
         under_contract: (b.under_contract as boolean | undefined) ?? true,
         monthly_cost_full: b.monthly_cost_full,
         revenue: b.revenue,
+        allocation_revenue: b.allocation_revenue,
         margin: b.margin,
         margin_pct: b.margin_pct,
         utilization_pct: b.utilization_pct,

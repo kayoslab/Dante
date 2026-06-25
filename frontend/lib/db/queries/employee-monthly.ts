@@ -24,6 +24,7 @@ import {
   lastOfMonth,
   projectTotalWeightedAllocInMonth,
   resolveRateForDay,
+  trackedMinutesByProjectForEmployee,
   workingDaysInRange,
 } from "../_monthly-helpers";
 
@@ -104,6 +105,7 @@ export async function computeEmployeeMonthly(
       monthly_cost_full: null,
       monthly_cost_basis: basis,
       revenue: "0.00",
+      allocation_revenue: "0.00",
       margin: "0.00",
       margin_pct: null,
       utilization_pct: "0.0000",
@@ -185,8 +187,20 @@ export async function computeEmployeeMonthly(
 
   const assignment_rows: Array<Record<string, unknown>> = [];
   let total_revenue = new Decimal(0);
+  let total_allocation_revenue = new Decimal(0);
   let total_alloc_weighted = new Decimal(0);
   const project_weighted_cache = new Map<number, Decimal>();
+  // Tracked minutes per project for THIS employee in THIS month. T&M
+  // revenue per assignment is `avg_rate × (project_tracked / 8h)`,
+  // independent of allocation. A consultant staffed but not working
+  // contributes zero revenue here while their salary cost still
+  // counts at the employee level, so the per-employee margin drops
+  // into the red — matching the project-engine fix.
+  const tracked_by_project = await trackedMinutesByProjectForEmployee(
+    employee_id,
+    month_start,
+    month_end,
+  );
 
   for (const raw of asnRes.rows as Array<Record<string, unknown>>) {
     const asn_id = raw.assignment_id as number;
@@ -225,8 +239,17 @@ export async function computeEmployeeMonthly(
       n_wd > 0 ? alloc.mul(active_days.length).div(n_wd) : new Decimal(0);
     total_alloc_weighted = total_alloc_weighted.add(weighted_alloc_i);
 
+    // T&M revenue = avg daily rate × tracked days on THIS project for
+    // THIS employee — see the matching block in project-monthly.ts.
+    // allocation_revenue is the forward-looking sibling (allocation ×
+    // rate × billable days); both are reported per assignment so
+    // forecast / commitment views can keep using the allocation
+    // basis.
     let revenue = new Decimal(0);
+    let allocation_revenue = new Decimal(0);
     let rate_unresolved_days = 0;
+    let resolved_rate_sum = new Decimal(0);
+    let resolved_rate_days = 0;
     if (billing === "time_and_material") {
       for (const day of active_days) {
         if (absences.has(day)) continue;
@@ -238,10 +261,18 @@ export async function computeEmployeeMonthly(
           rate_ov,
         );
         if (r !== null) {
-          revenue = revenue.add(r.mul(alloc).mul(fte));
+          allocation_revenue = allocation_revenue.add(r.mul(alloc).mul(fte));
+          resolved_rate_sum = resolved_rate_sum.add(r);
+          resolved_rate_days++;
         } else {
           rate_unresolved_days++;
         }
+      }
+      if (resolved_rate_days > 0) {
+        const avg_rate = resolved_rate_sum.div(resolved_rate_days);
+        const tracked_min = tracked_by_project.get(project_id) ?? 0;
+        const tracked_days_dec = new Decimal(tracked_min).div(60).div(8);
+        revenue = avg_rate.mul(tracked_days_dec);
       }
     } else {
       if (!project_weighted_cache.has(project_id)) {
@@ -264,6 +295,7 @@ export async function computeEmployeeMonthly(
       if (fp_rec !== null && proj_total.gt(0) && weighted_alloc_i.gt(0)) {
         revenue = fp_rec.mul(weighted_alloc_i).div(proj_total);
       }
+      allocation_revenue = revenue;
     }
 
     assignment_rows.push({
@@ -279,8 +311,10 @@ export async function computeEmployeeMonthly(
       customer_name,
       billing_model: billing,
       revenue: fmt(revenue, 2),
+      allocation_revenue: fmt(allocation_revenue, 2),
     });
     total_revenue = total_revenue.add(revenue);
+    total_allocation_revenue = total_allocation_revenue.add(allocation_revenue);
   }
 
   const monthly_cost_dec = monthly_cost_prorated ?? new Decimal(0);
@@ -324,6 +358,7 @@ export async function computeEmployeeMonthly(
       monthly_cost_prorated === null ? null : fmt(monthly_cost_prorated, 2),
     monthly_cost_basis: cost_basis_prorated,
     revenue: fmt(total_revenue, 2),
+    allocation_revenue: fmt(total_allocation_revenue, 2),
     margin: fmt(margin, 2),
     margin_pct: margin_pct === null ? null : fmt(margin_pct, 2),
     utilization_pct: utilization.toFixed(4),

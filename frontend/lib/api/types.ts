@@ -630,8 +630,13 @@ export type EmployeeMonthlyAssignmentRow = {
          * @enum {string}
          */
         billing_model: "time_and_material" | "fixed_price";
-        /** Revenue */
+        /** Billable revenue. For T&M: tracked hours × rate. For FP:
+         * the employee's share of recognized revenue this month. */
         revenue: string;
+        /** Forward-looking sibling for T&M: allocation × rate. Equal
+         * to `revenue` for FP (recognition is already commitment-side
+         * for fixed-price). */
+        allocation_revenue: string;
     };
 
 export type EmployeeMonthlyBreakdown = {
@@ -661,8 +666,13 @@ export type EmployeeMonthlyBreakdown = {
         monthly_cost_full?: string | null;
         /** Monthly Cost Basis */
         monthly_cost_basis: string;
-        /** Revenue */
+        /** Billable revenue across all assignments. T&M assignments
+         * contribute `tracked × rate`; FP assignments contribute the
+         * employee's share of recognized revenue. */
         revenue: string;
+        /** Forward-looking sibling: T&M assignments contribute
+         * `allocation × rate`; FP assignments equal their `revenue`. */
+        allocation_revenue: string;
         /** Margin */
         margin: string;
         /** Margin Pct */
@@ -715,8 +725,10 @@ export type EmployeeMonthlySeriesPoint = {
         under_contract: boolean;
         /** Monthly Cost Full */
         monthly_cost_full?: string | null;
-        /** Revenue */
+        /** Billable revenue (T&M tracked × rate + FP share). */
         revenue: string;
+        /** Forward-looking sibling: T&M allocation × rate + FP share. */
+        allocation_revenue: string;
         /** Margin */
         margin: string;
         /** Margin Pct */
@@ -1136,8 +1148,15 @@ export type MonthlyAssignmentRow = {
         unpaid_absence_days: number;
         /** Monthly Cost Full */
         monthly_cost_full?: string | null;
-        /** Revenue */
+        /** Billable revenue: tracked hours × rate (T&M). Allocation does
+         * NOT enter — a staffed-but-not-tracking consultant produces
+         * zero revenue here while still carrying salary cost. */
         revenue?: string | null;
+        /** Forward-looking sibling: allocation × rate × billable days.
+         * What we'd bill if every committed allocation were tracked.
+         * Used by forecasts; the gap vs `revenue` is the under-tracking
+         * signal. */
+        allocation_revenue?: string | null;
         /** Cost */
         cost: string;
         /** Margin */
@@ -1150,7 +1169,8 @@ export type MonthlyAssignmentRow = {
         tracked_hours?: string | null;
         /** Tracked Days */
         tracked_days?: string | null;
-        /** Tracked Revenue */
+        /** Tracked Revenue — identical to `revenue` for T&M; kept as an
+         * explicit alias so consumers that name the basis stay readable. */
         tracked_revenue?: string | null;
         /** Hours from `freelancer_time_entry` for this (assignment, month).
          * Only set for freelancer rows. Drives the read-only Tracked column
@@ -1186,11 +1206,18 @@ export type MonthlyBreakdown = {
         planned_end_date?: string | null;
         /** Agreed Amount Eur */
         agreed_amount_eur?: string | null;
-        /** Revenue */
+        /** T&M billable revenue: tracked hours × rate, summed across
+         * assignments + unassigned tracked. This is what the customer
+         * is actually invoiced — not the allocation projection. */
         revenue?: string | null;
+        /** Forward-looking sibling: allocation × rate, summed across
+         * assignments only (unassigned tracked has no allocation).
+         * Used by forecasts; the gap vs `revenue` is the under-tracking
+         * signal at the project level. */
+        allocation_revenue?: string | null;
         /** Cost */
         cost: string;
-        /** Margin */
+        /** Margin (revenue − cost, T&M only — built on billable revenue). */
         margin?: string | null;
         /** Margin Pct */
         margin_pct?: string | null;
@@ -1420,8 +1447,10 @@ export type PortfolioProjectRow = {
         billing_model: "time_and_material" | "fixed_price";
         /** N Assignments */
         n_assignments: number;
-        /** Revenue */
+        /** T&M: tracked × rate (billable). FP: recognized revenue. */
         revenue?: string | null;
+        /** T&M forward-looking sibling: allocation × rate. Null for FP. */
+        allocation_revenue?: string | null;
         /** Cost */
         cost: string;
         /** Margin */

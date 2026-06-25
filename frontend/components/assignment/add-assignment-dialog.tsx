@@ -23,6 +23,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 import { useCreateAssignment, useEstimate } from "@/lib/api/assignments";
+import { useEmployees } from "@/lib/api/employees";
 import { useFreelancers } from "@/lib/api/freelancers";
 import { useProject } from "@/lib/api/projects";
 import { formatEUR } from "@/lib/format";
@@ -75,6 +76,23 @@ export function AddAssignmentDialog({ project_id }: { project_id: number }) {
   const [open, setOpen] = useState(false);
   const create = useCreateAssignment(project_id);
   const { data: freelancers = [] } = useFreelancers();
+  // Active project-contributing real employees only — same eligibility
+  // the bench / team queries use. include_excluded:false drops
+  // service-account / shared mailbox rows from Personio.
+  const { data: employeesRaw = [] } = useEmployees({
+    status: "active",
+    include_excluded: false,
+  });
+  const employeeOptions = employeesRaw
+    .filter((e) => e.is_project_contributing !== false)
+    .map((e) => ({
+      employee_id: e.employee_id,
+      label:
+        `${e.last_name ?? ""}, ${e.first_name ?? ""}`.replace(/^, |, $/g, "") ||
+        `Employee #${e.employee_id}`,
+      role_tier: e.role_tier ?? null,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
   const { data: project } = useProject(project_id);
   // Unique profile names from the project's rate sheet — drives the dropdown.
   // Sorted for stable order; empty array if rates haven't loaded yet.
@@ -204,13 +222,27 @@ export function AddAssignmentDialog({ project_id }: { project_id: number }) {
 
               {kind === "employee" ? (
                 <div className="space-y-1.5">
-                  <Label htmlFor="employee_id">Employee ID</Label>
-                  <Input
+                  <Label htmlFor="employee_id">Employee</Label>
+                  <select
                     id="employee_id"
-                    type="number"
-                    placeholder="Personio employee_id"
                     {...register("employee_id")}
-                  />
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                    defaultValue=""
+                  >
+                    <option value="">— select —</option>
+                    {employeeOptions.map((e) => (
+                      <option key={e.employee_id} value={e.employee_id}>
+                        {e.label}
+                        {e.role_tier ? ` · ${e.role_tier}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {employeeOptions.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      No active project-contributing employees on file —
+                      check Personio sync.
+                    </p>
+                  )}
                   {errors.employee_id && (
                     <p className="text-sm text-red-600">
                       {errors.employee_id.message}

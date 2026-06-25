@@ -152,13 +152,28 @@ export function TeamDetailClient({
 function KpiBlock({ kpis }: { kpis: TeamMonthKpis }) {
   const totalMargin = Number(kpis.margin);
   const totalCost = Number(kpis.cost);
+  const totalRevenue = Number(kpis.revenue);
+  const totalAllocationRevenue = Number(kpis.allocation_revenue);
+  const undertrackedGap =
+    totalAllocationRevenue - totalRevenue > 1
+      ? totalAllocationRevenue - totalRevenue
+      : null;
   const marginPct = kpis.margin_pct === null ? null : Number(kpis.margin_pct);
   const avgUtil =
     kpis.avg_util_pct === null ? null : Number(kpis.avg_util_pct);
   return (
     <div className="space-y-4">
       <div className="grid gap-4 grid-cols-2 md:grid-cols-5">
-        <Kpi label="Revenue" value={formatEUR(kpis.revenue)} />
+        <Kpi
+          label="Revenue"
+          value={formatEUR(kpis.revenue)}
+          subtitle={
+            undertrackedGap === null
+              ? "billable (tracked × rate)"
+              : `allocation projected ${formatEUR(totalAllocationRevenue.toFixed(2))} · ${formatEUR(undertrackedGap.toFixed(2))} not yet tracked`
+          }
+          subtitleTone={undertrackedGap !== null ? "text-amber-700" : undefined}
+        />
         <Kpi label="Cost" value={formatEUR(kpis.cost)} />
         <Kpi
           label="Margin"
@@ -229,10 +244,14 @@ function Kpi({
   label,
   value,
   tone,
+  subtitle,
+  subtitleTone,
 }: {
   label: string;
   value: React.ReactNode;
   tone?: string;
+  subtitle?: string;
+  subtitleTone?: string;
 }) {
   return (
     <div>
@@ -242,6 +261,16 @@ function Kpi({
       <div className={cn("mt-0.5 text-base font-semibold tabular-nums", tone)}>
         {value}
       </div>
+      {subtitle && (
+        <div
+          className={cn(
+            "mt-0.5 text-xs tabular-nums text-muted-foreground",
+            subtitleTone,
+          )}
+        >
+          {subtitle}
+        </div>
+      )}
     </div>
   );
 }

@@ -222,6 +222,7 @@ export async function computeProjectMonthly(
 
   const assignment_rows: Array<Record<string, unknown>> = [];
   let total_revenue = new Decimal(0);
+  let total_allocation_revenue = new Decimal(0);
   let total_cost = new Decimal(0);
   let total_burdened_cost = new Decimal(0);
   const weighted_alloc_cache = new Map<number, Decimal>();
@@ -307,8 +308,26 @@ export async function computeProjectMonthly(
     const billable_day_equivs = new Decimal(billable_count_calendar).mul(fte);
     const paid_active_days = active_days.length - unpaid_active.length;
 
-    let revenue = new Decimal(0);
+    // Two parallel revenue concepts on T&M:
+    //   `allocation_revenue` — `rate × alloc × fte` summed per billable
+    //     day. This is the *commitment*: what we'd bill the customer
+    //     IF the consultant tracked every allocated hour. Useful for
+    //     forward-looking views (forecasts, "expected revenue if
+    //     everyone tracks to plan").
+    //   `tracked_revenue` (derived below from `avg_rate`) — what the
+    //     customer is *actually* invoiced: tracked hours × the prevailing
+    //     daily rate. A staffed-but-not-working consultant produces
+    //     zero tracked_revenue while still carrying full salary cost,
+    //     yielding the correct negative margin.
+    // `avg_rate` is the unweighted mean of the resolved rates across
+    // billable days. Going through avg_rate (rather than proportioning
+    // allocation_revenue by tracked/billable ratio) avoids the
+    // alloc-factor under-count that the prior formula exhibited for
+    // sub-100% allocations.
+    let allocation_revenue = new Decimal(0);
     let rate_unresolved_days = 0;
+    let resolved_rate_sum = new Decimal(0);
+    let resolved_rate_days = 0;
     if (billing === "time_and_material") {
       for (const day of active_days) {
         if (absence_set.has(day)) continue;
@@ -320,12 +339,18 @@ export async function computeProjectMonthly(
           rate_ov,
         );
         if (r !== null) {
-          revenue = revenue.add(r.mul(alloc).mul(fte));
+          allocation_revenue = allocation_revenue.add(r.mul(alloc).mul(fte));
+          resolved_rate_sum = resolved_rate_sum.add(r);
+          resolved_rate_days++;
         } else {
           rate_unresolved_days++;
         }
       }
     }
+    const avg_rate =
+      resolved_rate_days > 0
+        ? resolved_rate_sum.div(resolved_rate_days)
+        : null;
 
     const weighted_alloc_i =
       n_wd > 0 && active_days.length > 0
@@ -366,12 +391,21 @@ export async function computeProjectMonthly(
           .mul(new Decimal(tracked_minutes_this_emp).div(60))
           .div(denom);
         if (cost_share.gt(monthly_cost)) cost_share = monthly_cost;
-      } else if (paid_active_days > 0) {
+      } else if (emp_id !== null && paid_active_days > 0) {
+        // Employee without time-mapping — project cost from allocation.
+        // We pay them their salary regardless of whether hours are
+        // tracked here, so the projection reads as "what this project
+        // would absorb if they delivered the allocation."
         const paid_weighted_alloc_i = alloc
           .mul(paid_active_days)
           .div(n_wd);
         cost_share = monthly_cost.mul(paid_weighted_alloc_i);
       }
+      // Freelancer with NO entered_hours row: cost_share stays 0.
+      // Freelancers are pay-as-they-work — until an entry exists we
+      // assume neither billed-them nor billed-the-customer. The
+      // project's `n_missing_freelancer_hours_months` flag exists to
+      // surface this gap operationally.
     }
 
     let burdened_share = new Decimal(0);
@@ -418,20 +452,34 @@ export async function computeProjectMonthly(
     const tracked_hours_rounded = Math.round(tracked_minutes / 60);
     const tracked_days_dec = new Decimal(tracked_hours_rounded).div(8);
 
+    // Direct compute of tracked_revenue from avg_rate × actual logged
+    // time. For freelancers, "logged time" is entered hours (we don't
+    // get awork/Personio attendance for them); when no hours are
+    // entered tracked_revenue stays 0, matching cost above — until an
+    // entry exists we assume neither bill nor pay. `allocation_revenue`
+    // stays available as the projection sibling so forecast views can
+    // still see "if everyone delivered the allocation, this is what
+    // we'd bill."
     let tracked_revenue = new Decimal(0);
-    if (
-      billing === "time_and_material" &&
-      billable_day_equivs.gt(0) &&
-      revenue.gt(0) &&
-      tracked_days_dec.gt(0)
-    ) {
-      tracked_revenue = revenue.mul(tracked_days_dec).div(billable_day_equivs);
+    if (billing === "time_and_material" && avg_rate !== null) {
+      if (emp_id !== null) {
+        tracked_revenue = avg_rate.mul(tracked_days_dec);
+      } else if (fl_entered !== undefined) {
+        const fl_days = fl_entered.div(standard_daily_hours);
+        tracked_revenue = avg_rate.mul(fl_days);
+      }
     }
 
+    // For T&M the headline revenue is what the customer is invoiced —
+    // tracked time × rate, independent of whether the project has a
+    // time-mapping configured. A project without time mapping shows
+    // zero billable revenue (correct: nothing has been logged) and the
+    // cost (allocation-based, since the cost fallback above also kicks
+    // in when there's no time mapping) drives the margin into the red,
+    // surfacing the staffed-but-not-tracking gap that used to read as
+    // healthy positive margin.
     const effective_revenue =
-      has_time_mapping && emp_id !== null && billing === "time_and_material"
-        ? tracked_revenue
-        : revenue;
+      billing === "time_and_material" ? tracked_revenue : allocation_revenue;
 
     const margin =
       billing === "time_and_material"
@@ -457,6 +505,8 @@ export async function computeProjectMonthly(
       monthly_cost_full: monthly_cost === null ? null : fmt(monthly_cost, 2),
       revenue:
         billing === "time_and_material" ? fmt(effective_revenue, 2) : null,
+      allocation_revenue:
+        billing === "time_and_material" ? fmt(allocation_revenue, 2) : null,
       cost: fmt(cost_share, 2),
       margin: margin === null ? null : fmt(margin, 2),
       burdened_cost: fmt(burdened_share, 2),
@@ -466,15 +516,15 @@ export async function computeProjectMonthly(
         emp_id !== null ? tracked_hours_rounded.toFixed(0) : null,
       tracked_days: emp_id !== null ? tracked_days_dec.toFixed(3) : null,
       tracked_revenue:
-        billing === "time_and_material" && emp_id !== null
-          ? fmt(tracked_revenue, 2)
-          : null,
+        billing === "time_and_material" ? fmt(tracked_revenue, 2) : null,
       entered_hours: fl_entered === undefined ? null : fl_entered.toFixed(2),
       entered_hours_source: fl_entry?.source ?? null,
     });
 
     if (billing === "time_and_material") {
       total_revenue = total_revenue.add(effective_revenue);
+      total_allocation_revenue =
+        total_allocation_revenue.add(allocation_revenue);
     }
     total_cost = total_cost.add(cost_share);
     total_burdened_cost = total_burdened_cost.add(burdened_share);
@@ -729,6 +779,10 @@ export async function computeProjectMonthly(
       agreed_amount === null ? null : fmt(agreed_amount, 2),
     revenue:
       billing === "time_and_material" ? fmt(total_revenue, 2) : null,
+    allocation_revenue:
+      billing === "time_and_material"
+        ? fmt(total_allocation_revenue, 2)
+        : null,
     cost: fmt(total_cost, 2),
     margin: total_margin === null ? null : fmt(total_margin, 2),
     margin_pct: margin_pct === null ? null : fmt(margin_pct, 2),
