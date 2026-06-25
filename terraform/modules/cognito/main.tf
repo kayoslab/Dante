@@ -206,10 +206,10 @@ resource "aws_cognito_user_pool_domain" "this" {
 # registered on the app can't be used at sign-in (the SecurityError
 # "RPID did not match the origin" we hit in prod).
 resource "aws_cognito_user_pool_domain" "custom" {
-  count           = var.custom_domain_name == null ? 0 : 1
-  domain          = var.custom_domain_name
-  certificate_arn = var.custom_domain_cert_arn
-  user_pool_id    = aws_cognito_user_pool.this.id
+  count                 = var.custom_domain_name == null ? 0 : 1
+  domain                = var.custom_domain_name
+  certificate_arn       = var.custom_domain_cert_arn
+  user_pool_id          = aws_cognito_user_pool.this.id
   managed_login_version = 2
 }
 
@@ -267,7 +267,7 @@ resource "aws_cognito_user_pool_client" "app" {
     "profile",
     "aws.cognito.signin.user.admin",
   ]
-  supported_identity_providers         = ["COGNITO"] # Microsoft Entra ID added later via aws_cognito_identity_provider
+  supported_identity_providers = ["COGNITO"] # Microsoft Entra ID added later via aws_cognito_identity_provider
 
   callback_urls = var.callback_urls
   logout_urls   = var.logout_urls

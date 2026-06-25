@@ -21,6 +21,7 @@
     "@aws-sdk/client-kms": "^3.1075.0",
     "@aws-sdk/client-lambda": "^3.1075.0",
     "@aws-sdk/client-secrets-manager": "^3.1075.0",
+    "@aws-sdk/rds-signer": "^3.1075.0",
     "@base-ui/react": "^1.6.0",
     "@hookform/resolvers": "^5.4.0",
     "@tanstack/react-query": "^5.101.1",

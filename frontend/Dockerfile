@@ -86,6 +86,17 @@ COPY --from=build --chown=nextjs:nodejs /app/lib/db/migrations ./lib/db/migratio
 COPY --chown=nextjs:nodejs entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
+# RDS Global CA bundle. Needed by the runtime DB pool when RDS IAM auth
+# is enabled (DANTE_USE_IAM_DB_AUTH=1) — IAM tokens require SSL and we
+# want verify-full chain validation, not the "encrypt-but-don't-verify"
+# fallback the static-password path used to settle for. AWS publishes
+# a single global bundle that includes regional intermediates; updated
+# periodically as new CAs are added. Fetching at build time pins it to
+# the image SHA. Same path used by lib/db/_rds-iam.ts and lib/sync/db.ts.
+RUN wget -q -O /app/rds-global-bundle.pem \
+      https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+    && chown nextjs:nodejs /app/rds-global-bundle.pem
+
 USER nextjs
 EXPOSE 3000
 

@@ -61,6 +61,18 @@ variable "database_name" {
   default     = null
 }
 
+variable "rds_iam_db_user_arns" {
+  description = "RDS IAM-auth DB user ARNs the Lambda execution role can call `rds-db:connect` on. Format: `arn:aws:rds-db:<region>:<account>:dbuser:<rds_resource_id>/<dbuser>`. Empty list = no IAM-auth grant (Lambda falls back to the static-credential paths via DANTE_DATABASE_SECRET_ARN or env-injected DB_USERNAME/DB_PASSWORD)."
+  type        = list(string)
+  default     = []
+}
+
+variable "app_db_username" {
+  description = "Postgres username the Lambda's runtime connects as via IAM auth. Wired into the env as DANTE_APP_DB_USERNAME. Required when rds_iam_db_user_arns is non-empty; ignored otherwise."
+  type        = string
+  default     = null
+}
+
 variable "vpc_config" {
   description = "VPC wiring so the Lambda can reach RDS in a private subnet. Set to null only for `environment = local` (LocalStack). Required for dev/prod — RDS lives in a private subnet there."
   type = object({

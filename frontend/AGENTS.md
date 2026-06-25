@@ -293,16 +293,34 @@ Rotate quarterly, plus immediately on any suspected exposure. Order matters — 
 3. Update local `.env`.
 4. Restart the app — this invalidates every active session, so all users sign in again. Coordinate with active users or do it after-hours.
 
-**RDS master credential (`DB_USERNAME` / `DB_PASSWORD`)**
-RDS-managed rotation writes the new credential into Secrets Manager but does NOT signal running ECS tasks. Env vars in a running task are frozen at boot — they keep using the old password until the task is replaced. An attacker with RCE who captured the old password before rotation can still connect to RDS for the lifetime of the task (was H-007 in the pre-launch pen test).
+**RDS — runtime traffic uses IAM auth; rotation is moot for the app**
 
-Order matters:
-1. `aws secretsmanager rotate-secret --secret-id <rds master secret arn>` (or wait for AWS-scheduled rotation if you wire that in).
-2. RDS commits the new password in the DB and pushes it to Secrets Manager.
-3. **Immediately roll the ECS service**: `aws ecs update-service --cluster $CLUSTER --service $SERVICE --force-new-deployment` — new tasks pick up the rotated credential from Secrets Manager at boot via the task definition's `secrets:` block.
+Runtime DB traffic (Server Components, route handlers, scheduled sync Lambda) connects as the non-master `dante_app` user via **RDS IAM database authentication**. The task role / Lambda execution role calls `RDS.Signer.getAuthToken()`, which signs a connect request with the role's IAM credentials and returns a 15-minute Postgres password. No static credential lives on this path. When RDS rotates the master credential, running tasks keep working — they never used the master credential to begin with.
+
+Wiring:
+- Terraform: `iam_database_authentication_enabled = true` on `aws_db_instance`. Task / Lambda role gets `rds-db:connect` scoped to the specific dbuser ARN (`arn:aws:rds-db:<region>:<account>:dbuser:<resource_id>/dante_app`). Outputs `module.rds.iam_app_user_arn` + `module.rds.app_username` for the consumer wiring.
+- One-time DB-side bootstrap in `lib/db/iam-bootstrap.sql` — `CREATE USER dante_app; GRANT rds_iam; GRANT pg_read_all_data/pg_write_all_data; ALTER DEFAULT PRIVILEGES ...`. Idempotent; run once as `dante_admin` after the first apply that enables IAM auth.
+- App code: `lib/db/_rds-iam.ts` (token cache + RDS Global CA bundle) plus the IAM branch in `lib/db/client.ts` and `lib/sync/db.ts`. Trigger is `DANTE_USE_IAM_DB_AUTH=1` in the task / Lambda env.
+- Container: RDS Global CA bundle baked into the image at `/app/rds-global-bundle.pem`. The IAM-auth `Pool` uses it as `ssl.ca` for `verify-full` chain validation (replaces the legacy `sslmode=require` encrypt-no-verify workaround).
+
+**RDS master credential (`DB_USERNAME` / `DB_PASSWORD`) — migrations + break-glass only**
+
+The master credential is still rotated into Secrets Manager and still injected into the container env via the task definition's `secrets:` block. It's reserved for:
+
+- **The migration runner** (`scripts/migrate.ts`, bundled as `/app/migrate.js`). Runs once per container start as the entrypoint, needs DDL, owned by `dante_admin`. Rotation between boots doesn't affect it — it reads the freshly-injected credential at start.
+- **Break-glass `psql`** for incident response.
+
+Rotation behavior:
+- App traffic: unaffected. IAM tokens are generated fresh per-connection.
+- Migration runner: would fail on the NEXT container start if the env-injected credential is stale. `aws ecs update-service --force-new-deployment` after rotation refreshes the injected value. Less urgent than before since traffic is unaffected.
+
+If you do need to roll the static credential through the running container manually:
+1. `aws secretsmanager rotate-secret --secret-id <rds master secret arn>` (or wait for AWS-scheduled rotation).
+2. RDS commits the new password and pushes it to Secrets Manager.
+3. `aws ecs update-service --cluster $CLUSTER --service $SERVICE --force-new-deployment` — new task picks up the rotated credential from Secrets Manager at boot. Not time-critical; the running tasks continue serving on IAM auth.
 4. `aws ecs wait services-stable ...` to confirm.
 
-Long-term fix: switch to **RDS IAM database authentication** (the task role generates a 15-minute auth token per connection; nothing to rotate, nothing to leak). Documented as a follow-up — not implemented yet because it requires a small `pg.Pool` wrapper that requests a fresh token before opening a connection.
+H-007 (pre-launch pen test note) closed by this design — the runtime path no longer has a long-lived secret to leak.
 
 ## npm audit advisories (M-011)
 

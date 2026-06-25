@@ -314,12 +314,20 @@ module "sync_lambda" {
   writable_secret_arns = [module.secrets.awork_tokens_secret_arn]
   kms_key_arn          = null
 
-  # RDS-managed master credential — read at boot and composed into
-  # DATABASE_URL by `lib/sync/db.ts::resolveDatabaseUrl`.
+  # RDS-managed master credential — still wired in as a break-glass
+  # fallback. The Lambda's runtime prefers IAM auth (rds_iam_db_user_arns
+  # below) and only falls back to the secret-arn path if IAM isn't
+  # configured. Safe to drop once we've verified IAM works end-to-end.
   database_secret_arn         = module.rds.master_user_secret_arn
   database_secret_kms_key_arn = module.rds.master_user_secret_kms_key_id
   database_endpoint           = module.rds.endpoint
   database_name               = module.rds.database_name
+
+  # RDS IAM auth — the Lambda authenticates as `dante_app` via a
+  # 15-min signed token instead of the master password. Fixes the
+  # rotation-vs-running-tasks race that produced the 28P01 outage.
+  rds_iam_db_user_arns = [module.rds.iam_app_user_arn]
+  app_db_username      = module.rds.app_username
 
   # VPC: app subnets, with the sync_lambda SG defined above.
   vpc_config = {
@@ -472,9 +480,15 @@ module "app" {
     # the runner finds the meta/_journal.json drizzle needs.
     DANTE_MIGRATIONS_FOLDER = "/app/lib/db/migrations"
 
-    # DB pointers — username + password injected via `secrets:` below.
+    # DB pointers. Runtime traffic authenticates as `dante_app` via IAM
+    # auth (15-min signed token from the task role). The master
+    # credential (DB_USERNAME / DB_PASSWORD below) is reserved for the
+    # migration runner at container boot — the rotation race that
+    # produced the 28P01 outage is moot for app traffic.
     DANTE_DATABASE_ENDPOINT = module.rds.endpoint
     DANTE_DATABASE_NAME     = module.rds.database_name
+    DANTE_USE_IAM_DB_AUTH   = "1"
+    DANTE_APP_DB_USERNAME   = module.rds.app_username
 
     # Auth.js — Cognito pointers; CLIENT_SECRET + AUTH_SECRET arrive via `secrets:` below.
     AUTH_TRUST_HOST   = "true"
@@ -555,6 +569,11 @@ module "app" {
   additional_invokable_lambda_arns = [
     "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${module.sync_lambda.function_name}",
   ]
+
+  # RDS IAM auth — task role can call `rds-db:connect` only as the
+  # `dante_app` user. Scoped per-user ARN so an RCE'd app cannot pivot
+  # to the master credential (which still owns DDL).
+  rds_iam_db_user_arns = [module.rds.iam_app_user_arn]
 }
 
 # Grant the web-app task role the Cognito admin permissions used by the

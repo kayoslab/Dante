@@ -133,3 +133,9 @@ variable "additional_invokable_lambda_arns" {
   type        = list(string)
   default     = []
 }
+
+variable "rds_iam_db_user_arns" {
+  description = "RDS IAM-auth DB user ARNs the task role can call `rds-db:connect` on. Format: `arn:aws:rds-db:<region>:<account>:dbuser:<rds_resource_id>/<dbuser>`. Pass `[module.rds.iam_app_user_arn]` from the env wiring; leave empty in environments where IAM auth isn't enabled. Each ARN scopes to ONE DB user — a separate ARN per user means an RCE'd app can only authenticate as the user it was granted, not as the master."
+  type        = list(string)
+  default     = []
+}

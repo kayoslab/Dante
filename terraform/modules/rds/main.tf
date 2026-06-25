@@ -13,13 +13,26 @@
  * What this module does NOT do:
  *   - Cross-region read replicas (defer until DR matters)
  *   - RDS Proxy (worthwhile at 100+ concurrent connections; we're at <10)
- *   - IAM database authentication (cleaner than passwords but the
- *     managed password rotation gets us most of the benefit)
+ *
+ * IAM database authentication is enabled. The app + sync Lambda
+ * runtime connects as a non-master user (`dante_app`) using a 15-min
+ * IAM-signed token instead of a static password — RDS rotating the
+ * master credential no longer drops connections out from under them.
+ * The master credential (`dante_admin`, still rotated into Secrets
+ * Manager) is reserved for migrations and break-glass. See
+ * `lib/db/iam-bootstrap.sql` for the one-time DB-side setup that runs
+ * after this resource is created.
  */
 
 locals {
   identifier = "${var.name_prefix}-${var.environment}"
 }
+
+# Account + region for constructing the `rds-db:connect` ARN exposed in
+# outputs.tf. Both are inferred from the provider context — no input
+# variable needed.
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
 
 # --- Subnet group + parameter group ----------------------------------------
 
@@ -124,6 +137,13 @@ resource "aws_db_instance" "this" {
   db_subnet_group_name   = aws_db_subnet_group.this.name
   parameter_group_name   = aws_db_parameter_group.this.name
   publicly_accessible    = false # explicit — RDS is in data subnets with no internet route
+
+  # IAM database authentication. Off by default in the AWS SDK; we turn
+  # it on so the app+sync runtimes can connect via a signed STS token
+  # instead of the rotated master password. Toggling this is a
+  # non-disruptive in-place change (modify_db_instance); existing
+  # connections survive.
+  iam_database_authentication_enabled = true
 
   multi_az          = var.multi_az
   availability_zone = var.multi_az ? null : null # let RDS pick when single-AZ; leave null either way

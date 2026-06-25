@@ -36,7 +36,7 @@ output "issuer_url" {
 
 output "oauth_endpoint" {
   description = "Base OAuth URL — the custom domain when configured, otherwise the default Cognito-hosted one."
-  value = var.custom_domain_name != null ? "https://${var.custom_domain_name}" : "https://${aws_cognito_user_pool_domain.this.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+  value       = var.custom_domain_name != null ? "https://${var.custom_domain_name}" : "https://${aws_cognito_user_pool_domain.this.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
 }
 
 output "custom_domain_cloudfront_distribution" {

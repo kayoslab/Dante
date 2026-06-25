@@ -136,7 +136,13 @@ variable "database_name" {
 }
 
 variable "master_username" {
-  description = "Bootstrap superuser. We never use this in the app — `aws_db_instance.manage_master_user_password = true` rotates it into Secrets Manager. The app reads from the managed secret."
+  description = "Bootstrap superuser. We never use this for app traffic — the app + sync Lambda runtime connect as `app_username` via IAM auth. `dante_admin` is reserved for migrations + break-glass. Managed via `aws_db_instance.manage_master_user_password = true` (rotated into Secrets Manager)."
   type        = string
   default     = "dante_admin"
+}
+
+variable "app_username" {
+  description = "Non-master DB user the app + sync Lambda runtime authenticate as via IAM auth. Bootstrapped DB-side by `lib/db/iam-bootstrap.sql` (CREATE USER + GRANT rds_iam + read/write grants). Wired into the `dbuser:<resource_id>/<username>` segment of the rds-db:connect ARN."
+  type        = string
+  default     = "dante_app"
 }

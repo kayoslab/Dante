@@ -133,7 +133,7 @@ resource "aws_iam_role" "task" {
 #     pre-launch pen test.
 resource "aws_iam_role_policy" "task_secrets" {
   count = (length(var.additional_secret_arns_readable) == 0 &&
-    length(var.additional_secret_arns_writable) == 0) ? 0 : 1
+  length(var.additional_secret_arns_writable) == 0) ? 0 : 1
   name = "${local.name}-task-secrets"
   role = aws_iam_role.task.id
 
@@ -156,6 +156,26 @@ resource "aws_iam_role_policy" "task_secrets" {
         Resource = var.additional_kms_key_arns_decryptable
       }],
     )
+  })
+}
+
+# RDS IAM-auth grant. `rds-db:connect` is the action a caller (the
+# ECS task) needs to call `RDS.Signer.getAuthToken()` and authenticate
+# as the granted DB user. Scoped per-user ARN — granting the master
+# user here would let an RCE'd app skip past the read/write-only
+# privilege box `dante_app` sits in.
+resource "aws_iam_role_policy" "task_rds_iam" {
+  count = length(var.rds_iam_db_user_arns) == 0 ? 0 : 1
+  name  = "${local.name}-task-rds-iam"
+  role  = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["rds-db:connect"]
+      Resource = var.rds_iam_db_user_arns
+    }]
   })
 }
 

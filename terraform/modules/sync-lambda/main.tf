@@ -98,6 +98,23 @@ resource "aws_iam_role_policy" "secrets" {
   policy = data.aws_iam_policy_document.secrets.json
 }
 
+# RDS IAM-auth grant. Empty list = no rds-db:connect — caller is
+# either still on the static-secret path or hasn't enabled IAM auth.
+resource "aws_iam_role_policy" "rds_iam" {
+  count = length(var.rds_iam_db_user_arns) == 0 ? 0 : 1
+  name  = "${local.function_name}-rds-iam"
+  role  = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["rds-db:connect"]
+      Resource = var.rds_iam_db_user_arns
+    }]
+  })
+}
+
 # --- Lambda function -------------------------------------------------------
 
 resource "aws_lambda_function" "sync" {
@@ -139,13 +156,23 @@ resource "aws_lambda_function" "sync" {
         # The SDK reads it the same way either way.
         NODE_ENV = "production"
       },
-      # DB config — the Lambda runtime fetches credentials from the
-      # managed secret, then composes DATABASE_URL using the host/db/port
-      # below. Plaintext stays out of env vars; only the pointers are here.
+      # DB config. Two coexisting paths so the Lambda works whether or
+      # not IAM auth is enabled:
+      #   - DANTE_USE_IAM_DB_AUTH=1 + DANTE_APP_DB_USERNAME — preferred.
+      #     The Lambda generates a 15-min signed token from its
+      #     execution-role identity. No static credential is read.
+      #   - DANTE_DATABASE_SECRET_ARN — legacy. Lambda reads the master
+      #     credential from Secrets Manager. Retained for break-glass.
       var.database_secret_arn == null ? {} : {
         DANTE_DATABASE_SECRET_ARN = var.database_secret_arn
         DANTE_DATABASE_ENDPOINT   = var.database_endpoint
         DANTE_DATABASE_NAME       = var.database_name
+      },
+      length(var.rds_iam_db_user_arns) == 0 || var.app_db_username == null ? {} : {
+        DANTE_USE_IAM_DB_AUTH   = "1"
+        DANTE_APP_DB_USERNAME   = var.app_db_username
+        DANTE_DATABASE_ENDPOINT = var.database_endpoint
+        DANTE_DATABASE_NAME     = var.database_name
       },
     )
   }

@@ -37,3 +37,18 @@ output "security_group_id" {
   description = "SG attached to the RDS instance. Reference from app SGs as an ingress source if you want to gate access by SG instead of by passing them in here."
   value       = aws_security_group.rds.id
 }
+
+output "resource_id" {
+  description = "RDS-generated immutable resource identifier (`db-XXXXX`). Used in `rds-db:connect` IAM ARNs (`arn:aws:rds-db:<region>:<account>:dbuser:<resource_id>/<dbuser>`). Distinct from `instance_id` — instance_id is the human-readable name and can be changed; resource_id is permanent for the instance's lifetime."
+  value       = aws_db_instance.this.resource_id
+}
+
+output "app_username" {
+  description = "Non-master DB user the app + sync runtime authenticate as via IAM auth. Pass into ECS / Lambda env as DANTE_APP_DB_USERNAME."
+  value       = var.app_username
+}
+
+output "iam_app_user_arn" {
+  description = "Fully-qualified rds-db:connect ARN for the app user. Pass into the ECS task role and sync Lambda role IAM policies via `rds_iam_db_user_arns = [...]`."
+  value       = "arn:aws:rds-db:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_db_instance.this.resource_id}/${var.app_username}"
+}
