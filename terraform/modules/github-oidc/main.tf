@@ -298,6 +298,29 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # RDS — in-place instance modifications (e.g. flipping
+  # `iam_database_authentication_enabled`). Scoped to the explicit
+  # instance ARNs in `rds_db_instance_arns`. Read actions (Describe,
+  # ListTagsForResource) are mandatory because terraform refreshes
+  # state on every plan. Destructive actions (DeleteDBInstance, Reboot,
+  # RestoreFromSnapshot) deliberately excluded — see the variable
+  # documentation. A compromised deploy token therefore cannot wipe
+  # the DB.
+  dynamic "statement" {
+    for_each = length(var.rds_db_instance_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "rds:DescribeDBInstances",
+        "rds:ModifyDBInstance",
+        "rds:ListTagsForResource",
+        "rds:AddTagsToResource",
+        "rds:RemoveTagsFromResource",
+      ]
+      resources = var.rds_db_instance_arns
+    }
+  }
+
   # Lambda — update sync Lambda's code from the rebuilt zip and let
   # terraform reconcile tags / config drift on every apply.
   dynamic "statement" {

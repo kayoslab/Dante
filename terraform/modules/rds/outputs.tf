@@ -3,6 +3,11 @@ output "instance_id" {
   value       = aws_db_instance.this.identifier
 }
 
+output "instance_arn" {
+  description = "RDS instance ARN. Pass into the GitHub OIDC deploy role's `rds_db_instance_arns` so terraform apply can flip `iam_database_authentication_enabled` and similar in-place modifications. Distinct from `iam_app_user_arn` (rds-db:connect grant for the runtime); this one is for `rds:ModifyDBInstance` from CI."
+  value       = aws_db_instance.this.arn
+}
+
 output "endpoint" {
   description = "RDS endpoint hostname:port. The app composes DATABASE_URL from the managed secret rather than reading this directly, but exposed for ad-hoc tooling (e.g. psql via a bastion)."
   value       = aws_db_instance.this.endpoint

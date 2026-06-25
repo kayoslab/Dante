@@ -89,6 +89,12 @@ variable "terraform_state_lock_table_arn" {
   default     = null
 }
 
+variable "rds_db_instance_arns" {
+  description = "RDS instance ARNs the deploy role may modify in-place. Currently scoped to the actions needed by the IAM-auth toggle (`rds:ModifyDBInstance`) and routine drift reconciliation (`rds:DescribeDBInstances`, `rds:ListTagsForResource`, `rds:AddTagsToResource`, `rds:RemoveTagsFromResource`). Destructive actions (DeleteDBInstance, RebootDBInstance, RestoreDBInstanceFromSnapshot) deliberately excluded — terraform doesn't need them in normal operation, and adding them via the deploy role would let a compromised CI token wipe the database."
+  type        = list(string)
+  default     = []
+}
+
 variable "secret_arns_read_write" {
   description = "Secret ARNs whose VALUE terraform manages (i.e. has a matching `aws_secretsmanager_secret_version` resource). CI gets `secretsmanager:GetSecretValue` + `PutSecretValue` on these so plan can refresh-compare and apply can rewrite. In practice this is just the cognito_client_secret. Other secrets where terraform only creates the container go to `secret_arns_describe_only` instead — keeping `GetSecretValue` off them stops a compromised CI token from walking away with every prod credential."
   type        = list(string)

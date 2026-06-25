@@ -745,6 +745,12 @@ module "github_oidc" {
     "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${module.sync_lambda.function_name}",
   ]
 
+  # RDS — the deploy role needs `rds:ModifyDBInstance` to apply
+  # in-place changes like flipping `iam_database_authentication_enabled`.
+  # Scoped to the single prod instance. Destructive actions are NOT
+  # granted by the module — see the variable doc.
+  rds_db_instance_arns = [module.rds.instance_arn]
+
   # Inline-policy writes on the sync Lambda role. The sync's `secrets`
   # inline policy changes when we add/remove a secret ARN or a write
   # grant (e.g. PutSecretValue on the rotating awork tokens). The
