@@ -93,3 +93,51 @@ variable "user_pool_tier" {
     error_message = "user_pool_tier must be LITE, ESSENTIALS, or PLUS."
   }
 }
+
+# ----------------------------------------------------------------------------
+# Agent integration (`/api/agent/*`)
+# ----------------------------------------------------------------------------
+
+variable "agent_scopes" {
+  description = "Custom scopes published on the dante-agents Resource Server. Each entry becomes one OAuth scope clients can request (formatted by Cognito as `dante-agents/<name>`). The set should mirror the catalog in `lib/auth/agent-scopes.ts` in the app — adding a scope here without updating the app is harmless (the scope just isn't recognized when validated)."
+  type = list(object({
+    name        = string
+    description = string
+  }))
+  default = [
+    { name = "read:projects", description = "List projects + per-project monthly P&L." },
+    { name = "read:customers", description = "List customers + their frameworks + rates." },
+    { name = "read:reports", description = "Portfolio + customer rentability rollups (no per-employee data)." },
+    { name = "read:employees", description = "List employees, teams, role tiers. No salary / Personio personal data." },
+    { name = "read:salaries", description = "Per-employee salary history + monthly cost. Manager-only via Pre Token Generation Lambda." },
+  ]
+}
+
+variable "agent_client_callback_urls" {
+  description = "OAuth callback URLs allowed for the agent app client. Set this to the EVE (or other agent framework) callback URL — typically `https://<your-eve-deploy>.vercel.app/oauth/callback`. Cognito rejects any redirect_uri at /oauth2/authorize that isn't in this list, so an exfiltrated client_id alone cannot steer the consent flow to an attacker's endpoint."
+  type        = list(string)
+  default     = []
+}
+
+variable "agent_client_logout_urls" {
+  description = "OAuth sign-out URLs allowed for the agent app client. Usually mirrors `agent_client_callback_urls` minus the `/oauth/callback` suffix."
+  type        = list(string)
+  default     = []
+}
+
+variable "agent_refresh_token_validity_days" {
+  description = "Refresh token lifetime (days) for agent app client tokens. Default 30. Cognito's max is 3650 but anything past ~90 days makes exfiltration mitigation effectively rotation-only; pick the shortest your agent operator tolerates."
+  type        = number
+  default     = 30
+  validation {
+    condition     = var.agent_refresh_token_validity_days >= 1 && var.agent_refresh_token_validity_days <= 90
+    error_message = "agent_refresh_token_validity_days must be between 1 and 90."
+  }
+}
+
+variable "pre_token_generation_lambda_arn" {
+  description = "ARN of the Pre Token Generation V3 Lambda. When set, Cognito calls it on every access/ID token issuance for any client (the Lambda is shared across web + agent flows but only edits agent tokens). The Lambda's job is to subset `dante-agents/*` scopes to those the user's group permits. Leave null in environments where the Lambda isn't deployed yet — agent tokens will then carry whatever scopes the user consented to, which is fine for testing the OAuth wiring."
+  type        = string
+  default     = null
+}
+

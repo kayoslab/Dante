@@ -44,4 +44,23 @@ output "custom_domain_cloudfront_distribution" {
   value       = var.custom_domain_name == null ? null : aws_cognito_user_pool_domain.custom[0].cloudfront_distribution
 }
 
+# ----------------------------------------------------------------------------
+# Agent integration outputs
+# ----------------------------------------------------------------------------
+
+output "agent_client_id" {
+  description = "Cognito app client ID for the agent integration (Vercel EVE etc.). Give this to the agent operator alongside the OAuth endpoints + scope list; they paste it into their EVE Connection config. Not sensitive (public OAuth client)."
+  value       = aws_cognito_user_pool_client.agents.id
+}
+
+output "agent_resource_server_identifier" {
+  description = "Resource Server identifier (`dante-agents`). The `scope` claim on issued access tokens uses this as a prefix: `dante-agents/read:projects` etc. The app strips the prefix before matching against the local scope catalog."
+  value       = aws_cognito_resource_server.agents.identifier
+}
+
+output "agent_scopes_qualified" {
+  description = "Fully-qualified scope strings agents request at /oauth2/authorize. Hand the list to the agent operator so they don't have to compose the strings themselves."
+  value       = [for s in var.agent_scopes : "${aws_cognito_resource_server.agents.identifier}/${s.name}"]
+}
+
 data "aws_region" "current" {}

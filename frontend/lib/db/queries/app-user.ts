@@ -48,6 +48,35 @@ export async function listAppUsers(): Promise<AppUserListRow[]> {
 /* invite                                                              */
 /* ------------------------------------------------------------------ */
 
+export type AppUserCore = {
+  user_id: string;
+  email: string;
+  role: "admin" | "manager" | "employee";
+  employee_id: number | null;
+};
+
+/** Resolve a Cognito `sub` to the local app_user row. Used by the
+ * `/api/agent/*` JWT auth helper to attribute audit rows to the
+ * Dante user_id rather than the opaque Cognito sub. Returns null
+ * for unknown subs — the auth path then refuses the request rather
+ * than auto-provisioning (auto-provisioning belongs to the web
+ * sign-in callback, not here). */
+export async function findAppUserByCognitoSub(
+  cognito_sub: string,
+): Promise<AppUserCore | null> {
+  const rows = await db
+    .select({
+      user_id: appUser.user_id,
+      email: appUser.email,
+      role: appUser.role,
+      employee_id: appUser.employee_id,
+    })
+    .from(appUser)
+    .where(eq(appUser.cognito_sub, cognito_sub))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 /** Lookup an existing app_user by case-insensitive email. Used by
  * `inviteUserAction` for the friendly duplicate guard (the unique
  * index would also catch it, but this surfaces a nicer message). */

@@ -86,6 +86,27 @@ resource "aws_cognito_user_pool" "this" {
     }
   }
 
+  # Pre Token Generation V3 trigger — runs on every access/ID token
+  # issuance (incl. refresh). The Lambda inspects the user's group
+  # membership and rewrites the `scope` claim to the intersection of
+  # (requested scopes, scopes the group permits). Without this an
+  # `employee` user consenting to the agent client's full scope list
+  # would receive `dante-agents/read:salaries` in the access token.
+  #
+  # Optional — when `pre_token_generation_lambda_arn` is null the trigger
+  # isn't configured, and the issued tokens carry whatever scopes the
+  # user consented to (fine for dev where only the resource server is
+  # in play). Prod always sets it.
+  dynamic "lambda_config" {
+    for_each = var.pre_token_generation_lambda_arn == null ? [] : [1]
+    content {
+      pre_token_generation_config {
+        lambda_arn     = var.pre_token_generation_lambda_arn
+        lambda_version = "V3_0"
+      }
+    }
+  }
+
   admin_create_user_config {
     # Only admins (via the app) or Terraform-managed seeds create users.
     # No public self-signup.
@@ -305,6 +326,104 @@ resource "aws_cognito_user_pool_client" "app" {
 
   read_attributes  = ["email", "email_verified"]
   write_attributes = ["email"]
+}
+
+# ----------------------------------------------------------------------------
+# Resource Server for `/api/agent/*` — custom scopes consumed by Vercel
+# EVE and any future agent integrations.
+#
+# Cognito formats each issued scope string as `<identifier>/<scope-name>`,
+# so a token granted `read:projects` arrives in the `scope` claim as
+# `dante-agents/read:projects`. The `agent-scopes.ts` catalog in the
+# app mirrors these names without the prefix; the JWT validator strips
+# the prefix before matching against the catalog.
+#
+# Adding a scope here is one edit. The Pre-Token Generation Lambda (see
+# below) gates which group can mint each scope so an `employee` user
+# consenting to all scopes never receives `read:salaries` in the
+# issued access token even if the agent app client lists it.
+# ----------------------------------------------------------------------------
+
+resource "aws_cognito_resource_server" "agents" {
+  identifier   = "dante-agents"
+  name         = "${local.name}-agents"
+  user_pool_id = aws_cognito_user_pool.this.id
+
+  dynamic "scope" {
+    for_each = var.agent_scopes
+    content {
+      scope_name        = scope.value.name
+      scope_description = scope.value.description
+    }
+  }
+}
+
+# ----------------------------------------------------------------------------
+# App client for agent integrations (Vercel EVE today; future agents
+# share this client unless one needs different callback URLs).
+#
+# Distinct from the web-app client because:
+#   - Different callback URLs (agent app, not the Dante web UI).
+#   - PUBLIC client (no secret) — most agent frameworks ship as
+#     installable apps that can't safely hold a confidential secret;
+#     PKCE is mandatory instead.
+#   - Different scope set: dante-agents/* plus openid (so we can read
+#     the `sub` claim from the access token JWT for audit attribution).
+# ----------------------------------------------------------------------------
+
+resource "aws_cognito_user_pool_client" "agents" {
+  name         = "${local.name}-agents"
+  user_pool_id = aws_cognito_user_pool.this.id
+
+  # Public client. PKCE is enforced for the code flow; without a secret
+  # the only authentication factor on the token exchange is the
+  # code_verifier the agent kept locally. Agent frameworks (EVE,
+  # Claude Desktop, etc.) ship as installable apps with no safe place
+  # to store a server-side secret.
+  generate_secret = false
+
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_flows_user_pool_client = true
+
+  # `openid` is needed so the issued tokens include the `sub` claim
+  # (Cognito user identifier) — the API uses it to look up the local
+  # app_user row for audit attribution. All other scopes are the
+  # custom agent scopes from the resource server above.
+  allowed_oauth_scopes = concat(
+    ["openid"],
+    [for s in var.agent_scopes : "${aws_cognito_resource_server.agents.identifier}/${s.name}"],
+  )
+  supported_identity_providers = ["COGNITO"]
+
+  callback_urls = var.agent_client_callback_urls
+  logout_urls   = var.agent_client_logout_urls
+
+  # Access token lifetime: 1 hour. Refresh: configurable via variable
+  # (default 30 days) because agents typically run for weeks without
+  # human re-auth; tighter than the web client because the threat
+  # model differs (an exfiltrated agent refresh token is harder to
+  # detect than a stolen web session). 90 days is the AWS max.
+  access_token_validity  = 1
+  id_token_validity      = 1
+  refresh_token_validity = var.agent_refresh_token_validity_days
+  token_validity_units {
+    access_token  = "hours"
+    id_token      = "hours"
+    refresh_token = "days"
+  }
+
+  enable_token_revocation = true
+
+  # Agents authenticate via the authorization code flow only — no
+  # password / SRP entrypoint. Refresh is needed for long-lived agents.
+  explicit_auth_flows = [
+    "ALLOW_REFRESH_TOKEN_AUTH",
+  ]
+
+  prevent_user_existence_errors = "ENABLED"
+
+  read_attributes  = ["email", "email_verified"]
+  write_attributes = []
 }
 
 # ----------------------------------------------------------------------------

@@ -48,6 +48,9 @@ jobs:
       - name: Build sync Lambda bundle
         run: npm run build:sync-lambda
 
+      - name: Build Cognito Pre Token Gen Lambda bundle
+        run: npm run build:cognito-pretoken-lambda
+
   terraform:
     name: terraform (fmt + validate)
     runs-on: ubuntu-latest

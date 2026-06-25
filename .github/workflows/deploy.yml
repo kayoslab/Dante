@@ -162,17 +162,25 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install + build Lambda bundle
+      - name: Install + build Lambda bundles
         working-directory: frontend
         run: |
           npm ci
           npm run build:sync-lambda
+          npm run build:cognito-pretoken-lambda
 
-      - name: Upload Lambda bundle for the apply job
+      - name: Upload sync Lambda bundle for the apply job
         uses: actions/upload-artifact@v5
         with:
           name: sync-lambda
           path: frontend/dist/lambda/dante-sync-lambda.zip
+          retention-days: 7
+
+      - name: Upload Cognito Pre Token Gen Lambda bundle for the apply job
+        uses: actions/upload-artifact@v5
+        with:
+          name: cognito-pretoken-lambda
+          path: frontend/dist/lambda-cognito-pretoken/dante-cognito-pretoken-lambda.zip
           retention-days: 7
 
   # ---------------------------------------------------------------------
@@ -202,7 +210,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      - name: Download Lambda bundle
+      - name: Download sync Lambda bundle
         uses: actions/download-artifact@v5
         with:
           name: sync-lambda
@@ -213,6 +221,12 @@ jobs:
           # three-up `../../../frontend/dist/lambda/...` from inside
           # `terraform/envs/prod/`. Both paths land at the same file.
           path: frontend/dist/lambda
+
+      - name: Download Cognito Pre Token Gen Lambda bundle
+        uses: actions/download-artifact@v5
+        with:
+          name: cognito-pretoken-lambda
+          path: frontend/dist/lambda-cognito-pretoken
 
       - name: terraform init
         run: terraform init
@@ -290,7 +304,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      - name: Download Lambda bundle
+      - name: Download sync Lambda bundle
         uses: actions/download-artifact@v5
         with:
           name: sync-lambda
@@ -301,6 +315,12 @@ jobs:
           # three-up `../../../frontend/dist/lambda/...` from inside
           # `terraform/envs/prod/`. Both paths land at the same file.
           path: frontend/dist/lambda
+
+      - name: Download Cognito Pre Token Gen Lambda bundle
+        uses: actions/download-artifact@v5
+        with:
+          name: cognito-pretoken-lambda
+          path: frontend/dist/lambda-cognito-pretoken
 
       - name: Download terraform plan
         uses: actions/download-artifact@v5

@@ -9,6 +9,7 @@
     "sync": "tsx scripts/sync.ts",
     "migrate": "tsx scripts/migrate.ts",
     "build:sync-lambda": "tsx scripts/build-sync-lambda.ts",
+    "build:cognito-pretoken-lambda": "tsx scripts/build-cognito-pretoken-lambda.ts",
     "build:migrate": "tsx scripts/build-migrate.ts",
     "check:awork-readonly": "tsx scripts/check-awork-readonly.ts",
     "check:db-locality": "tsx scripts/check-db-locality.ts",

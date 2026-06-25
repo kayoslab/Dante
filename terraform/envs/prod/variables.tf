@@ -46,6 +46,22 @@ variable "sync_lambda_schedule_expression" {
   default     = "cron(0 4 * * ? *)"
 }
 
+# --- Cognito Pre Token Generation Lambda -------------------------------
+
+variable "cognito_pretoken_lambda_package_zip_path" {
+  description = "Path to the pre-built Pre Token Generation Lambda zip. Run `npm run build:cognito-pretoken-lambda` from `frontend/` before applying; the script writes to this default path."
+  type        = string
+  default     = "../../../frontend/dist/lambda-cognito-pretoken/dante-cognito-pretoken-lambda.zip"
+}
+
+# --- Agent integration -------------------------------------------------
+
+variable "agent_callback_urls" {
+  description = "OAuth callback URLs allowed for the Cognito agent app client. Set to the EVE deploy's `/oauth/callback` URL (or multiple if you have prod + preview). Empty list = no agent integration deployed (the app client still exists but is unusable for OAuth flows)."
+  type        = list(string)
+  default     = []
+}
+
 # --- VPC ---------------------------------------------------------------
 
 variable "vpc_cidr_block" {

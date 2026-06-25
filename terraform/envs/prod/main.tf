@@ -139,6 +139,43 @@ module "cognito" {
   # Threat Protection requires `user_pool_tier = PLUS`.
   user_pool_tier         = "PLUS"
   advanced_security_mode = "ENFORCED"
+
+  # Agent integration. The callback URL(s) point to the EVE deploy.
+  # `pre_token_generation_lambda_arn` plugs in the Lambda that subsets
+  # `dante-agents/*` scopes per the user's Cognito group.
+  agent_client_callback_urls      = var.agent_callback_urls
+  agent_client_logout_urls        = var.agent_callback_urls
+  pre_token_generation_lambda_arn = module.cognito_pretoken_lambda.function_arn
+}
+
+# Pre Token Generation Lambda. Independent of the cognito module so we
+# can resolve the otherwise-circular dependency between the two: the
+# pool needs the Lambda ARN, the Lambda's invoke-permission needs the
+# pool ARN. Module = Lambda + IAM only; the permission lives below at
+# the env level so both module outputs are available.
+module "cognito_pretoken_lambda" {
+  source = "../../modules/cognito-pretoken-lambda"
+
+  environment         = "prod"
+  name_prefix         = "dante"
+  package_zip_path    = var.cognito_pretoken_lambda_package_zip_path
+  package_source_hash = filemd5(var.cognito_pretoken_lambda_package_zip_path)
+
+  # TODO(free-plan): -1 disables the reservation for the same reason
+  # the sync Lambda does. Restore to 5 (default) once the Free Plan
+  # account-wide cap is lifted.
+  reserved_concurrent_executions = -1
+}
+
+# Cognito → Lambda invoke permission. Pinned to the specific pool's
+# ARN so even an unrelated pool in the same account can't trigger
+# this Lambda.
+resource "aws_lambda_permission" "cognito_pretoken_invoke" {
+  statement_id  = "AllowCognitoUserPoolInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = module.cognito_pretoken_lambda.function_name
+  principal     = "cognito-idp.amazonaws.com"
+  source_arn    = module.cognito.user_pool_arn
 }
 
 # SES sender identity for Cognito invitation / reset / verification
@@ -501,6 +538,12 @@ module "app" {
     # composes a redirect to <hosted-ui>/forgotPassword?...
     COGNITO_HOSTED_UI_URL = module.cognito.oauth_endpoint
     NEXTAUTH_URL          = "https://${var.domain}"
+
+    # Agent integration — bearer-token auth on `/api/agent/*`. The
+    # validator (lib/auth/agent-jwt.ts) verifies incoming tokens were
+    # issued for this specific app client; a token from the web client
+    # is rejected even if it would happen to carry the right scope.
+    COGNITO_AGENT_CLIENT_ID = module.cognito.agent_client_id
   }
 
   # Native ECS secret injection — values surface as env vars to the

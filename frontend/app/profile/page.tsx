@@ -117,6 +117,24 @@ export default async function ProfilePage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>Agent integration</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm">
+          <p className="text-muted-foreground">
+            Configure Vercel EVE (or any OAuth-aware agent framework) to call{" "}
+            <code>/api/agent/*</code> on your behalf. Sign-in goes through
+            Cognito with MFA — the agent inherits your account security.
+          </p>
+          <p className="mt-2">
+            <Link href="/profile/agents" className="underline hover:text-foreground">
+              View OAuth endpoints + scopes →
+            </Link>
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>
             Assignments ({assignmentRows.length})
           </CardTitle>
