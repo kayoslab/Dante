@@ -27,6 +27,9 @@ async function main(): Promise<void> {
     minify: false,
     sourcemap: false,
     external: ["pg-native"],
+    // `.sql` is imported as a string constant by `scripts/migrate.ts`
+    // (the IAM bootstrap SQL). Inlining keeps the bundle single-file.
+    loader: { ".sql": "text" },
     logLevel: "info",
   });
   const stat = await fs.stat(OUT);

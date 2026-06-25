@@ -1,16 +1,18 @@
 -- RDS IAM-auth bootstrap for the runtime app user.
 --
--- Run ONCE after `iam_database_authentication_enabled = true` lands on
--- the RDS instance (Terraform applies that). Connect as the RDS master
--- (the static `dante_admin` credential from Secrets Manager) and run
--- this file:
+-- This file is executed by `scripts/migrate.ts` at every container
+-- start (bundled into `migrate.js` via the esbuild text loader, then
+-- run as a single multi-statement query before Drizzle migrations).
+-- It's also runnable interactively if you ever need to bootstrap a
+-- new RDS instance by hand:
 --
 --   PGPASSWORD=<from secrets> psql \
 --     "host=<rds endpoint> port=5432 dbname=dante user=dante_admin sslmode=require" \
 --     -f lib/db/iam-bootstrap.sql
 --
 -- Idempotent: re-running is safe. Each block guards against the object
--- already existing.
+-- already existing. Uses only standard SQL — no psql metacommands like
+-- `\du` — because pg.Client.query() doesn't understand them.
 --
 -- After this runs, the app + sync Lambda can connect as `dante_app`
 -- using an IAM-signed token in place of a password. The master
@@ -59,8 +61,3 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 -- 6. The advisory-lock pair Drizzle uses during migrations is global
 --    (no permission needed). No additional grants required for the
 --    app to call `pg_try_advisory_lock` / `pg_advisory_unlock`.
-
--- 7. Sanity check — list the roles dante_app is a member of. Expect
---    rds_iam, pg_read_all_data, pg_write_all_data. Comment this out if
---    you run via a CI/CD harness that errors on NOTICE-level output.
-\du dante_app

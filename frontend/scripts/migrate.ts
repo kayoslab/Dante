@@ -9,12 +9,24 @@
  * Connection-string resolution mirrors `lib/db/client.ts` and
  * `lib/sync/db.ts`: DATABASE_URL wins, else compose from DB_USERNAME +
  * DB_PASSWORD + DANTE_DATABASE_ENDPOINT + DANTE_DATABASE_NAME (the ECS
- * task pattern).
+ * task pattern). The migration runner deliberately stays on the static
+ * `dante_admin` credential because it needs DDL — the runtime IAM auth
+ * path connects as `dante_app` which only has read/write grants.
+ *
+ * Two-phase work on every boot:
+ *   1. Apply `lib/db/iam-bootstrap.sql` (CREATE USER dante_app + grants).
+ *      Idempotent — each statement guards against the object existing.
+ *      Bundled into this binary via esbuild's text loader, so the
+ *      runner stays single-file.
+ *   2. Apply pending Drizzle migrations.
  *
  * Concurrency safety: Drizzle's migrator acquires a Postgres advisory
  * lock for the duration of the migration step, so multiple ECS tasks
  * starting at the same time will serialize automatically — only one
  * applies migrations; the others wait and then see "nothing to do".
+ * The IAM bootstrap doesn't take a lock — concurrent CREATE USER calls
+ * collide on `duplicate_object` which the SQL catches, so it's safe
+ * to run from multiple tasks simultaneously.
  *
  * Failure mode: a failed migration exits non-zero. The container
  * entrypoint propagates that, which fails the ECS task health check
@@ -26,6 +38,10 @@ import path from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Client } from "pg";
+
+// Bundled inline via esbuild's text loader (`.sql` → string). Avoids
+// a runtime filesystem read + makes the binary self-contained.
+import iamBootstrapSql from "../lib/db/iam-bootstrap.sql";
 
 const MIGRATIONS_FOLDER =
   process.env.DANTE_MIGRATIONS_FOLDER ??
@@ -57,6 +73,21 @@ async function main(): Promise<void> {
   const client = new Client({ connectionString });
   await client.connect();
   try {
+    // Phase 1: IAM bootstrap. Idempotent CREATE USER + GRANTs so the
+    // app's IAM-auth runtime has someone to authenticate as. Safe to
+    // run on every boot (the SQL guards against duplicates).
+    const bootstrap_started = Date.now();
+    await client.query(iamBootstrapSql);
+    console.log(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "info",
+        event: "iam_bootstrap_complete",
+        took_ms: Date.now() - bootstrap_started,
+      }),
+    );
+
+    // Phase 2: Drizzle schema migrations.
     const db = drizzle(client);
     const started = Date.now();
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
