@@ -751,14 +751,19 @@ module "github_oidc" {
   # granted by the module — see the variable doc.
   rds_db_instance_arns = [module.rds.instance_arn]
 
-  # Inline-policy writes on the sync Lambda role. The sync's `secrets`
-  # inline policy changes when we add/remove a secret ARN or a write
-  # grant (e.g. PutSecretValue on the rotating awork tokens). The
-  # deploy role's own ARN is intentionally absent here — terraform
-  # rewrites it during apply but a compromised deploy token must not
-  # be able to self-escalate.
+  # Inline-policy writes on roles whose `aws_iam_role_policy` resources
+  # terraform reconciles on every apply. The sync's `secrets` policy
+  # tracks added/removed secret ARNs; the app task role's `task_rds_iam`
+  # policy tracks the rds-db:connect user ARN list; the app exec role
+  # also gets `*-exec-secrets` rewritten when the secrets/value-from set
+  # changes. Each is included explicitly so the grant is auditable
+  # against the module that owns it. The deploy role's own ARN is
+  # intentionally absent — a compromised deploy token must not be able
+  # to self-escalate.
   managed_iam_role_arns = [
     module.sync_lambda.role_arn,
+    module.app.task_role_arn,
+    module.app.execution_role_arn,
   ]
 
   # EventBridge rule maintenance — the sync Lambda's schedule. PutRule
