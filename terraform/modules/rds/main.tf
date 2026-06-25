@@ -162,7 +162,22 @@ resource "aws_db_instance" "this" {
   skip_final_snapshot       = var.skip_final_snapshot
   final_snapshot_identifier = var.skip_final_snapshot ? null : "${local.identifier}-final-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
 
-  apply_immediately = false # Defer destructive changes to the maintenance window
+  # All terraform-driven modifications apply right away. With
+  # `apply_immediately = false`, in-place setting flips (e.g. toggling
+  # `iam_database_authentication_enabled`) sit in PendingModifiedValues
+  # until the maintenance window, but ECS rolls fresh tasks during the
+  # apply — so the tasks come up expecting a setting that hasn't taken
+  # effect yet and crash-loop. The IAM-auth rollout hit this exact
+  # trap.
+  #
+  # Trade-off accepted: a future change that REQUIRES a reboot (engine
+  # major-version upgrade, instance_class change, certain parameter-
+  # group params) will reboot RDS immediately rather than queueing it
+  # for the maintenance window. The current module variables don't
+  # expose any of those settings as inputs, so the practical risk is
+  # zero. If we later add such a variable, gate it behind an explicit
+  # opt-in instead of flipping the global flag back to false.
+  apply_immediately = true
 
   # Don't churn on the timestamp inside final_snapshot_identifier on every
   # plan — only matters when destroy is triggered.

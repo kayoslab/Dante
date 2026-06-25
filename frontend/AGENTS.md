@@ -231,6 +231,30 @@ Order matters — Terraform creates empty secret containers, but the operator wr
 
 For ongoing redeploys (image rebuild + new SHA), step 3 + step 4 are enough — the rest is one-time.
 
+### RDS in-place modifications: the `apply_immediately` trap
+
+The RDS module sets `apply_immediately = true` so terraform-driven setting changes (e.g. `iam_database_authentication_enabled`) take effect during the apply rather than queuing in `PendingModifiedValues` until the next maintenance window. With the old `apply_immediately = false`, the IAM-auth rollout broke prod for ~6 minutes: terraform's state showed the flag as enabled, ECS rolled fresh tasks expecting IAM auth to work, but RDS was still serving the old setting — every `dante_app` connection got rejected with `28P01` "no password assigned" because the server hadn't actually engaged the IAM auth path yet.
+
+If you ever see a similar mismatch (terraform thinks a setting is on, but the app behaves as if it's off), check:
+
+```bash
+AWS_REGION=eu-central-1 aws rds describe-db-instances \
+  --db-instance-identifier dante-prod \
+  --query 'DBInstances[0].{IAMAuth:IAMDatabaseAuthenticationEnabled,Pending:PendingModifiedValues,Status:DBInstanceStatus}' \
+  --output json
+```
+
+If `Pending` shows the change you expected to be live, force it through immediately:
+
+```bash
+AWS_REGION=eu-central-1 aws rds modify-db-instance \
+  --db-instance-identifier dante-prod \
+  --enable-iam-database-authentication \   # or the equivalent flag for the pending setting
+  --apply-immediately
+```
+
+Most setting flips don't require a reboot — IAM auth, parameter group association on most params, backup retention, monitoring interval. The ones that DO require a reboot (engine major version, instance class, certain pg params) would have rebooted RDS during the original apply with `apply_immediately = true` — visible in the plan as a diff that mentions `DBInstanceStatus`. Review every RDS plan diff carefully so you know what kind of change is about to land.
+
 ## CI / CD (GitHub Actions)
 
 Two workflows + two OIDC roles. No long-lived AWS keys.
