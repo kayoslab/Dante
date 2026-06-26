@@ -24,6 +24,11 @@ output "cognito_oauth_endpoint" {
   value       = module.cognito.oauth_endpoint
 }
 
+output "agent_client_id" {
+  description = "Cognito app client id for the agent integration. Paste into the EVE deploy's `DANTE_COGNITO_AGENT_CLIENT_ID` env var."
+  value       = module.cognito.agent_client_id
+}
+
 output "personio_secret_arn" {
   description = "Pass into the sync-lambda module's `secret_arns` list."
   value       = module.secrets.personio_secret_arn
