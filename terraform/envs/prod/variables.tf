@@ -61,10 +61,10 @@ variable "agent_callback_urls" {
   type        = list(string)
   default = [
     "http://localhost:3000/eve/v1/connections/dante/auth/callback",
-    "http://localhost:3000/api/auth/callback/cognito",
+    "http://localhost:3000/api/auth/callback",
     "http://localhost:8765/callback",
     "https://dante-alighieri.vercel.app/eve/v1/connections/dante/auth/callback",
-    "https://dante-alighieri.vercel.app/api/auth/callback/cognito",
+    "https://dante-alighieri.vercel.app/api/auth/callback",
   ]
 }
 
