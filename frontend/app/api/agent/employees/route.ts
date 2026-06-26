@@ -11,10 +11,15 @@ import { listEmployees } from "@/lib/db/queries/employee-list";
 import { log } from "@/lib/logger";
 
 const QuerySchema = z.object({
-  q: z.string().optional().openapi({
+  // Cap at 100 chars to match the web's `boundedSearchQuery` helper.
+  // Without this a long `q` triggers an unconstrained LIKE scan that
+  // pins a pool connection for up to `statement_timeout` (15s). The
+  // SQL itself is parameterized so this is DoS mitigation, not
+  // injection. Same bound used on every other free-text search route.
+  q: z.string().max(100).optional().openapi({
     description: "Free-text search across first/last name + email.",
   }),
-  team: z.string().optional(),
+  team: z.string().max(120).optional(),
 });
 
 const EmployeeListItemSchema = z
