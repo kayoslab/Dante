@@ -34,6 +34,14 @@ const PUBLIC_PATHS = ["/login"];
 
 const PUBLIC_PREFIXES = [
   "/api/auth", // Auth.js callbacks, sign-in/out, CSRF
+  // Agent integration: every endpoint under /api/agent/* uses
+  // bearer-token auth (Cognito JWT verified by lib/auth/agent-jwt.ts).
+  // The proxy here is cookie-aware only; without this prefix the
+  // proxy redirects bearer-auth calls to /login because req.auth is
+  // null for them, and the route handlers never see the bearer at
+  // all. The handlers still call requireAgentSession on every
+  // request — defense in depth.
+  "/api/agent",
   "/_next", // Next.js static assets
   "/favicon", // /favicon.ico
 ];
