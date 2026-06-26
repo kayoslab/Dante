@@ -5,6 +5,31 @@
  * is consenting to when they mint a token. The /profile/agents UI
  * shows the description from this file next to the checkbox.
  *
+ * INVARIANT: an agent token cannot access more than the underlying
+ * user could access via the web. The hierarchy admin > manager >
+ * employee is enforced at TWO layers:
+ *
+ *   1. Mint-time: `callerMayMintScope(role, scope)` rejects requests
+ *      to mint a scope above the caller's role tier. An employee
+ *      cannot grant `read:projects` (manager-tier); a manager cannot
+ *      grant a future `admin:audit` (admin-tier). The /profile/agents
+ *      UI only renders the checkboxes the caller is allowed to grant.
+ *
+ *   2. Use-time: `requireAgentSession` re-derives the required
+ *      min_role from this catalog and rejects a token whose owner's
+ *      role has dropped below it. Defense in depth — even if the
+ *      Pre Token Generation Lambda issues a token with a scope it
+ *      shouldn't have, Dante rejects the call.
+ *
+ * Both layers consult ROLE_RANK from `session.ts` (admin=2, manager=1,
+ * employee=0). The natural ordering gives admin a strict superset of
+ * manager's reach, and manager a strict superset of employee's.
+ *
+ * When you add a scope here, set `min_role` to mirror the role gate
+ * the equivalent web route uses (see the per-role endpoint matrix in
+ * AGENTS.md). The web route is the single source of truth for who
+ * may see what — the scope catalog must follow it, never widen it.
+ *
  * Adding a scope:
  *   1. Add a new entry to `AGENT_SCOPES` below.
  *   2. Use it in the route via `requireAgentSession({ scope: '...' })`.
@@ -61,6 +86,8 @@ export const AGENT_SCOPES: Record<AgentScope, ScopeDef> = {
     description:
       "Portfolio + customer rentability rollups for any month. Does not " +
       "include per-employee economics.",
+    // Web equivalent: `/api/reports/*` + `/api/portfolio-rentability/*`
+    // — both manager-only.
     min_role: "manager",
   },
   "read:employees": {
@@ -68,13 +95,20 @@ export const AGENT_SCOPES: Record<AgentScope, ScopeDef> = {
     description:
       "List employees, their teams, role tiers, contract dates. Does NOT " +
       "include salary or Personio personal data.",
-    min_role: "manager",
+    // Web equivalent: `/api/employees` (the LIST, no detail) is
+    // employee-accessible per AGENTS.md's role matrix. Employees can
+    // see the directory of every active colleague on the web; the
+    // agent endpoint mirrors that and stays at employee tier. The
+    // per-employee detail surface (salary, monthly economics) is
+    // covered by `read:salaries` which is properly gated to manager+.
+    min_role: "employee",
   },
   "read:salaries": {
     label: "Read salaries",
     description:
-      "Per-employee salary history + monthly cost data. Equivalent to the " +
-      "/employees/[id] detail page reads.",
+      "Per-employee monthly economics: loaded cost, billable revenue, " +
+      "margin, utilization. Per the AGENTS.md role matrix the underlying " +
+      "`/api/employees/[id]/monthly*` is manager-only.",
     min_role: "manager",
   },
 };
