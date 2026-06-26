@@ -786,6 +786,7 @@ module "github_oidc" {
   ]
   lambda_function_arns = [
     "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${module.sync_lambda.function_name}",
+    "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${module.cognito_pretoken_lambda.function_name}",
   ]
 
   # RDS — the deploy role needs `rds:ModifyDBInstance` to apply

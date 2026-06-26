@@ -349,6 +349,13 @@ data "aws_iam_policy_document" "deploy" {
   # already-created functions; this statement covers Create + Delete
   # + the resource-policy (AddPermission / RemovePermission /
   # GetPolicy) that aws_lambda_permission needs.
+  #
+  # TagResource / UntagResource / ListTags belong here too because
+  # the AWS provider calls them as a separate API operation right
+  # after CreateFunction completes — even though `tags` is an
+  # argument on the create itself. Without these, the create call
+  # succeeds but the immediate post-create tag reconciliation fails
+  # and terraform aborts mid-apply.
   dynamic "statement" {
     for_each = length(var.creatable_lambda_function_arns) == 0 ? [] : [1]
     content {
@@ -361,6 +368,9 @@ data "aws_iam_policy_document" "deploy" {
         "lambda:AddPermission",
         "lambda:RemovePermission",
         "lambda:GetPolicy",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:ListTags",
       ]
       resources = var.creatable_lambda_function_arns
     }
