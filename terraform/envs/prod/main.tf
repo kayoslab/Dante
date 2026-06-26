@@ -165,6 +165,11 @@ module "cognito_pretoken_lambda" {
   # the sync Lambda does. Restore to 5 (default) once the Free Plan
   # account-wide cap is lifted.
   reserved_concurrent_executions = -1
+
+  # Reuse the sync Lambda's alarm topic — same SNS subscription
+  # already routes to the admin email. Separate topic per Lambda
+  # would just double the inbox noise for no operational benefit.
+  alarm_sns_topic_arn = module.sync_lambda.alarm_topic_arn
 }
 
 # Cognito → Lambda invoke permission. Pinned to the specific pool's

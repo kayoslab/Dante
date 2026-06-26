@@ -70,6 +70,37 @@ resource "aws_cloudwatch_log_group" "this" {
   retention_in_days = 30
 }
 
+# --- CloudWatch alarm ----------------------------------------------------
+#
+# This Lambda runs on the hot path for every Cognito token issuance,
+# including web-app sign-in. A quiet error breaks sign-in for ALL
+# users including admins doing the fix, so alarm on `Errors > 0` over
+# the shortest practical window. Treat missing data as not-breaching
+# because the metric only emits when there are invocations — a quiet
+# pool shouldn't page anyone.
+
+resource "aws_cloudwatch_metric_alarm" "errors" {
+  count = var.alarm_sns_topic_arn == null ? 0 : 1
+
+  alarm_name          = "${local.function_name}-errors"
+  alarm_description   = "Cognito Pre Token Generation Lambda failed. EVERY user-pool token issuance routes through this Lambda — sign-in is broken pool-wide until the function recovers. Check the CloudWatch log group ${aws_cloudwatch_log_group.this.name} for the stack trace; redeploy from the last known good zip if the bug is recent."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.this.function_name
+  }
+
+  alarm_actions = [var.alarm_sns_topic_arn]
+  ok_actions    = [var.alarm_sns_topic_arn]
+}
+
 # Cognito → Lambda invoke permission lives at the ENV level, not in
 # this module, to break a module-level dependency cycle:
 #

@@ -25,3 +25,9 @@ variable "reserved_concurrent_executions" {
   type        = number
   default     = 5
 }
+
+variable "alarm_sns_topic_arn" {
+  description = "SNS topic the Pre Token Gen Lambda's CloudWatch error alarm publishes to. This Lambda runs on the hot path for EVERY Cognito sign-in (web + agent) — a quiet failure here breaks sign-in pool-wide, so alarm aggressively. Pass `module.sync_lambda.alarm_topic_arn` to share the existing prod alarm topic. Null disables the alarm (dev / local)."
+  type        = string
+  default     = null
+}

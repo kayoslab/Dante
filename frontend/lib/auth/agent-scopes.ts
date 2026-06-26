@@ -41,13 +41,20 @@ export const AGENT_SCOPES: Record<AgentScope, ScopeDef> = {
     description:
       "List active projects, read per-project monthly P&L, FP burn-down state, " +
       "agreed amounts, planned dates.",
-    min_role: "employee",
+    // Mirrors the web role matrix in AGENTS.md — `/api/projects/*` is
+    // manager-only, so the agent equivalent must be too. Letting an
+    // employee mint this scope would be a privilege escalation:
+    // employees in the web UI see only their own assigned projects,
+    // never the full portfolio.
+    min_role: "manager",
   },
   "read:customers": {
     label: "Read customers",
     description:
       "List customers, their frameworks, and rate-card information.",
-    min_role: "employee",
+    // Same reasoning as read:projects — `/api/customers/*` is
+    // manager-only in the web matrix.
+    min_role: "manager",
   },
   "read:reports": {
     label: "Read reports",

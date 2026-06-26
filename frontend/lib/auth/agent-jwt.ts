@@ -22,11 +22,12 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import type { NextRequest } from "next/server";
 
 import { Unauthorized } from "@/lib/api/_route-helpers";
-import { enforceGlobalApiRateLimit } from "@/lib/api/rate-limit";
+import { checkRateLimit, enforceGlobalApiRateLimit, RATE_LIMITS } from "@/lib/api/rate-limit";
 import { findAppUserByCognitoSub } from "@/lib/db/queries/app-user";
-import { isUserDisabled, type SessionContext } from "@/lib/auth/session";
+import { isUserDisabled, ROLE_RANK, type SessionContext } from "@/lib/auth/session";
 
 import {
+  AGENT_SCOPES,
   parseAgentScope,
   type AgentScope,
 } from "./agent-scopes";
@@ -49,6 +50,29 @@ export type AgentSessionContext = SessionContext & {
  * surfaces as a route-level Unauthorized rather than a module-load
  * crash that kills the whole worker. */
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+/** sub → app_user cache. Same 30s TTL the disabled-user cache uses,
+ * keyed on Cognito sub. Saves a DB round-trip on every agent call
+ * for the (common) case where the same user makes many requests
+ * inside a single 30s window. Cache invalidates implicitly by TTL —
+ * we don't try to push-invalidate, because the next miss within 30s
+ * just refetches and any change shows up automatically. */
+const SUB_TO_OWNER_TTL_MS = 30_000;
+type CachedOwner = {
+  owner: { user_id: string; email: string; role: "admin" | "manager" | "employee"; employee_id: number | null };
+  expires_at: number;
+};
+const subOwnerCache = new Map<string, CachedOwner>();
+async function lookupOwnerCached(sub: string) {
+  const now = Date.now();
+  const cached = subOwnerCache.get(sub);
+  if (cached && cached.expires_at > now) return cached.owner;
+  const owner = await findAppUserByCognitoSub(sub);
+  if (owner) {
+    subOwnerCache.set(sub, { owner, expires_at: now + SUB_TO_OWNER_TTL_MS });
+  }
+  return owner;
+}
 
 function getJwks() {
   if (cachedJwks) return cachedJwks;
@@ -130,8 +154,23 @@ export async function requireAgentSession(
   if (!sub) {
     throw Unauthorized();
   }
-  const owner = await findAppUserByCognitoSub(sub);
+  const owner = await lookupOwnerCached(sub);
   if (!owner) {
+    throw Unauthorized();
+  }
+
+  // Defense in depth: re-check that the user's role permits the
+  // requested scope, ignoring whatever the token actually carries.
+  // The Pre Token Generation Lambda is supposed to filter scopes at
+  // issuance time, but a bug there (or a future change that widens
+  // the group → scope map by accident) would otherwise become a
+  // silent privilege escalation. We trust the role, not the token's
+  // own scope claim.
+  const scope_def = AGENT_SCOPES[opts.scope];
+  if (!scope_def) {
+    throw Unauthorized();
+  }
+  if (ROLE_RANK[owner.role] < ROLE_RANK[scope_def.min_role]) {
     throw Unauthorized();
   }
 
@@ -154,9 +193,15 @@ export async function requireAgentSession(
     scopes: scopes_in_token,
   };
 
-  // Per-user global ceiling — shared with the web session bucket so a
-  // runaway agent can't starve the owning human's UI usage.
+  // Per-user global ceiling — shared with the web session bucket so
+  // a runaway agent ALSO trips this and gets cut off at the per-user
+  // safety net. But the global is too loose to act as the agent's
+  // primary limit (600/min); add a per-client tighter bucket so a
+  // misbehaving agent can't starve the human's web budget. Keyed
+  // on (user_id, client_id) so two different agent clients for the
+  // same user get separate buckets.
   enforceGlobalApiRateLimit(ctx);
+  checkRateLimit(ctx.user_id, `agent:${ctx.client_id}`, RATE_LIMITS.normal);
 
   return ctx;
 }
