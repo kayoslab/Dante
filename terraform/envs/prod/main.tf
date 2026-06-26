@@ -824,6 +824,13 @@ module "github_oidc" {
     module.cognito_pretoken_lambda.role_arn,
   ]
 
+  # CloudWatch alarm management. The sync Lambda owns several alarms
+  # (errors, throttles, duration); the pretoken Lambda module
+  # creates `errors`. Wildcard scoped to the project namespace.
+  cloudwatch_alarm_arns = [
+    "arn:aws:cloudwatch:${var.aws_region}:${data.aws_caller_identity.current.account_id}:alarm:dante-prod-*",
+  ]
+
   # Cognito user pool sub-resource management — terraform creates the
   # dante-agents resource server, the agent app client, and updates
   # `lambda_config` on the parent pool to wire the Pre Token Gen

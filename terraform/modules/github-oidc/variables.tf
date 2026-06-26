@@ -95,6 +95,12 @@ variable "lambda_role_arns_passable" {
   default     = []
 }
 
+variable "cloudwatch_alarm_arns" {
+  description = "CloudWatch metric alarm ARN patterns the deploy role may PutMetricAlarm / DeleteAlarms / DescribeAlarms / TagResource on. Use for modules that materialize their own alarms (e.g. sync-lambda errors, pretoken-lambda errors). Scope to `arn:aws:cloudwatch:<region>:<acct>:alarm:<prefix>-*` so a misconfigured module can't reach into someone else's alarm namespace."
+  type        = list(string)
+  default     = []
+}
+
 variable "eventbridge_rule_arns" {
   description = "EventBridge rule ARNs the deploy role may modify (PutRule, DeleteRule, PutTargets, RemoveTargets, TagResource, UntagResource). Pass the sync Lambda's schedule rule ARN here so terraform can update the cron expression or rule tags on apply."
   type        = list(string)

@@ -398,6 +398,27 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # CloudWatch metric alarm lifecycle. Tagging actions belong here
+  # because terraform applies the standard App/Environment/DataClass
+  # tag set on every alarm at create time — without `cloudwatch:
+  # TagResource`, PutMetricAlarm rejects the call when tags are
+  # included.
+  dynamic "statement" {
+    for_each = length(var.cloudwatch_alarm_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource",
+        "cloudwatch:ListTagsForResource",
+      ]
+      resources = var.cloudwatch_alarm_arns
+    }
+  }
+
   # Cognito user pool sub-resource management — resource servers,
   # app clients, and `lambda_config` updates on the parent pool.
   # Cognito doesn't expose IAM ARNs for resource servers or app
