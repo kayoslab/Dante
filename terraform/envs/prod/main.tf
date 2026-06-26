@@ -794,6 +794,38 @@ module "github_oidc" {
   # granted by the module — see the variable doc.
   rds_db_instance_arns = [module.rds.instance_arn]
 
+  # Bootstrap permissions for modules that materialize their own
+  # IAM role + Lambda function + log group on first apply (currently
+  # cognito-pretoken-lambda; future ones share the same prefix
+  # namespace). Wildcards stay project-scoped: a compromised deploy
+  # token can create new roles + functions inside `dante-prod-*`, not
+  # arbitrary names.
+  creatable_iam_role_arns = [
+    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/dante-prod-*",
+  ]
+  creatable_lambda_function_arns = [
+    "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:dante-prod-*",
+  ]
+  creatable_log_group_arns = [
+    "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/dante-prod-*",
+    "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/dante-prod-*:log-stream:",
+  ]
+
+  # PassRole for Lambda creation. Each new Lambda role's ARN needs
+  # to appear here — the IAM:PassRole condition pins it to
+  # lambda.amazonaws.com so the grant is unusable elsewhere.
+  lambda_role_arns_passable = [
+    module.cognito_pretoken_lambda.role_arn,
+  ]
+
+  # Cognito user pool sub-resource management — terraform creates the
+  # dante-agents resource server, the agent app client, and updates
+  # `lambda_config` on the parent pool to wire the Pre Token Gen
+  # Lambda. All of those need pool-level Cognito perms.
+  cognito_user_pool_arns = [
+    module.cognito.user_pool_arn,
+  ]
+
   # Inline-policy writes on roles whose `aws_iam_role_policy` resources
   # terraform reconciles on every apply. The sync's `secrets` policy
   # tracks added/removed secret ARNs; the app task role's `task_rds_iam`

@@ -65,6 +65,36 @@ variable "managed_iam_role_arns" {
   default     = []
 }
 
+variable "creatable_iam_role_arns" {
+  description = "IAM role ARN patterns (`*` wildcards allowed) the deploy role may CREATE + delete + tag + attach managed policies to. Needed by terraform modules that materialize their own role (e.g. the cognito-pretoken-lambda module). Scope tightly — e.g. `arn:aws:iam::<acct>:role/dante-prod-*` covers every prod-namespaced role without leaking permission to arbitrary names. The deploy role's own ARN MUST NOT match any pattern here (would allow privilege escalation)."
+  type        = list(string)
+  default     = []
+}
+
+variable "creatable_lambda_function_arns" {
+  description = "Lambda function ARN patterns the deploy role may CREATE + delete + add/remove resource policies on. Use for terraform modules that materialize new Lambdas. Existing-function code/config updates flow through `lambda_function_arns` instead — keep create separate so the create grant doesn't silently widen into update-everywhere if a wildcard creeps in."
+  type        = list(string)
+  default     = []
+}
+
+variable "creatable_log_group_arns" {
+  description = "CloudWatch log group ARN patterns the deploy role may CreateLogGroup / DeleteLogGroup / PutRetentionPolicy / TagResource on. Scope to the project namespace (e.g. `/aws/lambda/dante-prod-*`) so modules can create their own log groups without leaking permission to arbitrary log streams elsewhere in the account."
+  type        = list(string)
+  default     = []
+}
+
+variable "cognito_user_pool_arns" {
+  description = "Cognito user pool ARNs the deploy role may manage as a parent resource — CreateResourceServer / CreateUserPoolClient / UpdateUserPool (for lambda_config etc.). Resource servers + app clients don't have their own IAM ARNs in Cognito, so the pool ARN is the granularity available."
+  type        = list(string)
+  default     = []
+}
+
+variable "lambda_role_arns_passable" {
+  description = "IAM role ARNs the deploy role may iam:PassRole to lambda.amazonaws.com. Required when terraform creates a Lambda function that references a role ARN — without this, CreateFunction fails with `passrole`. Conditioned on `iam:PassedToService = lambda.amazonaws.com` so the grant can't be used for any other service."
+  type        = list(string)
+  default     = []
+}
+
 variable "eventbridge_rule_arns" {
   description = "EventBridge rule ARNs the deploy role may modify (PutRule, DeleteRule, PutTargets, RemoveTargets, TagResource, UntagResource). Pass the sync Lambda's schedule rule ARN here so terraform can update the cron expression or rule tags on apply."
   type        = list(string)

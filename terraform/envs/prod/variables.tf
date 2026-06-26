@@ -57,9 +57,9 @@ variable "cognito_pretoken_lambda_package_zip_path" {
 # --- Agent integration -------------------------------------------------
 
 variable "agent_callback_urls" {
-  description = "OAuth callback URLs allowed for the Cognito agent app client. Set to the EVE deploy's `/oauth/callback` URL (or multiple if you have prod + preview). Empty list = no agent integration deployed (the app client still exists but is unusable for OAuth flows)."
+  description = "OAuth callback URLs allowed for the Cognito agent app client. The default includes the EVE TUI's localhost callback so local-dev flows work out of the box; add your deployed EVE URL (e.g. `https://<deploy>.vercel.app/eve/v1/connections/dante/auth/callback`) before the first production OAuth flow. Cognito permits HTTP only for `localhost`; every other entry must be HTTPS."
   type        = list(string)
-  default     = []
+  default     = ["http://localhost:3000/eve/v1/connections/dante/auth/callback"]
 }
 
 # --- VPC ---------------------------------------------------------------

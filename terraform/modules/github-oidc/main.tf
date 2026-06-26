@@ -298,6 +298,121 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # IAM role lifecycle for modules that materialize their own role
+  # via terraform (CreateRole, TagRole, AttachRolePolicy, etc.).
+  # Scoped per ARN pattern — a wildcard wider than
+  # `dante-prod-<module>-*` would let a compromised CI token create
+  # arbitrary roles. PassRole is intentionally NOT bundled here
+  # because the service condition differs by use case (ECS, Lambda,
+  # etc.) — pass via the per-service `*_role_arns_passable` vars.
+  dynamic "statement" {
+    for_each = length(var.creatable_iam_role_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+      ]
+      resources = var.creatable_iam_role_arns
+    }
+  }
+
+  # PassRole for Lambda creation. Required when terraform creates a
+  # Lambda function that references a role ARN: AWS validates that
+  # the caller can pass the role to the named service. Conditioned on
+  # `lambda.amazonaws.com` so the grant is unusable for any other
+  # service.
+  dynamic "statement" {
+    for_each = length(var.lambda_role_arns_passable) == 0 ? [] : [1]
+    content {
+      effect    = "Allow"
+      actions   = ["iam:PassRole"]
+      resources = var.lambda_role_arns_passable
+      condition {
+        test     = "StringEquals"
+        variable = "iam:PassedToService"
+        values   = ["lambda.amazonaws.com"]
+      }
+    }
+  }
+
+  # Lambda function lifecycle for modules that materialize new
+  # functions. `lambda_function_arns` covers update-code/config on
+  # already-created functions; this statement covers Create + Delete
+  # + the resource-policy (AddPermission / RemovePermission /
+  # GetPolicy) that aws_lambda_permission needs.
+  dynamic "statement" {
+    for_each = length(var.creatable_lambda_function_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:PutFunctionConcurrency",
+        "lambda:DeleteFunctionConcurrency",
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:GetPolicy",
+      ]
+      resources = var.creatable_lambda_function_arns
+    }
+  }
+
+  # CloudWatch log group lifecycle. Each Lambda + ECS service has its
+  # own group; terraform creates them alongside the resource that
+  # writes to them. Scoped to the project namespace via the var so
+  # modules can't materialize groups in someone else's account
+  # namespace.
+  dynamic "statement" {
+    for_each = length(var.creatable_log_group_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource",
+        "logs:ListTagsForResource",
+      ]
+      resources = var.creatable_log_group_arns
+    }
+  }
+
+  # Cognito user pool sub-resource management — resource servers,
+  # app clients, and `lambda_config` updates on the parent pool.
+  # Cognito doesn't expose IAM ARNs for resource servers or app
+  # clients individually (they're sub-resources of the pool), so the
+  # pool ARN is the scoping granularity available.
+  dynamic "statement" {
+    for_each = length(var.cognito_user_pool_arns) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "cognito-idp:CreateResourceServer",
+        "cognito-idp:DescribeResourceServer",
+        "cognito-idp:UpdateResourceServer",
+        "cognito-idp:DeleteResourceServer",
+        "cognito-idp:CreateUserPoolClient",
+        "cognito-idp:DescribeUserPoolClient",
+        "cognito-idp:UpdateUserPoolClient",
+        "cognito-idp:DeleteUserPoolClient",
+        "cognito-idp:UpdateUserPool",
+        "cognito-idp:DescribeUserPool",
+      ]
+      resources = var.cognito_user_pool_arns
+    }
+  }
+
   # RDS — in-place instance modifications (e.g. flipping
   # `iam_database_authentication_enabled`). Scoped to the explicit
   # instance ARNs in `rds_db_instance_arns`. Read actions (Describe,
