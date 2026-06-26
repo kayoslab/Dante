@@ -34,12 +34,23 @@ const RESOURCE_SERVER_PREFIX = "dante-agents/";
  * are allowed to receive. Names match the resource server `scope_name`
  * in the cognito module (NOT prefixed with `dante-agents/`). */
 const GROUP_SCOPE_ALLOWLIST: Record<string, ReadonlySet<string>> = {
+  // admin + manager get the same read AND write scopes — same
+  // permissions on the agent surface as they have on the web. The
+  // EVE-side connection layer adds an additional approval gate so
+  // every write parks the run for explicit user confirmation in the
+  // chat; the scope grant just lets the token CARRY the write
+  // capability at all.
   admin: new Set([
     "read:projects",
     "read:customers",
     "read:reports",
     "read:employees",
     "read:salaries",
+    "write:customers",
+    "write:frameworks",
+    "write:projects",
+    "write:allocations",
+    "write:time_tracking",
   ]),
   manager: new Set([
     "read:projects",
@@ -47,6 +58,11 @@ const GROUP_SCOPE_ALLOWLIST: Record<string, ReadonlySet<string>> = {
     "read:reports",
     "read:employees",
     "read:salaries",
+    "write:customers",
+    "write:frameworks",
+    "write:projects",
+    "write:allocations",
+    "write:time_tracking",
   ]),
   employee: new Set([
     "read:projects",

@@ -110,6 +110,11 @@ variable "agent_scopes" {
     { name = "read:reports", description = "Portfolio + customer rentability rollups (no per-employee data)." },
     { name = "read:employees", description = "List employees, teams, role tiers. No salary / Personio personal data." },
     { name = "read:salaries", description = "Per-employee salary history + monthly cost. Manager-only via Pre Token Generation Lambda." },
+    { name = "write:customers", description = "Create + update customers. Manager-only; every call parks for explicit user confirmation in the agent UI." },
+    { name = "write:frameworks", description = "Create framework agreements + their rate cards. Manager-only; gated by HITL in the agent UI." },
+    { name = "write:projects", description = "Create projects (T&M or Fixed-Price) and their rate cards. Manager-only; gated by HITL in the agent UI." },
+    { name = "write:allocations", description = "Create new project allocations and extend existing end dates. Manager-only; gated by HITL in the agent UI." },
+    { name = "write:time_tracking", description = "Upsert monthly freelancer hours from bills or time sheets. Manager-only; gated by HITL in the agent UI." },
   ]
 }
 

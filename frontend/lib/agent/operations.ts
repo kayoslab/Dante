@@ -12,9 +12,16 @@
  * Type re-exports are present so other modules (the route handlers
  * themselves) can `import { listProjectsOp } from "@/lib/agent/operations"`
  * if that's tidier than reaching into the route file. */
-export { listProjectsOp } from "@/app/api/agent/projects/route";
+export { listProjectsOp, createProjectOp } from "@/app/api/agent/projects/route";
 export { getProjectMonthlyOp } from "@/app/api/agent/projects/[id]/monthly/route";
-export { listCustomersOp } from "@/app/api/agent/customers/route";
+export { createAssignmentOp } from "@/app/api/agent/projects/[id]/assignments/route";
+export { updateAssignmentEndDateOp } from "@/app/api/agent/assignments/[id]/end-date/route";
+export { listCustomersOp, createCustomerOp } from "@/app/api/agent/customers/route";
+export { matchCustomersOp } from "@/app/api/agent/customers/match/route";
+export { matchProjectsOp } from "@/app/api/agent/projects/match/route";
+export { matchFreelancersOp } from "@/app/api/agent/freelancers/match/route";
+export { createFrameworkOp } from "@/app/api/agent/frameworks/route";
+export { upsertFreelancerHoursOp } from "@/app/api/agent/freelancer-hours/route";
 export { getPortfolioRentabilityOp } from "@/app/api/agent/reports/portfolio-rentability/route";
 export { getCustomerRentabilityOp } from "@/app/api/agent/reports/customer-rentability/route";
 export { getFpBurndownOp } from "@/app/api/agent/reports/fp-burndown/route";

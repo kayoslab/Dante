@@ -47,7 +47,12 @@ export type AgentScope =
   | "read:customers"
   | "read:reports"
   | "read:employees"
-  | "read:salaries";
+  | "read:salaries"
+  | "write:customers"
+  | "write:frameworks"
+  | "write:projects"
+  | "write:allocations"
+  | "write:time_tracking";
 
 type ScopeDef = {
   /** Concise label shown next to the checkbox in /profile/agents. */
@@ -109,6 +114,56 @@ export const AGENT_SCOPES: Record<AgentScope, ScopeDef> = {
       "Per-employee monthly economics: loaded cost, billable revenue, " +
       "margin, utilization. Per the AGENTS.md role matrix the underlying " +
       "`/api/employees/[id]/monthly*` is manager-only.",
+    min_role: "manager",
+  },
+  // --- Write scopes ---------------------------------------------------
+  // Every write scope mirrors the role gate the equivalent Server
+  // Action uses (`lib/actions/*.ts` — `requireActionRole("manager")` on
+  // create/update/delete throughout). Employees never mutate Dante data
+  // on the web, so they don't mutate it via the agent either.
+  //
+  // On the agent client, write tools sit behind an EVE connection-level
+  // `approval: always()`-style policy so every mutation parks the run
+  // for explicit user confirmation in the chat UI. Defense in depth —
+  // the scope gate prevents minting the tool at all for the wrong
+  // role; the approval policy stops accidental writes by the model
+  // even for users who DO have the scope.
+  "write:customers": {
+    label: "Create + update customers",
+    description:
+      "Create new customers and update name / notes on existing ones. " +
+      "Same role gate as `createCustomerAction` on the web.",
+    min_role: "manager",
+  },
+  "write:frameworks": {
+    label: "Create + update framework agreements",
+    description:
+      "Create framework agreements + their rate cards, update dates and " +
+      "notes. Same role gate as `createFrameworkAction` on the web.",
+    min_role: "manager",
+  },
+  "write:projects": {
+    label: "Create + update projects",
+    description:
+      "Create projects (T&M or Fixed-Price), set agreed amount, planned " +
+      "dates, billing model, and rate card. Same role gate as " +
+      "`createProjectAction` on the web.",
+    min_role: "manager",
+  },
+  "write:allocations": {
+    label: "Manage allocations",
+    description:
+      "Create new project allocations and extend the end date of " +
+      "existing ones. Same role gate as `insertAssignmentAction` / " +
+      "`endAssignmentAction` on the web.",
+    min_role: "manager",
+  },
+  "write:time_tracking": {
+    label: "Enter freelancer time-tracking",
+    description:
+      "Upsert monthly hours for a freelancer assignment. Manual " +
+      "entries override the awork sync for the same month. Same role " +
+      "gate as `upsertFreelancerHoursAction` on the web.",
     min_role: "manager",
   },
 };

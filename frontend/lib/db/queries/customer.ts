@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, sql } from "drizzle-orm";
 
 import { db } from "../client";
 import {
@@ -123,6 +123,23 @@ export async function getCustomerAworkLink(
  * `customer_id` or `null`. Used by `createCustomerAction` to short-circuit
  * a duplicate insert with a friendlier conflict message than the
  * Postgres unique-violation. */
+/** Fuzzy ILIKE-substring lookup, ordered by name length so shorter
+ * matches surface first (a search for "Acme" prefers "Acme GmbH" over
+ * "Acme Holding Europe AG"). Used by the agent's `matchCustomers`
+ * endpoint to dedupe PDF-extracted names against existing customers.
+ * Switch to `pg_trgm.similarity()` once the extension is enabled. */
+export async function matchCustomersByName(
+  q: string,
+  limit: number,
+): Promise<Array<{ customer_id: number; name: string }>> {
+  return db
+    .select({ customer_id: customer.customer_id, name: customer.name })
+    .from(customer)
+    .where(ilike(customer.name, `%${q}%`))
+    .orderBy(sql`length(${customer.name})`)
+    .limit(limit);
+}
+
 export async function findCustomerIdByName(
   name: string,
 ): Promise<number | null> {
