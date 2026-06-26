@@ -4,6 +4,7 @@
  */
 import { asc, eq, ilike, sql } from "drizzle-orm";
 
+import { escapeLikePattern } from "../../agent/_validation";
 import { db } from "../client";
 import { freelancer } from "../schema";
 
@@ -21,6 +22,9 @@ export async function matchFreelancersByName(
     contact_email: string | null;
   }>
 > {
+  // Escape `%` / `_` / `\` so a caller can't turn a fuzzy lookup into
+  // an unrestricted scan with q="%".
+  const pattern = `%${escapeLikePattern(q)}%`;
   return db
     .select({
       freelancer_id: freelancer.freelancer_id,
@@ -29,7 +33,7 @@ export async function matchFreelancersByName(
       contact_email: freelancer.contact_email,
     })
     .from(freelancer)
-    .where(ilike(freelancer.name, `%${q}%`))
+    .where(ilike(freelancer.name, pattern))
     .orderBy(sql`length(${freelancer.name})`)
     .limit(limit);
 }

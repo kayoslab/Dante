@@ -10,7 +10,8 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { defineAgentOp } from "@/lib/agent/operation";
-import { Conflict, NotFound, handle } from "@/lib/api/_route-helpers";
+import { IsoDateString } from "@/lib/agent/_validation";
+import { Conflict, NotFound, Validation, handle } from "@/lib/api/_route-helpers";
 import { requireAgentSession } from "@/lib/auth/agent-jwt";
 import { audit } from "@/lib/auth/audit";
 import { customerExists } from "@/lib/db/queries/customer";
@@ -24,10 +25,7 @@ import { log } from "@/lib/logger";
 const FrameworkRateInputSchema = z
   .object({
     profile: z.string().trim().min(1).max(50).openapi({ example: "Senior" }),
-    valid_from: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .openapi({ example: "2026-07-01" }),
+    valid_from: IsoDateString.openapi({ example: "2026-07-01" }),
     daily_rate_eur: z
       .string()
       .regex(/^\d+(\.\d{1,2})?$/)
@@ -51,15 +49,11 @@ const CreateFrameworkBodySchema = z
     name: z.string().trim().min(1).max(200).openapi({
       example: "Acme Framework 2026–2028",
     }),
-    start_date: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
+    start_date: IsoDateString
       .nullable()
       .optional()
       .openapi({ example: "2026-07-01" }),
-    end_date: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
+    end_date: IsoDateString
       .nullable()
       .optional()
       .openapi({ example: "2028-06-30" }),
@@ -107,6 +101,11 @@ export async function POST(req: NextRequest) {
     const raw = await req.json().catch(() => null);
     const input = createFrameworkOp.parseBody(raw);
 
+    if (input.start_date && input.end_date && input.end_date < input.start_date) {
+      throw Validation(
+        `end_date ${input.end_date} is before start_date ${input.start_date}.`,
+      );
+    }
     if (!(await customerExists(input.customer_id))) {
       throw NotFound(`Customer ${input.customer_id} does not exist.`);
     }

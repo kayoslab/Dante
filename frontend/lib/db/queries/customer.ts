@@ -1,5 +1,7 @@
 import { and, asc, eq, ilike, inArray, sql } from "drizzle-orm";
 
+import { escapeLikePattern } from "../../agent/_validation";
+
 import { db } from "../client";
 import {
   assignment,
@@ -132,10 +134,13 @@ export async function matchCustomersByName(
   q: string,
   limit: number,
 ): Promise<Array<{ customer_id: number; name: string }>> {
+  // Escape `%` / `_` / `\` so a caller can't turn a fuzzy lookup into
+  // an unrestricted scan with q="%".
+  const pattern = `%${escapeLikePattern(q)}%`;
   return db
     .select({ customer_id: customer.customer_id, name: customer.name })
     .from(customer)
-    .where(ilike(customer.name, `%${q}%`))
+    .where(ilike(customer.name, pattern))
     .orderBy(sql`length(${customer.name})`)
     .limit(limit);
 }

@@ -8,6 +8,7 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { defineAgentOp } from "@/lib/agent/operation";
+import { IsoDateString } from "@/lib/agent/_validation";
 import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
 import { requireAgentSession } from "@/lib/auth/agent-jwt";
 import { audit } from "@/lib/auth/audit";
@@ -23,15 +24,12 @@ const PathParamsSchema = z.object({
 
 const UpdateEndDateBodySchema = z
   .object({
-    end_date: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .openapi({
-        example: "2027-06-30",
-        description:
-          "New end date for the assignment. Must be on or after the " +
-          "assignment's start_date.",
-      }),
+    end_date: IsoDateString.openapi({
+      example: "2027-06-30",
+      description:
+        "New end date for the assignment. Must be on or after the " +
+        "assignment's start_date.",
+    }),
   })
   .openapi("AgentUpdateAssignmentEndDateRequest");
 

@@ -1,5 +1,6 @@
 import { and, eq, ilike, inArray, sql } from "drizzle-orm";
 
+import { escapeLikePattern } from "../../agent/_validation";
 import { db } from "../client";
 import {
   appUser,
@@ -553,10 +554,13 @@ export async function matchProjectsByName(
     status: string;
   }>
 > {
+  // Escape `%` / `_` / `\` so a caller can't turn a fuzzy lookup into
+  // an unrestricted scan with q="%".
+  const pattern = `%${escapeLikePattern(q)}%`;
   const where =
     customer_id !== null
-      ? and(ilike(project.name, `%${q}%`), eq(project.customer_id, customer_id))
-      : ilike(project.name, `%${q}%`);
+      ? and(ilike(project.name, pattern), eq(project.customer_id, customer_id))
+      : ilike(project.name, pattern);
   return db
     .select({
       project_id: project.project_id,

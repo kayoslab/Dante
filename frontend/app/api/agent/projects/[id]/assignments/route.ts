@@ -7,10 +7,13 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { defineAgentOp } from "@/lib/agent/operation";
+import { IsoDateString } from "@/lib/agent/_validation";
 import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
 import { requireAgentSession } from "@/lib/auth/agent-jwt";
 import { audit } from "@/lib/auth/audit";
 import { insertAssignment } from "@/lib/db/queries/assignment";
+import { employeeExists } from "@/lib/db/queries/employee";
+import { freelancerExists } from "@/lib/db/queries/freelancer";
 import { projectExists } from "@/lib/db/queries/project";
 import { log } from "@/lib/logger";
 
@@ -47,14 +50,16 @@ const CreateAssignmentBodySchema = z
     profile: z
       .string()
       .trim()
+      .min(1)
       .max(50)
       .nullable()
       .optional()
       .openapi({
         example: "Senior",
         description:
-          "Profile / role label. Matches a rate-card entry on the " +
-          "project or framework.",
+          "Profile / role label. REQUIRED for freelancer assignments " +
+          "(matches a rate-card entry on the project or framework). " +
+          "Employee assignments may omit it.",
       }),
     allocation_pct: z
       .string()
@@ -66,13 +71,8 @@ const CreateAssignmentBodySchema = z
           "string. `1.0` = 100%. Defaults to `1.0` if omitted.",
       })
       .default("1.0"),
-    start_date: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .openapi({ example: "2026-07-01" }),
-    end_date: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
+    start_date: IsoDateString.openapi({ example: "2026-07-01" }),
+    end_date: IsoDateString
       .nullable()
       .optional()
       .openapi({
@@ -142,9 +142,28 @@ export async function POST(
         "Exactly one of employee_id or freelancer_id must be set, not both and not neither.",
       );
     }
+    if (hasFree && (input.profile == null || input.profile.length === 0)) {
+      // Matches `lib/actions/assignment.ts` — freelancer rows price
+      // off a rate-card profile and have no role_tier fallback, so
+      // an empty profile would leave the assignment unpriced.
+      throw Validation(
+        "freelancer assignments require profile (no role_tier fallback)",
+      );
+    }
+    if (input.end_date && input.end_date < input.start_date) {
+      throw Validation(
+        `end_date ${input.end_date} is before start_date ${input.start_date}.`,
+      );
+    }
 
     if (!(await projectExists(project_id))) {
       throw NotFound(`Project ${project_id} does not exist.`);
+    }
+    if (hasEmp && !(await employeeExists(input.employee_id!))) {
+      throw NotFound(`Employee ${input.employee_id} does not exist.`);
+    }
+    if (hasFree && !(await freelancerExists(input.freelancer_id!))) {
+      throw NotFound(`Freelancer ${input.freelancer_id} does not exist.`);
     }
 
     const { assignment_id } = await insertAssignment({

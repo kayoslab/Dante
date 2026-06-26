@@ -9,7 +9,8 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { defineAgentOp } from "@/lib/agent/operation";
-import { Conflict, NotFound, handle } from "@/lib/api/_route-helpers";
+import { IsoDateString } from "@/lib/agent/_validation";
+import { Conflict, NotFound, Validation, handle } from "@/lib/api/_route-helpers";
 import { requireAgentSession } from "@/lib/auth/agent-jwt";
 import { audit } from "@/lib/auth/audit";
 import { customerExists } from "@/lib/db/queries/customer";
@@ -95,10 +96,7 @@ export async function GET(req: NextRequest) {
 const ProjectRateInputSchema = z
   .object({
     profile: z.string().trim().min(1).max(50).openapi({ example: "Senior" }),
-    valid_from: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .openapi({ example: "2026-07-01" }),
+    valid_from: IsoDateString.openapi({ example: "2026-07-01" }),
     daily_rate_eur: z
       .string()
       .regex(/^\d+(\.\d{1,2})?$/)
@@ -154,15 +152,11 @@ const CreateProjectBodySchema = z
           "Total agreed amount in EUR as a decimal string. Required " +
           "for `fixed_price`; ignored (set null) for `time_and_material`.",
       }),
-    planned_start_date: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
+    planned_start_date: IsoDateString
       .nullable()
       .optional()
       .openapi({ example: "2026-07-01" }),
-    planned_end_date: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
+    planned_end_date: IsoDateString
       .nullable()
       .optional()
       .openapi({ example: "2026-12-31" }),
@@ -216,6 +210,16 @@ export async function POST(req: NextRequest) {
     const ctx = await requireAgentSession(req, { scope: createProjectOp.scope });
     const raw = await req.json().catch(() => null);
     const input = createProjectOp.parseBody(raw);
+
+    if (
+      input.planned_start_date &&
+      input.planned_end_date &&
+      input.planned_end_date < input.planned_start_date
+    ) {
+      throw Validation(
+        `planned_end_date ${input.planned_end_date} is before planned_start_date ${input.planned_start_date}.`,
+      );
+    }
 
     if (!(await customerExists(input.customer_id))) {
       throw NotFound(`Customer ${input.customer_id} does not exist.`);

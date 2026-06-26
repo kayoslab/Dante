@@ -10,6 +10,7 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { defineAgentOp } from "@/lib/agent/operation";
+import { IsoYearMonth } from "@/lib/agent/_validation";
 import { NotFound, Validation, handle } from "@/lib/api/_route-helpers";
 import { requireAgentSession } from "@/lib/auth/agent-jwt";
 import { audit } from "@/lib/auth/audit";
@@ -32,13 +33,10 @@ const UpsertFreelancerHoursBodySchema = z
           "matchFreelancers → existing assignment, or create one with " +
           "`createAssignment` first.",
       }),
-    year_month: z
-      .string()
-      .regex(/^\d{4}-\d{2}$/)
-      .openapi({
-        example: "2026-06",
-        description: "Year-month bucket the bill / sheet covers (UTC).",
-      }),
+    year_month: IsoYearMonth.openapi({
+      example: "2026-06",
+      description: "Year-month bucket the bill / sheet covers (UTC).",
+    }),
     hours_decimal: z
       .number()
       .min(0)
