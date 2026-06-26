@@ -173,6 +173,10 @@ resource "aws_lambda_function" "sync" {
         DANTE_APP_DB_USERNAME   = var.app_db_username
         DANTE_DATABASE_ENDPOINT = var.database_endpoint
         DANTE_DATABASE_NAME     = var.database_name
+        # The Dockerfile bakes the RDS Global CA at /app/ for the
+        # ECS task; Lambda code lives at /var/task/. The build script
+        # zips the PEM next to lambda.js, so the runtime path is here.
+        DANTE_RDS_CA_BUNDLE_PATH = "/var/task/rds-global-bundle.pem"
       },
     )
   }
