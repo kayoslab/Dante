@@ -24,7 +24,12 @@ import { log } from "@/lib/logger";
 
 const FrameworkRateInputSchema = z
   .object({
-    profile: z.string().trim().min(1).max(50).openapi({ example: "Senior" }),
+    profile: z.string().trim().min(1).max(100).openapi({
+      example: "Senior DevOps Consultant / Technischer Projektleiter",
+      description:
+        "Role / profile label. Up to 100 chars — fits the compound " +
+        "German consulting titles that show up on real rate cards.",
+    }),
     valid_from: IsoDateString.openapi({ example: "2026-07-01" }),
     daily_rate_eur: z
       .string()
