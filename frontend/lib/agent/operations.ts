@@ -13,6 +13,7 @@
  * themselves) can `import { listProjectsOp } from "@/lib/agent/operations"`
  * if that's tidier than reaching into the route file. */
 export { listProjectsOp, createProjectOp } from "@/app/api/agent/projects/route";
+export { updateProjectOp } from "@/app/api/agent/projects/[id]/route";
 export { getProjectMonthlyOp } from "@/app/api/agent/projects/[id]/monthly/route";
 export { createAssignmentOp } from "@/app/api/agent/projects/[id]/assignments/route";
 export { updateAssignmentEndDateOp } from "@/app/api/agent/assignments/[id]/end-date/route";
