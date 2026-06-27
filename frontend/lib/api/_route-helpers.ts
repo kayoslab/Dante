@@ -1,5 +1,6 @@
 /** Shared helpers for Next.js route handlers: HTTP error envelope + auth. */
 import { NextResponse } from "next/server";
+import { ZodError } from "zod";
 
 import { auth, type Role } from "@/lib/auth";
 import { ROLE_RANK, isUserDisabled, type SessionContext } from "@/lib/auth/session";
@@ -117,6 +118,24 @@ export async function handle(
       return NextResponse.json(
         { detail: err.message, code: err.code },
         { status: err.status },
+      );
+    }
+    // ZodError: schema-validation failure — surface as 422 so the
+    // caller (the agent runtime / the model) gets an actionable
+    // message instead of an opaque 500. The path tells the model
+    // which field tripped the rule. Safe to surface: Zod messages
+    // are about INPUT data, not DB internals.
+    if (err instanceof ZodError) {
+      const first = err.issues[0];
+      const path = first?.path?.join(".") ?? "";
+      const detail = first
+        ? path
+          ? `${path}: ${first.message}`
+          : first.message
+        : "validation error";
+      return NextResponse.json(
+        { detail, code: "validation_error" as ErrorCode },
+        { status: 422 },
       );
     }
     // Log the real error server-side so operators can debug; return a

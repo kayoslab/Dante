@@ -51,15 +51,16 @@ const CreateAssignmentBodySchema = z
       .string()
       .trim()
       .min(1)
-      .max(50)
+      .max(100)
       .nullable()
       .optional()
       .openapi({
-        example: "Senior",
+        example: "Senior DevOps Consultant / Technischer Projektleiter",
         description:
-          "Profile / role label. REQUIRED for freelancer assignments " +
-          "(matches a rate-card entry on the project or framework). " +
-          "Employee assignments may omit it.",
+          "Profile / role label, up to 100 chars (fits compound " +
+          "German consulting titles). REQUIRED for freelancer " +
+          "assignments — matches a rate-card entry on the project " +
+          "or framework. Employee assignments may omit it.",
       }),
     allocation_pct: z
       .string()
