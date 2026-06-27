@@ -15,7 +15,7 @@ import { matchFreelancersByName } from "@/lib/db/queries/freelancer-list";
 import { log } from "@/lib/logger";
 
 const QueryParamsSchema = z.object({
-  q: z.string().trim().min(1).max(120).openapi({ example: "Schmidt" }),
+  q: z.string().trim().min(1).max(100).openapi({ example: "Schmidt" }),
   limit: z.string().regex(/^\d+$/).optional().openapi({ example: "5" }),
 });
 

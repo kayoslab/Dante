@@ -15,7 +15,7 @@ import { matchProjectsByName } from "@/lib/db/queries/project";
 import { log } from "@/lib/logger";
 
 const QueryParamsSchema = z.object({
-  q: z.string().trim().min(1).max(120).openapi({
+  q: z.string().trim().min(1).max(100).openapi({
     example: "Capacity Study",
     description: "Free-text search across project names. ILIKE substring.",
   }),

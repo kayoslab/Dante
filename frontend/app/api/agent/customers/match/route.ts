@@ -17,7 +17,7 @@ import { matchCustomersByName } from "@/lib/db/queries/customer";
 import { log } from "@/lib/logger";
 
 const QueryParamsSchema = z.object({
-  q: z.string().trim().min(1).max(120).openapi({
+  q: z.string().trim().min(1).max(100).openapi({
     example: "Acme",
     description:
       "Free-text search across customer names. Case-insensitive " +
