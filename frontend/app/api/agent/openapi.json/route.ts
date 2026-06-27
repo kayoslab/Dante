@@ -1,16 +1,26 @@
-/** OpenAPI 3.0 document for the agent endpoints.
+/** OpenAPI 3.1 document for the agent endpoints.
  *
  * Generated from the per-operation Zod schemas registered via
  * `defineAgentOp`. The side-effect import below loads every route
  * file so the registry is populated regardless of which route
  * Next.js cold-starts first.
  *
+ * Why 3.1 and not 3.0: agent runtimes (EVE → Anthropic) consume the
+ * schemas as JSON Schema draft 2020-12. OpenAPI 3.0 emits 3.0-flavored
+ * keywords that aren't valid JSON Schema:
+ *   - `nullable: true` is illegal in 2020-12; use `type: ["x","null"]`.
+ *   - `exclusiveMinimum: true` (boolean) is illegal; the value itself
+ *     belongs there as a number.
+ * Optional+nullable Zod fields trip both of these. OpenAPI 3.1 uses
+ * JSON Schema 2020-12 natively, so `zod-to-openapi`'s OpenApiGeneratorV31
+ * emits a spec that EVE can forward to Anthropic without rewriting.
+ *
  * Cache headers: this document only changes on deploy, so a 1-hour
  * shared-cache TTL keeps the upstream representation hot. EVE
  * Connections refetch on agent boot — bouncing the agent after a
  * Dante deploy is the safest way to pick up newly-added operations
  * before the cache TTL elapses. */
-import { OpenApiGeneratorV3 } from "@asteasolutions/zod-to-openapi";
+import { OpenApiGeneratorV31 } from "@asteasolutions/zod-to-openapi";
 import { NextResponse } from "next/server";
 
 import "@/lib/agent/operations";
@@ -18,9 +28,9 @@ import "@/lib/agent/operations";
 import { agentRegistry } from "@/lib/agent/openapi-registry";
 
 export async function GET() {
-  const generator = new OpenApiGeneratorV3(agentRegistry.definitions);
+  const generator = new OpenApiGeneratorV31(agentRegistry.definitions);
   const document = generator.generateDocument({
-    openapi: "3.0.3",
+    openapi: "3.1.0",
     info: {
       title: "Dante Agent API",
       description:
