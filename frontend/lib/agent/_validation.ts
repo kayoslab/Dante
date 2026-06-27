@@ -4,6 +4,14 @@
  * alone accepts shapes like `2025-13-40` that aren't real calendar
  * dates, and ILIKE patterns need wildcard escaping so a caller can't
  * turn a fuzzy match into a full-table scan with `q="%"`. */
+// Side-effect import: `openapi-registry.ts` calls
+// `extendZodWithOpenApi(z)` at module load. Schemas constructed
+// BEFORE that call don't gain `.openapi(...)` — and route files that
+// import IsoDateString resolve _validation.ts first, so without this
+// pin the build-time `IsoDateString.openapi({example: ...})` calls
+// throw `IsoDateString.openapi is not a function` during page-data
+// collection. Force the registry to load first.
+import "./openapi-registry";
 import { z } from "zod";
 
 /** ISO 8601 calendar-day string (`YYYY-MM-DD`) that PARSES to a real
