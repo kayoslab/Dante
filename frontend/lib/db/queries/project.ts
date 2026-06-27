@@ -1,11 +1,13 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, ilike, inArray, sql } from "drizzle-orm";
 
+import { escapeLikePattern } from "../../agent/_validation";
 import { db } from "../client";
 import {
   appUser,
   assignment,
   aworkProject,
   aworkProjectLink,
+  customer,
   frameworkAgreement,
   personioProject,
   personioProjectLink,
@@ -535,6 +537,46 @@ export async function getFrameworkCustomerId(
 }
 
 /** Is there already a project with this name on this customer? */
+/** Fuzzy ILIKE-substring lookup for the agent's `matchProjects`
+ * endpoint. When `customer_id` is non-null, scopes to that customer.
+ * Ordered by name length so shorter matches surface first. */
+export async function matchProjectsByName(
+  q: string,
+  limit: number,
+  customer_id: number | null,
+): Promise<
+  Array<{
+    project_id: number;
+    name: string;
+    customer_id: number;
+    customer_name: string;
+    billing_model: string;
+    status: string;
+  }>
+> {
+  // Escape `%` / `_` / `\` so a caller can't turn a fuzzy lookup into
+  // an unrestricted scan with q="%".
+  const pattern = `%${escapeLikePattern(q)}%`;
+  const where =
+    customer_id !== null
+      ? and(ilike(project.name, pattern), eq(project.customer_id, customer_id))
+      : ilike(project.name, pattern);
+  return db
+    .select({
+      project_id: project.project_id,
+      name: project.name,
+      customer_id: project.customer_id,
+      customer_name: customer.name,
+      billing_model: project.billing_model,
+      status: project.status,
+    })
+    .from(project)
+    .innerJoin(customer, eq(customer.customer_id, project.customer_id))
+    .where(where)
+    .orderBy(sql`length(${project.name})`)
+    .limit(limit);
+}
+
 export async function findProjectByCustomerAndName(
   customer_id: number,
   name: string,

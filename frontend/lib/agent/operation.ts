@@ -32,11 +32,12 @@ import type { AgentScope } from "@/lib/auth/agent-scopes";
 
 import { agentRegistry, ErrorEnvelopeSchema } from "./openapi-registry";
 
-export type AgentOpMethod = "get" | "post" | "put" | "delete";
+export type AgentOpMethod = "get" | "post" | "put" | "patch" | "delete";
 
 export type AgentOpDef<
   PathParams extends ZodObject<ZodRawShape> | undefined,
   QueryParams extends ZodObject<ZodRawShape> | undefined,
+  Body extends ZodTypeAny | undefined,
   Response extends ZodTypeAny,
 > = {
   method: AgentOpMethod;
@@ -53,6 +54,10 @@ export type AgentOpDef<
   scope: AgentScope;
   pathParams?: PathParams;
   queryParams?: QueryParams;
+  /** Request body schema (POST / PUT / PATCH). The route handler reads
+   * the JSON body and calls `op.parseBody(json)` to validate before
+   * touching the DB. */
+  body?: Body;
   response: Response;
 };
 
@@ -60,8 +65,9 @@ export type AgentOpDef<
 export type AgentOp<
   PathParams extends ZodObject<ZodRawShape> | undefined,
   QueryParams extends ZodObject<ZodRawShape> | undefined,
+  Body extends ZodTypeAny | undefined,
   Response extends ZodTypeAny,
-> = AgentOpDef<PathParams, QueryParams, Response> & {
+> = AgentOpDef<PathParams, QueryParams, Body, Response> & {
   /** Inferred from `pathParams`; undefined when not declared. */
   parsePath: PathParams extends ZodTypeAny
     ? (raw: unknown) => z.infer<NonNullable<PathParams>>
@@ -70,15 +76,22 @@ export type AgentOp<
   parseQuery: QueryParams extends ZodTypeAny
     ? (raw: unknown) => z.infer<QueryParams>
     : undefined;
+  /** Inferred from `body`; undefined when not declared. Throws
+   * `HTTPError(422)` on validation failure so the route's `handle()`
+   * converts to the `{detail, code}` envelope. */
+  parseBody: Body extends ZodTypeAny
+    ? (raw: unknown) => z.infer<NonNullable<Body>>
+    : undefined;
 };
 
 export function defineAgentOp<
   PathParams extends ZodObject<ZodRawShape> | undefined,
   QueryParams extends ZodObject<ZodRawShape> | undefined,
+  Body extends ZodTypeAny | undefined,
   Response extends ZodTypeAny,
 >(
-  def: AgentOpDef<PathParams, QueryParams, Response>,
-): AgentOp<PathParams, QueryParams, Response> {
+  def: AgentOpDef<PathParams, QueryParams, Body, Response>,
+): AgentOp<PathParams, QueryParams, Body, Response> {
   // Register the path against the OpenAPI document. Security points
   // at the Cognito scheme defined in `openapi-registry.ts`; the
   // scope set is just this operation's required scope.
@@ -92,6 +105,14 @@ export function defineAgentOp<
     request: {
       ...(def.pathParams ? { params: def.pathParams } : {}),
       ...(def.queryParams ? { query: def.queryParams } : {}),
+      ...(def.body
+        ? {
+            body: {
+              content: { "application/json": { schema: def.body } },
+              required: true,
+            },
+          }
+        : {}),
     },
     responses: {
       200: {
@@ -104,6 +125,12 @@ export function defineAgentOp<
         description:
           "Missing or invalid Cognito access token, missing scope, " +
           "user disabled, or role below the scope's minimum.",
+        content: {
+          "application/json": { schema: ErrorEnvelopeSchema },
+        },
+      },
+      422: {
+        description: "Request body / params failed schema validation.",
         content: {
           "application/json": { schema: ErrorEnvelopeSchema },
         },
@@ -121,9 +148,12 @@ export function defineAgentOp<
     ...def,
     parsePath: (def.pathParams
       ? (raw: unknown) => def.pathParams!.parse(raw)
-      : undefined) as AgentOp<PathParams, QueryParams, Response>["parsePath"],
+      : undefined) as AgentOp<PathParams, QueryParams, Body, Response>["parsePath"],
     parseQuery: (def.queryParams
       ? (raw: unknown) => def.queryParams!.parse(raw)
-      : undefined) as AgentOp<PathParams, QueryParams, Response>["parseQuery"],
+      : undefined) as AgentOp<PathParams, QueryParams, Body, Response>["parseQuery"],
+    parseBody: (def.body
+      ? (raw: unknown) => def.body!.parse(raw)
+      : undefined) as AgentOp<PathParams, QueryParams, Body, Response>["parseBody"],
   };
 }
