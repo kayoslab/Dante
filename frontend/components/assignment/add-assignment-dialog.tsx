@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
 import { useCreateAssignment, useEstimate } from "@/lib/api/assignments";
@@ -74,13 +75,21 @@ type FormOutput = z.output<typeof schema>;
 
 export function AddAssignmentDialog({ project_id }: { project_id: number }) {
   const [open, setOpen] = useState(false);
+  // Default off — the common case is allocating someone currently on the
+  // payroll. Toggle on when back-dating an assignment for someone who's
+  // already left (end-of-quarter billing reconciliation, late PO that
+  // covers a window the consultant has since rolled off, etc.). Status
+  // !== "active" lights up the "(former)" suffix on the option label so
+  // they aren't picked by mistake when the toggle is on.
+  const [includeFormer, setIncludeFormer] = useState(false);
   const create = useCreateAssignment(project_id);
   const { data: freelancers = [] } = useFreelancers();
-  // Active project-contributing real employees only — same eligibility
-  // the bench / team queries use. include_excluded:false drops
-  // service-account / shared mailbox rows from Personio.
+  // Project-contributing real employees. include_excluded:false drops
+  // service-account / shared mailbox rows from Personio. Status filter
+  // is opt-in via the Switch — without it we fetch all statuses and
+  // distinguish them in the option label.
   const { data: employeesRaw = [] } = useEmployees({
-    status: "active",
+    status: includeFormer ? undefined : "active",
     include_excluded: false,
   });
   const employeeOptions = employeesRaw
@@ -91,8 +100,14 @@ export function AddAssignmentDialog({ project_id }: { project_id: number }) {
         `${e.last_name ?? ""}, ${e.first_name ?? ""}`.replace(/^, |, $/g, "") ||
         `Employee #${e.employee_id}`,
       role_tier: e.role_tier ?? null,
+      is_former: e.status !== "active",
     }))
-    .sort((a, b) => a.label.localeCompare(b.label));
+    .sort((a, b) => {
+      // Active first, then former — keeps the common case at the top of
+      // the list. Within each group, alphabetical by "Last, First".
+      if (a.is_former !== b.is_former) return a.is_former ? 1 : -1;
+      return a.label.localeCompare(b.label);
+    });
   const { data: project } = useProject(project_id);
   // Unique profile names from the project's rate sheet — drives the dropdown.
   // Sorted for stable order; empty array if rates haven't loaded yet.
@@ -234,13 +249,27 @@ export function AddAssignmentDialog({ project_id }: { project_id: number }) {
                       <option key={e.employee_id} value={e.employee_id}>
                         {e.label}
                         {e.role_tier ? ` · ${e.role_tier}` : ""}
+                        {e.is_former ? " (former)" : ""}
                       </option>
                     ))}
                   </select>
+                  <div className="flex items-center justify-between pt-1">
+                    <Label
+                      htmlFor="include_former"
+                      className="text-xs font-normal text-muted-foreground"
+                    >
+                      Include former employees
+                    </Label>
+                    <Switch
+                      id="include_former"
+                      checked={includeFormer}
+                      onCheckedChange={setIncludeFormer}
+                    />
+                  </div>
                   {employeeOptions.length === 0 && (
                     <p className="text-xs text-muted-foreground">
-                      No active project-contributing employees on file —
-                      check Personio sync.
+                      No {includeFormer ? "" : "active "}project-contributing
+                      employees on file — check Personio sync.
                     </p>
                   )}
                   {errors.employee_id && (
