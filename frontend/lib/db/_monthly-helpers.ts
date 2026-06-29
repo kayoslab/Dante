@@ -21,6 +21,10 @@ import {
   germanHolidaysForStateCached,
   stateCodeForOffice,
 } from "./_de-holidays";
+import { resolveSalaryFromRow } from "./_salary-resolve";
+
+export { resolveSalaryFromRow } from "./_salary-resolve";
+export type { SalaryRow, ResolvedSalary } from "./_salary-resolve";
 
 // Match Python Decimal defaults: 28-digit precision, ROUND_HALF_EVEN (banker's).
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_EVEN });
@@ -228,39 +232,9 @@ export async function entityMonthlyCost(
     const ln = row.last_name as string | null;
     const who = `${fn ?? ""} ${ln ?? ""}`.trim();
 
-    // Pick as-of values when a compensation_event was found; otherwise
-    // fall back to employee_current's "now" values. Personio sends
-    // interval as 'YEARLY' / 'MONTHLY' / 'HOURLY' (uppercase); the
-    // legacy column is lowercase, so normalize before comparing.
-    const asofCategory = (row.asof_category as string | null) ?? null;
-    let fix: number | null;
-    let interval: string | null;
-    let hourly: number | null;
-    let wkh: number | null;
-    let asofUsed = false;
-    if (asofCategory === "FIXED_SALARY") {
-      fix = row.asof_amount === null ? null : Number(row.asof_amount);
-      const rawInterval = (row.asof_interval as string | null) ?? null;
-      interval = rawInterval === null ? null : rawInterval.toLowerCase();
-      hourly = null;
-      wkh = row.asof_wkh === null ? null : Number(row.asof_wkh);
-      asofUsed = true;
-    } else if (asofCategory === "HOURLY_SALARY") {
-      fix = null;
-      interval = null;
-      hourly = row.asof_amount === null ? null : Number(row.asof_amount);
-      wkh = row.asof_wkh === null ? null : Number(row.asof_wkh);
-      asofUsed = true;
-    } else {
-      fix = row.fix_salary === null ? null : Number(row.fix_salary);
-      interval = row.fix_salary_interval as string | null;
-      hourly =
-        row.hourly_salary === null ? null : Number(row.hourly_salary);
-      wkh =
-        row.weekly_working_hours === null
-          ? null
-          : Number(row.weekly_working_hours);
-    }
+    const { fix, interval, hourly, wkh, asofUsed } = resolveSalaryFromRow(
+      row as unknown as import("./_salary-resolve").SalaryRow,
+    );
     // 5-day work week assumption matches the workingDaysInRange helper.
     const standard_daily_hours = wkh !== null && wkh > 0 ? wkh / 5 : 8;
     const asofTag = asofUsed
