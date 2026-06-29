@@ -290,8 +290,14 @@ resource "aws_wafv2_web_acl" "this" {
 }
 
 # --- Association -----------------------------------------------------------
+#
+# Gated by `var.enabled` so the Web ACL can be detached from the ALB
+# without destroying the ACL itself. Detached = traffic bypasses every
+# WAF rule (managed groups, rate limits, geo). Use during pentest
+# windows; flip back after.
 
 resource "aws_wafv2_web_acl_association" "alb" {
+  count        = var.enabled ? 1 : 0
   resource_arn = var.alb_arn
   web_acl_arn  = aws_wafv2_web_acl.this.arn
 }

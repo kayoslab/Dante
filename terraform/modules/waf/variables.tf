@@ -14,6 +14,12 @@ variable "alb_arn" {
   type        = string
 }
 
+variable "enabled" {
+  description = "Whether to associate the Web ACL with the ALB. Defaults to true. Set to false to temporarily detach the WAF from the ALB — the Web ACL itself stays defined so re-enabling is a one-variable flip rather than a recreate. Intended for pentest windows: turn off → real attack surface visible → turn back on after."
+  type        = bool
+  default     = true
+}
+
 # --- managed rule groups ---------------------------------------------------
 
 variable "enable_common_rules" {

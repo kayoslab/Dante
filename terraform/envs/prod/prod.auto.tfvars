@@ -18,3 +18,11 @@
 
 github_repository = "your-org/dante"
 hosted_zone_id    = "Z0123456789ABCDEFGHIJ"
+
+# TEMPORARY — pentest window. Detaches the Web ACL from the public ALB
+# so the tester sees the raw application attack surface without WAF
+# filtering (managed rules, rate limits, geo all bypassed). The Web ACL
+# definition stays in place; this only toggles the association.
+#
+# REVERT TO `true` (or remove this line) as soon as the pentest is done.
+waf_enabled = false

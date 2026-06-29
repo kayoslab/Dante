@@ -154,6 +154,12 @@ variable "waf_alarm_emails" {
   default     = ["admin@example.com"]
 }
 
+variable "waf_enabled" {
+  description = "Whether the WAF is associated with the public ALB. Defaults to true. Set to false ONLY for pentest windows when an external tester needs to see the raw application attack surface without WAF filtering. The Web ACL definition stays in place so re-enabling is a one-line flip. Don't ship false to main long-term."
+  type        = bool
+  default     = true
+}
+
 # --- GitHub Actions ----------------------------------------------------
 
 variable "github_repository" {

@@ -736,6 +736,7 @@ module "waf" {
   environment = "prod"
   name_prefix = "dante"
   alb_arn     = module.alb.arn
+  enabled     = var.waf_enabled
 
   # Default managed groups (Common + KnownBad + IpReputation + SQLi) on.
   # AnonymousIp off — legitimate users sometimes route through VPNs;
