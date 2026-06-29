@@ -17,6 +17,7 @@ export { updateProjectOp } from "@/app/api/agent/projects/[id]/route";
 export { getProjectMonthlyOp } from "@/app/api/agent/projects/[id]/monthly/route";
 export { createAssignmentOp } from "@/app/api/agent/projects/[id]/assignments/route";
 export { updateAssignmentEndDateOp } from "@/app/api/agent/assignments/[id]/end-date/route";
+export { updateAssignmentStartDateOp } from "@/app/api/agent/assignments/[id]/start-date/route";
 export { listCustomersOp, createCustomerOp } from "@/app/api/agent/customers/route";
 export { matchCustomersOp } from "@/app/api/agent/customers/match/route";
 export { matchProjectsOp } from "@/app/api/agent/projects/match/route";

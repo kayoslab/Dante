@@ -223,6 +223,19 @@ export async function getAssignmentStartDate(
   return row ?? null;
 }
 
+/** Both endpoints of an assignment — needed for cross-validation when
+ * moving either date (new start must be ≤ existing end, new end must
+ * be ≥ existing start). */
+export async function getAssignmentDates(
+  assignment_id: number,
+): Promise<{ start_date: string | null; end_date: string | null } | null> {
+  const [row] = await db
+    .select({ start_date: assignment.start_date, end_date: assignment.end_date })
+    .from(assignment)
+    .where(eq(assignment.assignment_id, assignment_id));
+  return row ?? null;
+}
+
 /** End an assignment by writing `end_date` + bumping `updated_at`. */
 export async function setAssignmentEndDate(
   assignment_id: number,
@@ -231,6 +244,20 @@ export async function setAssignmentEndDate(
   await db
     .update(assignment)
     .set({ end_date, updated_at: new Date() })
+    .where(eq(assignment.assignment_id, assignment_id));
+}
+
+/** Move an assignment's start_date — typically a backdate to align with
+ * a PO whose start predates when the allocation was originally entered.
+ * The route enforces `start_date <= end_date` against the persisted
+ * end. */
+export async function setAssignmentStartDate(
+  assignment_id: number,
+  start_date: string,
+): Promise<void> {
+  await db
+    .update(assignment)
+    .set({ start_date, updated_at: new Date() })
     .where(eq(assignment.assignment_id, assignment_id));
 }
 

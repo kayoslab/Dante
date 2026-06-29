@@ -306,12 +306,15 @@ export async function computeEmployeeMonthly(
       absence_days: absent_active.length,
       billable_days: Number(billable_day_equivs.toFixed(2)),
       rate_unresolved_days,
+      assignment_start_date: a_start,
+      assignment_end_date: a_end,
       project_id,
       project_name,
       customer_name,
       billing_model: billing,
       revenue: fmt(revenue, 2),
       allocation_revenue: fmt(allocation_revenue, 2),
+      tracked_hours: ((tracked_by_project.get(project_id) ?? 0) / 60).toFixed(2),
     });
     total_revenue = total_revenue.add(revenue);
     total_allocation_revenue = total_allocation_revenue.add(allocation_revenue);

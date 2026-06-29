@@ -20,6 +20,27 @@ const QuerySchema = z.object({
     .openapi({ example: "2026-06" }),
 });
 
+const EmployeeMonthlyAssignmentSchema = z
+  .object({
+    assignment_id: z.number().int(),
+    project_id: z.number().int(),
+    project_name: z.string(),
+    customer_name: z.string(),
+    profile: z.string().nullable(),
+    allocation_pct: z.string(),
+    start_date: z.string().nullable(),
+    end_date: z.string().nullable(),
+    billing_model: z.enum(["fixed_price", "time_and_material"]),
+    tracked_hours: z.string().openapi({
+      description:
+        "Hours logged on this specific project in this month. Use to " +
+        "answer 'which projects did this employee work on in month X?'.",
+    }),
+    revenue: z.string(),
+    allocation_revenue: z.string(),
+  })
+  .openapi("AgentEmployeeMonthlyAssignment");
+
 const EmployeeMonthlySchema = z
   .object({
     employee_id: z.number().int(),
@@ -43,6 +64,13 @@ const EmployeeMonthlySchema = z
     tracked_utilization_pct: z.string().nullable(),
     fte: z.string(),
     under_contract: z.boolean(),
+    assignments: z.array(EmployeeMonthlyAssignmentSchema).openapi({
+      description:
+        "Per-project breakdown for every allocation this employee held " +
+        "during the month. Each row carries tracked hours on THAT " +
+        "specific project — answer 'which project did this person work " +
+        "on in month X?' without a follow-up call.",
+    }),
   })
   .openapi("AgentEmployeeMonthly");
 
@@ -98,6 +126,22 @@ export async function GET(
         (breakdown.tracked_utilization_pct as string | null) ?? null,
       fte: breakdown.fte as string,
       under_contract: Boolean(breakdown.under_contract),
+      assignments: (breakdown.assignments as Array<Record<string, unknown>>).map(
+        (a) => ({
+          assignment_id: a.assignment_id as number,
+          project_id: a.project_id as number,
+          project_name: a.project_name as string,
+          customer_name: a.customer_name as string,
+          profile: (a.profile as string | null) ?? null,
+          allocation_pct: a.allocation_pct as string,
+          start_date: (a.assignment_start_date as string | null) ?? null,
+          end_date: (a.assignment_end_date as string | null) ?? null,
+          billing_model: a.billing_model as "fixed_price" | "time_and_material",
+          tracked_hours: (a.tracked_hours as string | null) ?? "0.00",
+          revenue: a.revenue as string,
+          allocation_revenue: a.allocation_revenue as string,
+        }),
+      ),
     });
 
     await audit(ctx, {

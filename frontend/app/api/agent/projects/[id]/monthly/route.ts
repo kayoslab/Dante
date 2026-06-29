@@ -20,6 +20,30 @@ const QueryParamsSchema = z.object({
     .openapi({ example: "2026-06" }),
 });
 
+const ProjectMonthlyAssignmentSchema = z
+  .object({
+    assignment_id: z.number().int(),
+    kind: z.enum(["employee", "freelancer"]),
+    employee_id: z.number().int().nullable(),
+    freelancer_id: z.number().int().nullable(),
+    who_name: z.string().nullable(),
+    profile: z.string().nullable(),
+    allocation_pct: z.string(),
+    start_date: z.string().nullable(),
+    end_date: z.string().nullable(),
+    tracked_hours: z.string().nullable().openapi({
+      description:
+        "Hours this entity logged on THIS project in THIS month. Null " +
+        "for freelancers (no awork tracking — they bill via " +
+        "freelancer-hours instead). Use to answer 'who actually worked " +
+        "on this project in month X?'.",
+    }),
+    revenue: z.string().nullable(),
+    cost: z.string(),
+    margin: z.string().nullable(),
+  })
+  .openapi("AgentProjectMonthlyAssignment");
+
 const ProjectMonthlySchema = z
   .object({
     project_id: z.number().int(),
@@ -44,6 +68,13 @@ const ProjectMonthlySchema = z
     cumulative_margin: z.string().nullable(),
     tracked_hours: z.string(),
     has_personio_mapping: z.boolean(),
+    assignments: z.array(ProjectMonthlyAssignmentSchema).openapi({
+      description:
+        "Per-assignment breakdown for every allocation active during " +
+        "this month. Includes tracked hours per (employee, project) — " +
+        "answer 'which consultants worked on this project before " +
+        "<date>?' by walking the months backwards.",
+    }),
   })
   .openapi("AgentProjectMonthly");
 
@@ -101,6 +132,23 @@ export async function GET(
       cumulative_margin: (breakdown.cumulative_margin as string | null) ?? null,
       tracked_hours: breakdown.tracked_hours as string,
       has_personio_mapping: Boolean(breakdown.has_personio_mapping),
+      assignments: (breakdown.assignments as Array<Record<string, unknown>>).map(
+        (a) => ({
+          assignment_id: a.assignment_id as number,
+          kind: a.kind as "employee" | "freelancer",
+          employee_id: (a.employee_id as number | null) ?? null,
+          freelancer_id: (a.freelancer_id as number | null) ?? null,
+          who_name: (a.who_name as string | null) ?? null,
+          profile: (a.profile as string | null) ?? null,
+          allocation_pct: a.allocation_pct as string,
+          start_date: (a.assignment_start_date as string | null) ?? null,
+          end_date: (a.assignment_end_date as string | null) ?? null,
+          tracked_hours: (a.tracked_hours as string | null) ?? null,
+          revenue: (a.revenue as string | null) ?? null,
+          cost: a.cost as string,
+          margin: (a.margin as string | null) ?? null,
+        }),
+      ),
     });
 
     await audit(ctx, {
