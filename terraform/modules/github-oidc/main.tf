@@ -467,6 +467,33 @@ data "aws_iam_policy_document" "deploy" {
     }
   }
 
+  # WAFv2 ↔ ALB association lifecycle. `aws_wafv2_web_acl_association`
+  # calls `elasticloadbalancing:SetWebACL` on the ALB to attach or
+  # detach the Web ACL — the wafv2:* actions alone are not enough.
+  # Scoped to the explicit ALB ARNs in `alb_arns_waf_managed`; the
+  # wafv2 actions themselves don't accept resource-level scoping for
+  # AssociateWebACL/DisassociateWebACL per AWS IAM, so `*` is the
+  # canonical pattern there.
+  dynamic "statement" {
+    for_each = length(var.alb_arns_waf_managed) == 0 ? [] : [1]
+    content {
+      effect    = "Allow"
+      actions   = ["elasticloadbalancing:SetWebACL"]
+      resources = var.alb_arns_waf_managed
+    }
+  }
+  dynamic "statement" {
+    for_each = length(var.alb_arns_waf_managed) == 0 ? [] : [1]
+    content {
+      effect = "Allow"
+      actions = [
+        "wafv2:AssociateWebACL",
+        "wafv2:DisassociateWebACL",
+      ]
+      resources = ["*"]
+    }
+  }
+
   # Lambda — update sync Lambda's code from the rebuilt zip and let
   # terraform reconcile tags / config drift on every apply.
   dynamic "statement" {

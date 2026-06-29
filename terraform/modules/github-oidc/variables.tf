@@ -125,6 +125,12 @@ variable "terraform_state_lock_table_arn" {
   default     = null
 }
 
+variable "alb_arns_waf_managed" {
+  description = "ALB ARNs the deploy role can attach/detach WAFv2 Web ACLs from. Required so terraform can manage the `aws_wafv2_web_acl_association.alb` lifecycle from CI — the underlying API call needs `elasticloadbalancing:SetWebACL` on the ALB itself, not just `wafv2:*` on the Web ACL. Empty list = no WAF management from CI (must apply locally with admin creds)."
+  type        = list(string)
+  default     = []
+}
+
 variable "rds_db_instance_arns" {
   description = "RDS instance ARNs the deploy role may modify in-place. Currently scoped to the actions needed by the IAM-auth toggle (`rds:ModifyDBInstance`) and routine drift reconciliation (`rds:DescribeDBInstances`, `rds:ListTagsForResource`, `rds:AddTagsToResource`, `rds:RemoveTagsFromResource`). Destructive actions (DeleteDBInstance, RebootDBInstance, RestoreDBInstanceFromSnapshot) deliberately excluded — terraform doesn't need them in normal operation, and adding them via the deploy role would let a compromised CI token wipe the database."
   type        = list(string)

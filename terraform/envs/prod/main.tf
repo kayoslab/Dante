@@ -801,6 +801,11 @@ module "github_oidc" {
   # granted by the module — see the variable doc.
   rds_db_instance_arns = [module.rds.instance_arn]
 
+  # ALB — the deploy role needs `elasticloadbalancing:SetWebACL` so
+  # `aws_wafv2_web_acl_association` can attach / detach the public
+  # WAF Web ACL on the ALB. Scoped to the single prod ALB.
+  alb_arns_waf_managed = [module.alb.arn]
+
   # Bootstrap permissions for modules that materialize their own
   # IAM role + Lambda function + log group on first apply (currently
   # cognito-pretoken-lambda; future ones share the same prefix
