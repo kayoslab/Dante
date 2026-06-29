@@ -9,6 +9,8 @@ import {
   timestamp,
 } from "drizzle-orm/pg-core";
 
+import { project } from "./billing";
+
 // awork's "Companies" = customers in their model.
 export const aworkCompany = pgTable("awork_company", {
   awork_company_id: text().primaryKey(),
@@ -110,10 +112,14 @@ export const aworkTimeBooking = pgTable("awork_time_booking", {
 });
 
 // awork projects → our project table. PK on awork side: each awork project
-// maps to at most one of ours.
+// maps to at most one of ours. project_id cascades from project so deleting
+// a Dante project removes its awork link too (same gap as
+// `personio_project_link` — see that table's comment).
 export const aworkProjectLink = pgTable("awork_project_link", {
   awork_project_id: text().primaryKey(),
-  project_id: integer().notNull(),
+  project_id: integer()
+    .notNull()
+    .references(() => project.project_id, { onDelete: "cascade" }),
   mapped_at: timestamp({ mode: "date" }).notNull(),
 });
 

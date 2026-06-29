@@ -120,6 +120,13 @@
       "when": 1782259200000,
       "tag": "0016_seed_burden_factor",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1782345600000,
+      "tag": "0017_link_tables_cascade_project",
+      "breakpoints": true
     }
   ]
 }

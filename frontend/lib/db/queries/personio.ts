@@ -25,11 +25,18 @@ export async function listPersonioProjects(opts: {
   mapped: boolean | null;
   q: string | null;
 }): Promise<PersonioProjectListItem[]> {
+  // "mapped" means "currently linked to an existing Dante project", not
+  // "a link row exists". The schema-level ON DELETE CASCADE (migration
+  // 0017) makes the two equivalent under normal operation, but treating
+  // the join through `project` defensively means a deploy-window race
+  // (old container hits the DB before the migration lands) or an
+  // operator who manually deletes a project row without cascade still
+  // self-heals on the picker side.
   const conditions = [sql`1=1`];
   if (opts.mapped === true) {
-    conditions.push(sql`link.personio_project_id IS NOT NULL`);
+    conditions.push(sql`link.personio_project_id IS NOT NULL AND p.project_id IS NOT NULL`);
   } else if (opts.mapped === false) {
-    conditions.push(sql`link.personio_project_id IS NULL`);
+    conditions.push(sql`link.personio_project_id IS NULL OR p.project_id IS NULL`);
   }
   if (opts.q) {
     const like = `%${opts.q}%`;

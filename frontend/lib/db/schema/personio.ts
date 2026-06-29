@@ -9,6 +9,8 @@ import {
   timestamp,
 } from "drizzle-orm/pg-core";
 
+import { project } from "./billing";
+
 // Time-off / absence records from Personio /company/time-offs. Sync replaces
 // rows within the synced date window (no soft delete).
 export const absence = pgTable("absence", {
@@ -51,8 +53,17 @@ export const personioProject = pgTable("personio_project", {
 
 // Mapping: each Personio project maps to at most one of our internal projects.
 // Unmapped Personio projects are treated as "internal time".
+//
+// project_id cascades from project — when a Dante project is deleted, its
+// Personio link row goes with it. Without the cascade, deleting a project
+// orphans the link: `personio_project_link.project_id` points at a now-
+// missing project row, the picker on `/projects/<id>` still treats the
+// Personio project as "mapped", and you can't link it to a new Dante
+// project without manually cleaning the orphan.
 export const personioProjectLink = pgTable("personio_project_link", {
   personio_project_id: integer().primaryKey(),
-  project_id: integer().notNull(),
+  project_id: integer()
+    .notNull()
+    .references(() => project.project_id, { onDelete: "cascade" }),
   mapped_at: timestamp({ mode: "date" }).notNull(),
 });
