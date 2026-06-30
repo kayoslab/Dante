@@ -47,8 +47,47 @@ const EmployeeMonthlySchema = z
     who_name: z.string(),
     month: z.string(),
     monthly_cost_full: z.string().nullable().openapi({
-      description: "Loaded payroll cost for the month (incl. burden).",
+      description:
+        "Loaded payroll cost for the month (incl. burden). Null can mean " +
+        "two distinct things — see `monthly_cost_basis` to disambiguate.",
     }),
+    monthly_cost_basis: z.string().openapi({
+      description:
+        "Human-readable provenance of the cost figure, e.g. " +
+        "`fix_salary 67020/yr × burden ×1.3 (as-of 2026-06-01)`, " +
+        "`no salary on file (as-of 2026-06-01)`, " +
+        "`not under contract (hired 2025-07-01)`, or " +
+        "`prorated to 12/22 workdays under contract`. Use this when " +
+        "`monthly_cost_full` is null to explain WHY to the user.",
+    }),
+    salary: z
+      .object({
+        fix_salary_eur: z.number().nullable().openapi({
+          description: "Gross fixed salary at the asof_amount (NOT loaded).",
+        }),
+        fix_salary_interval: z.enum(["yearly", "monthly"]).nullable(),
+        hourly_salary_eur: z.number().nullable(),
+        weekly_working_hours: z.number().nullable(),
+        source: z.enum([
+          "compensation_event",
+          "employee_current",
+          "none",
+        ]).openapi({
+          description:
+            "Where these numbers came from. `compensation_event` = a " +
+            "Personio comp event at-or-before this month. " +
+            "`employee_current` = legacy column fallback when no event " +
+            "exists. `none` = no salary data on file (typical for " +
+            "Personio `employment_type: external` rows).",
+        }),
+      })
+      .nullable()
+      .openapi({
+        description:
+          "Raw resolved salary inputs (before burden, before proration). " +
+          "Null for freelancers and for under-contract == false months. " +
+          "Manager+ scope already required for the whole endpoint.",
+      }),
     revenue: z.string().openapi({
       description:
         "Billable revenue — T&M tracked × rate plus the employee's " +
@@ -117,6 +156,27 @@ export async function GET(
       who_name: String(breakdown.who_name ?? ""),
       month: breakdown.month,
       monthly_cost_full: (breakdown.monthly_cost_full as string | null) ?? null,
+      monthly_cost_basis: (breakdown.monthly_cost_basis as string) ?? "",
+      salary: (() => {
+        const rs = breakdown.resolved_salary as {
+          fix: number | null;
+          interval: string | null;
+          hourly: number | null;
+          weekly_working_hours: number | null;
+          source: "compensation_event" | "employee_current" | "none";
+        } | null;
+        if (!rs) return null;
+        const interval = rs.interval === "yearly" || rs.interval === "monthly"
+          ? rs.interval
+          : null;
+        return {
+          fix_salary_eur: rs.fix,
+          fix_salary_interval: interval,
+          hourly_salary_eur: rs.hourly,
+          weekly_working_hours: rs.weekly_working_hours,
+          source: rs.source,
+        };
+      })(),
       revenue: breakdown.revenue as string,
       allocation_revenue: breakdown.allocation_revenue as string,
       margin: breakdown.margin as string,

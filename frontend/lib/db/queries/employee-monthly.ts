@@ -116,6 +116,9 @@ export async function computeEmployeeMonthly(
       under_contract: false,
       hire_date,
       employment_end_date: end_date,
+      // resolved_salary deliberately null here — the question was about
+      // whether the row was contractually relevant, not what they earn.
+      resolved_salary: null,
     };
   }
 
@@ -123,6 +126,7 @@ export async function computeEmployeeMonthly(
     monthly_cost: monthly_cost_full,
     basis: cost_basis,
     standard_daily_hours,
+    resolved_salary,
   } = await entityMonthlyCost(employee_id, null, null, burden, month_start);
 
   const contract_clipped_start =
@@ -373,5 +377,6 @@ export async function computeEmployeeMonthly(
     under_contract: true,
     hire_date,
     employment_end_date: end_date,
+    resolved_salary,
   };
 }

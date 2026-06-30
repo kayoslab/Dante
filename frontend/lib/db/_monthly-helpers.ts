@@ -160,6 +160,21 @@ export type EntityCost = {
    * convert monthly_cost → per-hour rate so part-timers get the right
    * hourly basis instead of the hardcoded 8h/day. */
   standard_daily_hours: number;
+  /** Resolved salary inputs after the as-of fallback (see
+   * `_salary-resolve.ts`). Surfaced for agent endpoints that want to
+   * show raw salary alongside the burdened cost — callers that don't
+   * need it can ignore. `null` everywhere for freelancers. */
+  resolved_salary: {
+    fix: number | null;
+    interval: string | null;
+    hourly: number | null;
+    weekly_working_hours: number | null;
+    /** Which source the fields came from: 'compensation_event' when an
+     * as-of event was found, 'employee_current' when the legacy column
+     * was the fallback, 'none' when neither yielded a positive salary
+     * (matches `basis === "no salary on file …"`). */
+    source: "compensation_event" | "employee_current" | "none";
+  } | null;
 };
 
 export async function entityMonthlyCost(
@@ -226,6 +241,7 @@ export async function entityMonthlyCost(
         basis: "unknown employee",
         who_name: null,
         standard_daily_hours: 8,
+        resolved_salary: null,
       };
     }
     const fn = row.first_name as string | null;
@@ -235,6 +251,17 @@ export async function entityMonthlyCost(
     const { fix, interval, hourly, wkh, asofUsed } = resolveSalaryFromRow(
       row as unknown as import("./_salary-resolve").SalaryRow,
     );
+    const resolved_salary = {
+      fix,
+      interval,
+      hourly,
+      weekly_working_hours: wkh,
+      source: (asofUsed
+        ? "compensation_event"
+        : ((fix !== null && fix > 0) || (hourly !== null && hourly > 0))
+          ? "employee_current"
+          : "none") as "compensation_event" | "employee_current" | "none",
+    };
     // 5-day work week assumption matches the workingDaysInRange helper.
     const standard_daily_hours = wkh !== null && wkh > 0 ? wkh / 5 : 8;
     const asofTag = asofUsed
@@ -249,6 +276,7 @@ export async function entityMonthlyCost(
         basis: `fix_salary ${fix.toFixed(0)}/yr × burden ×${burden}${asofTag}`,
         who_name: who,
         standard_daily_hours,
+        resolved_salary,
       };
     }
     if (fix !== null && fix > 0 && interval === "monthly") {
@@ -257,6 +285,7 @@ export async function entityMonthlyCost(
         basis: `fix_salary ${fix.toFixed(0)}/mo × burden ×${burden}${asofTag}`,
         who_name: who,
         standard_daily_hours,
+        resolved_salary,
       };
     }
     if (hourly !== null && hourly > 0 && wkh !== null && wkh > 0) {
@@ -266,6 +295,7 @@ export async function entityMonthlyCost(
         basis: `hourly ${hourly.toFixed(2)} × ${wkh}h × 52/12 × burden ×${burden}${asofTag}`,
         who_name: who,
         standard_daily_hours,
+        resolved_salary,
       };
     }
     return {
@@ -273,6 +303,7 @@ export async function entityMonthlyCost(
       basis: `no salary on file${asofTag}`,
       who_name: who,
       standard_daily_hours,
+      resolved_salary,
     };
   }
 
@@ -283,6 +314,7 @@ export async function entityMonthlyCost(
       basis: "no entity",
       who_name: null,
       standard_daily_hours: 8,
+      resolved_salary: null,
     };
   }
   const r = await db.execute(sql`
@@ -295,6 +327,7 @@ export async function entityMonthlyCost(
       basis: "unknown freelancer",
       who_name: null,
       standard_daily_hours: 8,
+      resolved_salary: null,
     };
   }
   const used = daily_cost_override ?? new Decimal(row.daily_cost_eur as string);
@@ -303,6 +336,7 @@ export async function entityMonthlyCost(
     basis: `daily ${used}/d × 20 (no burden)`,
     who_name: row.name as string,
     standard_daily_hours: 8,
+    resolved_salary: null,
   };
 }
 
