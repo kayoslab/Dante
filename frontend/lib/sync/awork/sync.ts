@@ -507,7 +507,15 @@ export async function rollupAworkPlanningsToAssignments(
         has_employee ? r.employee_id : null,
         has_employee ? null : r.freelancer_id,
         r.project_id,
-        null,
+        // Set profile = 'default' rather than NULL. awork doesn't have a
+        // role-tier concept on its bookings, but every Dante rate sheet
+        // currently entered for an awork-linked project uses the single
+        // 'default' profile name — leaving NULL forces the rate resolver
+        // to fall through to the employee's role_tier (junior / senior /
+        // advanced), which doesn't match 'default' and revenue resolves
+        // to 0 even with tracked time + a rate. Setting 'default' here
+        // makes synced rows match the rate sheet by construction.
+        "default",
         alloc.toFixed(4),
         r.start_date,
         r.end_date,
