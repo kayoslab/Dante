@@ -115,6 +115,7 @@ variable "agent_scopes" {
     { name = "write:projects", description = "Create projects (T&M or Fixed-Price) and their rate cards. Manager-only; gated by HITL in the agent UI." },
     { name = "write:allocations", description = "Create new project allocations and extend existing end dates. Manager-only; gated by HITL in the agent UI." },
     { name = "write:time_tracking", description = "Upsert monthly freelancer hours from bills or time sheets. Manager-only; gated by HITL in the agent UI." },
+    { name = "write:freelancers", description = "Create + update freelancer roster entries (name + daily cost). Manager-only; gated by HITL in the agent UI." },
   ]
 }
 
