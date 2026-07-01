@@ -101,7 +101,11 @@ export async function POST(req: NextRequest) {
       assignment_id: input.assignment_id,
       year_month: input.year_month,
       hours_decimal: input.hours_decimal,
-      entered_by: ctx.cognito_sub,
+      // Dante-side user_id, NOT the Cognito sub. entered_by is an FK to
+      // app_user(user_id); passing cognito_sub violates the constraint
+      // and the route 500s. Matches upsertFreelancerHoursAction on the
+      // web (auth.ctx.user_id).
+      entered_by: ctx.user_id,
     });
 
     const body = upsertFreelancerHoursOp.response.parse({
