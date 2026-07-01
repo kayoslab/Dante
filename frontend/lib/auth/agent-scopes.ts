@@ -52,7 +52,8 @@ export type AgentScope =
   | "write:frameworks"
   | "write:projects"
   | "write:allocations"
-  | "write:time_tracking";
+  | "write:time_tracking"
+  | "write:freelancers";
 
 type ScopeDef = {
   /** Concise label shown next to the checkbox in /profile/agents. */
@@ -164,6 +165,14 @@ export const AGENT_SCOPES: Record<AgentScope, ScopeDef> = {
       "Upsert monthly hours for a freelancer assignment. Manual " +
       "entries override the awork sync for the same month. Same role " +
       "gate as `upsertFreelancerHoursAction` on the web.",
+    min_role: "manager",
+  },
+  "write:freelancers": {
+    label: "Create + update freelancers",
+    description:
+      "Create new freelancers (name + daily cost) and update fields on " +
+      "existing ones. Same role gate as `createFreelancerAction` / " +
+      "`updateFreelancerAction` on the web.",
     min_role: "manager",
   },
 };

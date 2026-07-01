@@ -22,6 +22,8 @@ export { listCustomersOp, createCustomerOp } from "@/app/api/agent/customers/rou
 export { matchCustomersOp } from "@/app/api/agent/customers/match/route";
 export { matchProjectsOp } from "@/app/api/agent/projects/match/route";
 export { matchFreelancersOp } from "@/app/api/agent/freelancers/match/route";
+export { createFreelancerOp } from "@/app/api/agent/freelancers/route";
+export { updateFreelancerOp } from "@/app/api/agent/freelancers/[id]/route";
 export { createFrameworkOp } from "@/app/api/agent/frameworks/route";
 export { upsertFreelancerHoursOp } from "@/app/api/agent/freelancer-hours/route";
 export { getPortfolioRentabilityOp } from "@/app/api/agent/reports/portfolio-rentability/route";

@@ -51,6 +51,7 @@ const GROUP_SCOPE_ALLOWLIST: Record<string, ReadonlySet<string>> = {
     "write:projects",
     "write:allocations",
     "write:time_tracking",
+    "write:freelancers",
   ]),
   manager: new Set([
     "read:projects",
@@ -63,6 +64,7 @@ const GROUP_SCOPE_ALLOWLIST: Record<string, ReadonlySet<string>> = {
     "write:projects",
     "write:allocations",
     "write:time_tracking",
+    "write:freelancers",
   ]),
   employee: new Set([
     "read:projects",
