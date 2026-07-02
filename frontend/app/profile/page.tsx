@@ -7,7 +7,8 @@ import { listMyAssignments } from "@/lib/db/queries/assignment";
 import { getEmployeeDetail } from "@/lib/db/queries/employee";
 import { hasRole, requireSession } from "@/lib/auth/session";
 import { hasCognitoSession } from "@/lib/auth/cognito-tokens";
-import { getTotpEnabled } from "@/lib/auth/cognito-self-service";
+import { getTotpEnabled, listPasskeys } from "@/lib/auth/cognito-self-service";
+import type { PasskeyRow } from "@/components/profile/security-card";
 
 export const metadata = { title: "Profile — Dante" };
 
@@ -63,9 +64,18 @@ export default async function ProfilePage() {
 
   const canLinkProjects = hasRole(ctx, "manager");
 
-  let securityProps: { initialTotpEnabled: boolean } | null = null;
+  let securityProps: {
+    initialTotpEnabled: boolean;
+    initialPasskeys: PasskeyRow[];
+  } | null = null;
   if (await hasCognitoSession()) {
-    securityProps = { initialTotpEnabled: await getTotpEnabled() };
+    // Both calls hit Cognito with the user's own access token; run them
+    // together so the profile render isn't two sequential round-trips.
+    const [initialTotpEnabled, initialPasskeys] = await Promise.all([
+      getTotpEnabled(),
+      listPasskeys(),
+    ]);
+    securityProps = { initialTotpEnabled, initialPasskeys };
   }
 
   return (
@@ -112,7 +122,10 @@ export default async function ProfilePage() {
       </Card>
 
       {securityProps && (
-        <SecurityCard initialTotpEnabled={securityProps.initialTotpEnabled} />
+        <SecurityCard
+          initialTotpEnabled={securityProps.initialTotpEnabled}
+          initialPasskeys={securityProps.initialPasskeys}
+        />
       )}
 
       <Card>

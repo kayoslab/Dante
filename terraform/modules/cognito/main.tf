@@ -64,15 +64,41 @@ resource "aws_cognito_user_pool" "this" {
     temporary_password_validity_days = 7
   }
 
+  # First-auth factors. PASSWORD is always allowed; WEB_AUTHN is added
+  # when passkeys are enabled so Managed Login's choice-based (USER_AUTH)
+  # flow can offer "Sign in with a passkey" as a passwordless,
+  # phishing-resistant alternative to password + TOTP.
   sign_in_policy {
-    allowed_first_auth_factors = ["PASSWORD"]
+    allowed_first_auth_factors = var.web_authn_enabled ? ["PASSWORD", "WEB_AUTHN"] : ["PASSWORD"]
+  }
+
+  # WebAuthn / passkey relying-party config. Only present when passkeys
+  # are enabled. The rpId must be a registrable suffix of both the app
+  # origin and the Managed Login origin (see the variable doc) so one
+  # passkey works in the in-app /profile ceremony AND at sign-in.
+  dynamic "web_authn_configuration" {
+    for_each = var.web_authn_enabled ? [1] : []
+    content {
+      relying_party_id  = var.web_authn_relying_party_id
+      user_verification = var.web_authn_user_verification
+    }
   }
 
   # MFA is mandatory for every user (migration 0011 dropped the per-user
   # `mfa_required` flag — the in-app gate became universal, and then
-  # delegated to Cognito's native flow). The hosted UI walks new users
-  # through TOTP enrollment at first sign-in; subsequent sign-ins
-  # prompt for the TOTP code.
+  # delegated to Cognito's native flow). Managed Login walks new users
+  # through TOTP enrollment at first sign-in; subsequent password
+  # sign-ins prompt for the TOTP code.
+  #
+  # Passkeys don't change this: `mfa_configuration = "ON"` governs the
+  # PASSWORD sign-in path (password + a second factor). A passkey is a
+  # separate passwordless first factor that bypasses that path entirely
+  # and is phishing-resistant on its own, so a user who signs in with a
+  # passkey never sees the TOTP prompt. Keeping mfa ON means a user who
+  # still uses their PASSWORD must keep a TOTP factor — passkeys are
+  # additive, not a way to drop MFA on the password path. (Making the
+  # pool fully passwordless would be `mfa_configuration = "OPTIONAL"`;
+  # deliberately not done here — see the PR discussion.)
   mfa_configuration = "ON"
 
   software_token_mfa_configuration {
@@ -317,10 +343,20 @@ resource "aws_cognito_user_pool_client" "app" {
 
   # Auth flow restrictions: disable username/password from the app client.
   # All sign-ins go through the OIDC code flow (Auth.js handles it).
-  explicit_auth_flows = [
-    "ALLOW_USER_SRP_AUTH",      # used by Cognito's own UI / SRP-aware clients
-    "ALLOW_REFRESH_TOKEN_AUTH", # required for refresh
-  ]
+  #
+  # ALLOW_USER_AUTH enables Cognito's choice-based auth flow (USER_AUTH),
+  # which is the prerequisite for passkey sign-in through Managed Login
+  # AND for the in-app /profile passkey-registration ceremony
+  # (Start/CompleteWebAuthnRegistration are only accepted for clients
+  # that permit USER_AUTH). Added only when passkeys are enabled so the
+  # auth surface doesn't widen otherwise.
+  explicit_auth_flows = concat(
+    [
+      "ALLOW_USER_SRP_AUTH",      # used by Cognito's own UI / SRP-aware clients
+      "ALLOW_REFRESH_TOKEN_AUTH", # required for refresh
+    ],
+    var.web_authn_enabled ? ["ALLOW_USER_AUTH"] : [],
+  )
 
   prevent_user_existence_errors = "ENABLED" # don't leak whether an email exists
 

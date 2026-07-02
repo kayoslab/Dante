@@ -80,6 +80,27 @@ app-side gate, no app-side state to track. The retired in-app TOTP
 layer (migration 0012 dropped `mfa_secret` + `mfa_enrolled_at`) lived
 in commits prior to the Cognito switch.
 
+**Passkeys (WebAuthn)** — gated behind `web_authn_enabled` on the
+cognito module (on in prod). Cognito models passkeys as a **passwordless
+first factor** in the choice-based `USER_AUTH` flow, NOT as a second
+factor — its MFA options are only TOTP / SMS / email OTP, so there is no
+"password then passkey" config. A passkey therefore *replaces* the whole
+password+TOTP path in one phishing-resistant tap; TOTP stays as the
+fallback for the password path. Managed Login v2 renders passkey sign-in
++ first-time-setup natively. Users also manage passkeys in `/profile`
+(add / list / remove) via the Cognito WebAuthn SDK
+(`Start`/`Complete`/`List`/`DeleteWebAuthnCredential`) with their own
+access token — the ceremony runs against the app origin and binds to the
+pool's `relying_party_id` (`dante.example.com`, the shared registrable
+parent of the app + Managed Login origins).
+
+`mfa_configuration` stays `ON`, so a user who still signs in with a
+PASSWORD is required to keep a TOTP factor — passkeys are additive.
+Making the pool fully passwordless (a passkey user dropping TOTP
+entirely) would mean `mfa_configuration = "OPTIONAL"` plus an app-side
+"≥1 strong factor" gate to preserve the H-001 "MFA mandatory" control;
+deliberately deferred (see the passkey PR).
+
 **Reset (lost device)**: handled in the AWS console or via
 `aws cognito-idp admin-set-user-mfa-preference --user-pool-id <id>
 --username <email> --software-token-mfa-settings Enabled=false`

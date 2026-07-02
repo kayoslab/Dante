@@ -74,6 +74,28 @@ variable "ses_reply_to_email_address" {
   default     = null
 }
 
+variable "web_authn_enabled" {
+  description = "Enable WebAuthn / passkeys as a first-auth factor. When true, the pool publishes a WebAuthn relying-party config and adds WEB_AUTHN to the allowed first-auth factors, and the app client gets ALLOW_USER_AUTH so Managed Login can offer passkey sign-in. Passkeys are a passwordless, phishing-resistant factor — they satisfy the assurance requirement on their own; TOTP stays as the fallback second factor for password sign-ins. Requires Managed Login v2 (already on this pool)."
+  type        = bool
+  default     = false
+}
+
+variable "web_authn_relying_party_id" {
+  description = "WebAuthn Relying Party ID (rpId) the pool binds passkeys to. MUST be a registrable suffix of BOTH the app origin and the Managed Login origin so a passkey works in the in-app /profile registration ceremony AND at Managed Login sign-in. For prod the app is `dante.example.com` and Managed Login is `auth.dante.example.com`, so the rpId is `dante.example.com` (the shared registrable parent). Dev uses `localhost` (a WebAuthn-privileged origin). Ignored when web_authn_enabled is false."
+  type        = string
+  default     = null
+}
+
+variable "web_authn_user_verification" {
+  description = "WebAuthn user-verification policy: `required` (device must verify the user via biometric / PIN every ceremony) or `preferred` (verify when the authenticator supports it, don't hard-fail otherwise). `preferred` maximizes device compatibility; `required` is stricter. Ignored when web_authn_enabled is false."
+  type        = string
+  default     = "preferred"
+  validation {
+    condition     = contains(["required", "preferred"], var.web_authn_user_verification)
+    error_message = "web_authn_user_verification must be `required` or `preferred`."
+  }
+}
+
 variable "advanced_security_mode" {
   description = "Cognito Threat Protection (formerly Advanced Security): adaptive auth, IP-based throttling, compromised-credentials detection. Choices: OFF, AUDIT (log risk events only), ENFORCED (block / step-up on risky sign-ins). Requires `user_pool_tier = PLUS`. ENFORCED is the right default for prod; AUDIT for staging when tuning."
   type        = string
