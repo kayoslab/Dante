@@ -10,7 +10,12 @@
 # Target arm64 to match the ECS Fargate task arch (cheaper than x86_64
 # at the same RAM/CPU and good enough for Next.js workloads).
 #
-# Build with:
+# The target platform is set at BUILD time via buildx `--platform`
+# (CI passes `platforms: linux/arm64` to docker/build-push-action), NOT
+# hardcoded on the FROM lines — pinning `--platform` in FROM trips
+# hadolint DL3029 and forces emulation for anyone doing a plain
+# `docker build`. Always build through buildx:
+#
 #   docker buildx build --platform linux/arm64 -t <ecr_url>:<sha> --load .
 # Push with:
 #   docker push <ecr_url>:<sha>
@@ -19,7 +24,7 @@ ARG NODE_VERSION=22-alpine
 
 # --- deps ---------------------------------------------------------------
 
-FROM --platform=linux/arm64 node:${NODE_VERSION} AS deps
+FROM node:${NODE_VERSION} AS deps
 WORKDIR /app
 
 # Copy only manifests so changes to source don't bust the npm-install cache.
@@ -30,7 +35,7 @@ RUN --mount=type=cache,target=/root/.npm \
 
 # --- build --------------------------------------------------------------
 
-FROM --platform=linux/arm64 node:${NODE_VERSION} AS build
+FROM node:${NODE_VERSION} AS build
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
@@ -56,7 +61,7 @@ RUN npm run build && npm run build:migrate
 
 # --- runner -------------------------------------------------------------
 
-FROM --platform=linux/arm64 node:${NODE_VERSION} AS runner
+FROM node:${NODE_VERSION} AS runner
 WORKDIR /app
 
 # wget is in alpine-base — used by the ECS task definition's container
