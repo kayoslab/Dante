@@ -439,6 +439,14 @@ data "aws_iam_policy_document" "deploy" {
         "cognito-idp:DeleteUserPoolClient",
         "cognito-idp:UpdateUserPool",
         "cognito-idp:DescribeUserPool",
+        # WebAuthn / passkey relying-party config is applied through the
+        # MFA-config API, not UpdateUserPool — the `web_authn_configuration`
+        # block on `aws_cognito_user_pool` maps to Set/GetUserPoolMfaConfig.
+        # Without these two, a CI apply that toggles passkeys (or any other
+        # MFA-config change) fails with AccessDenied even though
+        # UpdateUserPool is present.
+        "cognito-idp:SetUserPoolMfaConfig",
+        "cognito-idp:GetUserPoolMfaConfig",
       ]
       resources = var.cognito_user_pool_arns
     }
