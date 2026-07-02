@@ -125,6 +125,16 @@ module "cognito" {
   custom_domain_name     = "auth.${var.domain}"
   custom_domain_cert_arn = aws_acm_certificate_validation.cognito_custom.certificate_arn
 
+  # Passkeys / WebAuthn. rpId is the shared registrable parent of the
+  # app origin (`dante.example.com`) and Managed Login
+  # (`auth.dante.example.com`) — i.e. `var.domain` itself — so a
+  # passkey enrolled from /profile also works at Managed Login sign-in.
+  # Managed Login v2 (already on this pool) renders the passkey sign-in
+  # + first-time-setup prompts natively; TOTP stays as the password-
+  # path fallback (see mfa_configuration note in the module).
+  web_authn_enabled          = true
+  web_authn_relying_party_id = var.domain
+
   # SES sender. Without this Cognito falls back to its default sender
   # (`no-reply@verificationemail.com`), which is rate-limited to ~50/day
   # and routinely spam-filtered by corporate inboxes — invite + reset

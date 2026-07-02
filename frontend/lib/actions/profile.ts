@@ -15,7 +15,11 @@ import { z } from "zod";
 import { audit } from "@/lib/auth/audit";
 import {
   changePassword,
+  completePasskeyRegistration,
+  deletePasskey,
+  listPasskeys,
   setTotpPreference,
+  startPasskeyRegistration,
   startTotpEnrollment,
   verifyTotpEnrollment,
 } from "@/lib/auth/cognito-self-service";
@@ -151,5 +155,88 @@ export async function confirmTotpEnrollmentAction(
     target_id: ctx.user_id,
   });
   return ok(null);
+}
+
+// ---------------------------------------------------------------------------
+// Passkeys (WebAuthn)
+// ---------------------------------------------------------------------------
+
+/** Step 1 — mint CredentialCreationOptions for the browser ceremony.
+ * The options are opaque JSON from Cognito; the client decodes the
+ * base64url binary fields before calling navigator.credentials.create. */
+export async function startPasskeyEnrollmentAction(): Promise<
+  ActionResult<{ options: unknown }>
+> {
+  await requireSession();
+  try {
+    const options = await startPasskeyRegistration();
+    return ok({ options });
+  } catch (e) {
+    return mapCognitoError(e);
+  }
+}
+
+// The completed credential is arbitrary WebAuthn JSON — we don't
+// re-validate its shape (Cognito is the authority and rejects a
+// malformed attestation). We only assert it's a non-null object so a
+// obviously-broken client payload fails fast with a clean message.
+const CompletePasskeySchema = z.object({
+  credential: z.record(z.string(), z.unknown()),
+});
+
+export async function completePasskeyEnrollmentAction(
+  input: unknown,
+): Promise<ActionResult<null>> {
+  const ctx = await requireSession();
+  const parsed = CompletePasskeySchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+  try {
+    await completePasskeyRegistration(parsed.data.credential);
+  } catch (e) {
+    return mapCognitoError(e);
+  }
+  await audit(ctx, {
+    action: "self_passkey_registered",
+    target_type: "user",
+    target_id: ctx.user_id,
+  });
+  return ok(null);
+}
+
+const DeletePasskeySchema = z.object({
+  credential_id: z.string().min(1),
+});
+
+export async function deletePasskeyAction(
+  input: unknown,
+): Promise<ActionResult<null>> {
+  const ctx = await requireSession();
+  const parsed = DeletePasskeySchema.safeParse(input);
+  if (!parsed.success) return fromZod(parsed.error);
+  try {
+    await deletePasskey(parsed.data.credential_id);
+  } catch (e) {
+    return mapCognitoError(e);
+  }
+  await audit(ctx, {
+    action: "self_passkey_deleted",
+    target_type: "user",
+    target_id: ctx.user_id,
+  });
+  return ok(null);
+}
+
+/** Re-list passkeys after a mutation so the client can refresh without a
+ * full page reload. */
+export async function listPasskeysAction(): Promise<
+  ActionResult<{ passkeys: Awaited<ReturnType<typeof listPasskeys>> }>
+> {
+  await requireSession();
+  try {
+    const passkeys = await listPasskeys();
+    return ok({ passkeys });
+  } catch (e) {
+    return mapCognitoError(e);
+  }
 }
 
