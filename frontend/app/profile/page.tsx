@@ -64,18 +64,28 @@ export default async function ProfilePage() {
 
   const canLinkProjects = hasRole(ctx, "manager");
 
+  // Passkeys stay behind a flag until the pool is actually configured for
+  // WebAuthn (which needs mfa_configuration = OPTIONAL + the app-side
+  // strong-factor gate — see the follow-up). With the flag off we don't
+  // render the passkey UI or call ListWebAuthnCredentials (which errors
+  // when the pool has no WebAuthn relying-party config).
+  const passkeysEnabled = process.env.DANTE_PASSKEYS_ENABLED === "true";
+
   let securityProps: {
     initialTotpEnabled: boolean;
     initialPasskeys: PasskeyRow[];
+    passkeysEnabled: boolean;
   } | null = null;
   if (await hasCognitoSession()) {
     // Both calls hit Cognito with the user's own access token; run them
     // together so the profile render isn't two sequential round-trips.
     const [initialTotpEnabled, initialPasskeys] = await Promise.all([
       getTotpEnabled(),
-      listPasskeys(),
+      passkeysEnabled
+        ? listPasskeys()
+        : Promise.resolve([] as PasskeyRow[]),
     ]);
-    securityProps = { initialTotpEnabled, initialPasskeys };
+    securityProps = { initialTotpEnabled, initialPasskeys, passkeysEnabled };
   }
 
   return (
@@ -125,6 +135,7 @@ export default async function ProfilePage() {
         <SecurityCard
           initialTotpEnabled={securityProps.initialTotpEnabled}
           initialPasskeys={securityProps.initialPasskeys}
+          passkeysEnabled={securityProps.passkeysEnabled}
         />
       )}
 

@@ -29,9 +29,11 @@ export type PasskeyRow = {
 export function SecurityCard({
   initialTotpEnabled,
   initialPasskeys,
+  passkeysEnabled,
 }: {
   initialTotpEnabled: boolean;
   initialPasskeys: PasskeyRow[];
+  passkeysEnabled: boolean;
 }) {
   return (
     <Card>
@@ -43,7 +45,9 @@ export function SecurityCard({
       </CardHeader>
       <CardContent className="space-y-8">
         <PasswordSection />
-        <PasskeySection initialPasskeys={initialPasskeys} />
+        {passkeysEnabled && (
+          <PasskeySection initialPasskeys={initialPasskeys} />
+        )}
         <TotpSection initialEnabled={initialTotpEnabled} />
       </CardContent>
     </Card>

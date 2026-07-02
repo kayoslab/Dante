@@ -125,14 +125,22 @@ module "cognito" {
   custom_domain_name     = "auth.${var.domain}"
   custom_domain_cert_arn = aws_acm_certificate_validation.cognito_custom.certificate_arn
 
-  # Passkeys / WebAuthn. rpId is the shared registrable parent of the
-  # app origin (`dante.example.com`) and Managed Login
-  # (`auth.dante.example.com`) — i.e. `var.domain` itself — so a
-  # passkey enrolled from /profile also works at Managed Login sign-in.
-  # Managed Login v2 (already on this pool) renders the passkey sign-in
-  # + first-time-setup prompts natively; TOTP stays as the password-
-  # path fallback (see mfa_configuration note in the module).
-  web_authn_enabled          = true
+  # Passkeys / WebAuthn — TEMPORARILY OFF.
+  #
+  # Enabling WEB_AUTHN as a first-auth factor requires
+  # `mfa_configuration = "OPTIONAL"` — Cognito hard-refuses WEB_AUTHN as
+  # a first factor while MFA is "ON" (a passwordless passkey completes
+  # with no second factor, which contradicts "MFA always required":
+  # `InvalidParameterException: WEB_AUTHN cannot be used as an auth
+  # factor when MFA is enabled`). Flipping to OPTIONAL removes Cognito's
+  # blanket MFA enforcement, so it must land together with an app-side
+  # "every user has a passkey OR TOTP" gate to preserve the H-001
+  # control. That's built on the follow-up branch; until it merges this
+  # stays false so `main` deploys cleanly and prod keeps mandatory MFA.
+  #
+  # rpId (kept for when it flips back on): the shared registrable parent
+  # of the app origin and Managed Login — `var.domain` itself.
+  web_authn_enabled          = false
   web_authn_relying_party_id = var.domain
 
   # SES sender. Without this Cognito falls back to its default sender
