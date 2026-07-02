@@ -94,12 +94,29 @@ access token — the ceremony runs against the app origin and binds to the
 pool's `relying_party_id` (`dante.example.com`, the shared registrable
 parent of the app + Managed Login origins).
 
-`mfa_configuration` stays `ON`, so a user who still signs in with a
-PASSWORD is required to keep a TOTP factor — passkeys are additive.
-Making the pool fully passwordless (a passkey user dropping TOTP
-entirely) would mean `mfa_configuration = "OPTIONAL"` plus an app-side
-"≥1 strong factor" gate to preserve the H-001 "MFA mandatory" control;
-deliberately deferred (see the passkey PR).
+**MFA posture with passkeys on.** Cognito hard-refuses `WEB_AUTHN` as a
+first-auth factor while `mfa_configuration = "ON"` (a passwordless passkey
+completes with no second factor). So the module *derives*
+`mfa_configuration = var.web_authn_enabled ? "OPTIONAL" : "ON"` — the
+invalid combination can't be configured. With passkeys on the pool is
+`OPTIONAL`, meaning Cognito no longer forces a factor; the "MFA mandatory"
+guarantee (H-001) is then enforced **app-side**:
+
+- The Auth.js jwt callback computes `has_strong_factor` (TOTP enabled OR
+  ≥1 passkey) at sign-in / refresh / update, gated by the
+  `DANTE_PASSKEYS_ENABLED` env flag (which MUST stay in lockstep with the
+  module's `web_authn_enabled`).
+- `requireSession()` redirects any user with `has_strong_factor === false`
+  to `/security/setup`, which is the one surface that opts out of the gate
+  (`allowMissingFactor`) so they can actually enrol. The self-service
+  profile actions opt out for the same reason.
+- Once the user enrols a passkey or TOTP, the next request's jwt callback
+  flips the flag true and they flow through — no client `update()` needed
+  (the callback recomputes while the flag is not-true).
+
+In the ON-mode default (`web_authn_enabled = false`, e.g. dev) the flag is
+always true and the gate is inert — Cognito enforces MFA upstream as
+before.
 
 **Reset (lost device)**: handled in the AWS console or via
 `aws cognito-idp admin-set-user-mfa-preference --user-pool-id <id>

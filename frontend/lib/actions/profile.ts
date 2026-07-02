@@ -90,7 +90,7 @@ const ChangePasswordSchema = z.object({
 export async function changePasswordAction(
   input: unknown,
 ): Promise<ActionResult<null>> {
-  const ctx = await requireSession();
+  const ctx = await requireSession({ allowMissingFactor: true });
   const parsed = ChangePasswordSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
   try {
@@ -116,7 +116,7 @@ export async function changePasswordAction(
 export async function startTotpEnrollmentAction(): Promise<
   ActionResult<{ secret: string; otpauth_url: string }>
 > {
-  const ctx = await requireSession();
+  const ctx = await requireSession({ allowMissingFactor: true });
   try {
     const { secret } = await startTotpEnrollment();
     // Compose the standard otpauth URI the UI renders as a QR code. We
@@ -140,7 +140,7 @@ const VerifyTotpSchema = z.object({
 export async function confirmTotpEnrollmentAction(
   input: unknown,
 ): Promise<ActionResult<null>> {
-  const ctx = await requireSession();
+  const ctx = await requireSession({ allowMissingFactor: true });
   const parsed = VerifyTotpSchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
   try {
@@ -167,7 +167,7 @@ export async function confirmTotpEnrollmentAction(
 export async function startPasskeyEnrollmentAction(): Promise<
   ActionResult<{ options: unknown }>
 > {
-  await requireSession();
+  await requireSession({ allowMissingFactor: true });
   try {
     const options = await startPasskeyRegistration();
     return ok({ options });
@@ -187,7 +187,7 @@ const CompletePasskeySchema = z.object({
 export async function completePasskeyEnrollmentAction(
   input: unknown,
 ): Promise<ActionResult<null>> {
-  const ctx = await requireSession();
+  const ctx = await requireSession({ allowMissingFactor: true });
   const parsed = CompletePasskeySchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
   try {
@@ -210,7 +210,7 @@ const DeletePasskeySchema = z.object({
 export async function deletePasskeyAction(
   input: unknown,
 ): Promise<ActionResult<null>> {
-  const ctx = await requireSession();
+  const ctx = await requireSession({ allowMissingFactor: true });
   const parsed = DeletePasskeySchema.safeParse(input);
   if (!parsed.success) return fromZod(parsed.error);
   try {
@@ -231,7 +231,7 @@ export async function deletePasskeyAction(
 export async function listPasskeysAction(): Promise<
   ActionResult<{ passkeys: Awaited<ReturnType<typeof listPasskeys>> }>
 > {
-  await requireSession();
+  await requireSession({ allowMissingFactor: true });
   try {
     const passkeys = await listPasskeys();
     return ok({ passkeys });

@@ -133,6 +133,33 @@ export async function setTotpPreference(enabled: boolean): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Strong-factor check (for the app-side MFA gate)
+//
+// When the pool is `mfa_configuration = OPTIONAL` (passkeys enabled),
+// Cognito no longer forces a factor, so the app enforces "every user has
+// a passkey OR TOTP". This variant takes the access token directly rather
+// than pulling it from the session, because the Auth.js jwt callback
+// computes the flag before a session exists.
+// ---------------------------------------------------------------------------
+
+/** True when the user has at least one strong factor: TOTP enabled OR ≥1
+ * registered passkey. One GetUser + one ListWebAuthnCredentials. Throws
+ * on an invalid/expired token so the caller can decide how to fail
+ * (the jwt callback defaults to the prior value on error rather than
+ * locking the user out on a transient Cognito hiccup). */
+export async function hasStrongFactorWithToken(
+  AccessToken: string,
+): Promise<boolean> {
+  const [user, creds] = await Promise.all([
+    client().send(new GetUserCommand({ AccessToken })),
+    client().send(new ListWebAuthnCredentialsCommand({ AccessToken, MaxResults: 1 })),
+  ]);
+  const totp = (user.UserMFASettingList ?? []).includes("SOFTWARE_TOKEN_MFA");
+  const passkey = (creds.Credentials ?? []).length > 0;
+  return totp || passkey;
+}
+
+// ---------------------------------------------------------------------------
 // WebAuthn / passkeys
 //
 // Passkeys are Cognito's passwordless first factor (USER_AUTH flow). We

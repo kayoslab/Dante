@@ -125,22 +125,18 @@ module "cognito" {
   custom_domain_name     = "auth.${var.domain}"
   custom_domain_cert_arn = aws_acm_certificate_validation.cognito_custom.certificate_arn
 
-  # Passkeys / WebAuthn — TEMPORARILY OFF.
+  # Passkeys / WebAuthn — ON. This flips the pool to
+  # `mfa_configuration = "OPTIONAL"` (derived in the module) so Cognito
+  # accepts WEB_AUTHN as a first-auth factor. Mandatory MFA (H-001) is
+  # preserved app-side: requireSession() sends any user with neither a
+  # passkey nor TOTP to /security/setup. The app half is switched on by
+  # DANTE_PASSKEYS_ENABLED below — the two MUST stay in lockstep.
   #
-  # Enabling WEB_AUTHN as a first-auth factor requires
-  # `mfa_configuration = "OPTIONAL"` — Cognito hard-refuses WEB_AUTHN as
-  # a first factor while MFA is "ON" (a passwordless passkey completes
-  # with no second factor, which contradicts "MFA always required":
-  # `InvalidParameterException: WEB_AUTHN cannot be used as an auth
-  # factor when MFA is enabled`). Flipping to OPTIONAL removes Cognito's
-  # blanket MFA enforcement, so it must land together with an app-side
-  # "every user has a passkey OR TOTP" gate to preserve the H-001
-  # control. That's built on the follow-up branch; until it merges this
-  # stays false so `main` deploys cleanly and prod keeps mandatory MFA.
-  #
-  # rpId (kept for when it flips back on): the shared registrable parent
-  # of the app origin and Managed Login — `var.domain` itself.
-  web_authn_enabled          = false
+  # rpId is the shared registrable parent of the app origin
+  # (`dante.example.com`) and Managed Login (`auth.dante.example.com`)
+  # — `var.domain` — so a passkey enrolled from /profile also works at
+  # Managed Login sign-in.
+  web_authn_enabled          = true
   web_authn_relying_party_id = var.domain
 
   # SES sender. Without this Cognito falls back to its default sender
@@ -527,6 +523,13 @@ module "app" {
     DANTE_USE_SECRETS_MANAGER = "1"
     DANTE_LOG_LEVEL           = "info"
     AWS_REGION                = var.aws_region
+
+    # Passkeys. Turns on the /profile passkey UI AND the app-side
+    # strong-factor gate in requireSession(). MUST stay in lockstep with
+    # the cognito module's web_authn_enabled (= mfa OPTIONAL) — the flag
+    # here is what makes the app enforce "passkey OR TOTP" now that
+    # Cognito no longer forces a factor.
+    DANTE_PASSKEYS_ENABLED = "true"
 
     # Name of the sync Lambda that runSyncAction invokes. Non-sensitive
     # (the IAM grant is scoped by ARN, so the function name alone is

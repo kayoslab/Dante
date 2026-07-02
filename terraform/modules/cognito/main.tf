@@ -84,23 +84,28 @@ resource "aws_cognito_user_pool" "this" {
     }
   }
 
-  # MFA is mandatory for every user (migration 0011 dropped the per-user
-  # `mfa_required` flag — the in-app gate became universal, and then
-  # delegated to Cognito's native flow). Managed Login walks new users
-  # through TOTP enrollment at first sign-in; subsequent password
-  # sign-ins prompt for the TOTP code.
+  # MFA posture is DERIVED from web_authn_enabled, because Cognito
+  # hard-refuses WEB_AUTHN as a first-auth factor while MFA is "ON"
+  # (`InvalidParameterException: WEB_AUTHN cannot be used as an auth
+  # factor when MFA is enabled`) — a passwordless passkey completes with
+  # no second factor, which contradicts "MFA always required". So:
   #
-  # Passkeys don't change this: `mfa_configuration = "ON"` governs the
-  # PASSWORD sign-in path (password + a second factor). A passkey is a
-  # separate passwordless first factor that bypasses that path entirely
-  # and is phishing-resistant on its own, so a user who signs in with a
-  # passkey never sees the TOTP prompt. Keeping mfa ON means a user who
-  # still uses their PASSWORD must keep a TOTP factor — passkeys are
-  # additive, not a way to drop MFA on the password path. (Making the
-  # pool fully passwordless would be `mfa_configuration = "OPTIONAL"`;
-  # deliberately not done here — see the PR discussion.)
-  mfa_configuration = "ON"
+  #   - passkeys OFF → "ON"       : Cognito forces TOTP for everyone
+  #     (Managed Login enrolls TOTP at first sign-in). Original posture.
+  #   - passkeys ON  → "OPTIONAL" : Cognito no longer forces a factor, so
+  #     a passkey user can sign in passwordless AND a password user opts
+  #     into TOTP. The "MFA mandatory" guarantee (H-001) is then enforced
+  #     APP-SIDE: requireSession() blocks any user who has neither a
+  #     passkey nor TOTP and sends them to /security/setup to enrol.
+  #     Gated by DANTE_PASSKEYS_ENABLED on the app so the two move as one.
+  #
+  # Deriving it (rather than a free variable) makes the invalid ON +
+  # WEB_AUTHN combination impossible to configure.
+  mfa_configuration = var.web_authn_enabled ? "OPTIONAL" : "ON"
 
+  # TOTP stays available in both modes — it's the fallback second factor
+  # on the password path, and one of the two factors the app-side gate
+  # accepts.
   software_token_mfa_configuration {
     enabled = true
   }

@@ -32,6 +32,7 @@ export type SessionContext = {
   email: string;
   role: Role;
   employee_id: number | null;
+  has_strong_factor: boolean;
 };
 
 export const ROLE_RANK: Record<Role, number> = {
@@ -87,10 +88,18 @@ export function invalidateDisabledCache(user_id: string): void {
 /** Use from a Server Component or Server Action. Redirects:
  *  - unauthenticated → /login
  *  - disabled account → /login (terminated employee, fired admin, etc.)
+ *  - no strong factor → /security/setup (passkeys mode only; see below)
  *
- * Throws `ForbiddenError` if the role is below `minRole`. */
+ * Throws `ForbiddenError` if the role is below `minRole`.
+ *
+ * `allowMissingFactor` opts OUT of the strong-factor gate — required for
+ * the enrollment surfaces themselves (the /security/setup page + the
+ * passkey / TOTP self-service actions), otherwise a factorless user
+ * couldn't reach the very screens that let them enrol. Everything else
+ * gets gated. */
 export async function requireSession(opts: {
   minRole?: Role;
+  allowMissingFactor?: boolean;
 } = {}): Promise<SessionContext> {
   const session = await auth();
   if (!session?.user) {
@@ -102,11 +111,20 @@ export async function requireSession(opts: {
   if (await isUserDisabled(session.user.user_id)) {
     redirect("/login?error=disabled");
   }
+  // App-side MFA gate. When passkeys are enabled the Cognito pool is on
+  // mfa=OPTIONAL (Cognito no longer forces a factor), so we enforce
+  // "every user has a passkey OR TOTP" here — the H-001 mandatory-MFA
+  // control. `has_strong_factor` is always true in the ON-mode default,
+  // so this is a no-op there.
+  if (!opts.allowMissingFactor && !session.user.has_strong_factor) {
+    redirect("/security/setup");
+  }
   const ctx: SessionContext = {
     user_id: session.user.user_id,
     email: session.user.email,
     role: session.user.role,
     employee_id: session.user.employee_id,
+    has_strong_factor: session.user.has_strong_factor,
   };
   // Per-user global ceiling on every protected entry point — Server
   // Components, Server Actions, anything else hitting requireSession.
@@ -135,6 +153,7 @@ export async function getSession(): Promise<SessionContext | null> {
     email: session.user.email,
     role: session.user.role,
     employee_id: session.user.employee_id,
+    has_strong_factor: session.user.has_strong_factor,
   };
 }
 

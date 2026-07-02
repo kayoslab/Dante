@@ -187,6 +187,11 @@ export async function requireAgentSession(
     email: owner.email,
     role: owner.role,
     employee_id: owner.employee_id,
+    // Agent tokens don't carry an interactive MFA factor — the strong-
+    // factor gate is a browser-session concept. Set true so the shared
+    // SessionContext shape is satisfied; the agent auth path enforces
+    // its own scope + client checks instead.
+    has_strong_factor: true,
     kind: "agent",
     cognito_sub: sub,
     client_id: agent_client_id,
