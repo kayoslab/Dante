@@ -92,6 +92,7 @@ export async function requireApiSession(opts: {
     email: session.user.email,
     role: session.user.role,
     employee_id: session.user.employee_id,
+    has_strong_factor: session.user.has_strong_factor,
   };
   if (opts.minRole && ROLE_RANK[ctx.role] < ROLE_RANK[opts.minRole]) {
     throw Forbidden(

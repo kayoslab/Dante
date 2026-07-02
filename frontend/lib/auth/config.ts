@@ -2,6 +2,7 @@ import type { NextAuthConfig } from "next-auth";
 import Cognito from "next-auth/providers/cognito";
 import Credentials from "next-auth/providers/credentials";
 
+import { hasStrongFactorWithToken } from "./cognito-self-service";
 import { findOrCreateAppUser } from "./users";
 
 /** App-level role derived from Cognito groups (or the dev override list).
@@ -11,15 +12,17 @@ export type Role = "admin" | "manager" | "employee";
 
 declare module "next-auth" {
   /** Surfaces the role + the linked employee_id on `session.user` so every
-   * server-rendered page + Server Action can branch on it. MFA is
-   * enforced upstream by Cognito's hosted UI (`mfa_configuration = "ON"`),
-   * so there's no app-side MFA state on the session. */
+   * server-rendered page + Server Action can branch on it. When passkeys
+   * are enabled the pool is on mfa=OPTIONAL, so `has_strong_factor` carries
+   * the app-side MFA gate state (passkey or TOTP present); in the ON-mode
+   * default it's always true (Cognito enforces MFA upstream). */
   interface Session {
     user: {
       user_id: string;
       email: string;
       role: Role;
       employee_id: number | null;
+      has_strong_factor: boolean;
     };
   }
 }
@@ -44,6 +47,12 @@ declare module "@auth/core/jwt" {
      * re-sign-in for any Cognito SDK call. The session itself stays
      * usable for app-side reads until the JWT cookie expires. */
     cognito_refresh_failed?: boolean;
+    /** Whether the user has ≥1 strong factor (passkey or TOTP). Only
+     * meaningful when passkeys are enabled (pool on mfa=OPTIONAL);
+     * computed in the jwt callback at sign-in / refresh / update. Read by
+     * `requireSession()` to gate users with no factor to /security/setup.
+     * `undefined` in passkeys-off mode (gate inert). */
+    has_strong_factor?: boolean;
   }
 }
 
@@ -207,7 +216,7 @@ export const authConfig = {
       ],
 
   callbacks: {
-    async jwt({ token, user, profile, account }) {
+    async jwt({ token, user, profile, account, trigger }) {
       // On sign-in, hydrate the token with our app's user record + role.
       // `user` is populated only on the initial authorize() call.
       if (user) {
@@ -263,6 +272,7 @@ export const authConfig = {
       // can prompt the user to re-sign-in instead of replaying a
       // permanently-rejected refresh on every request.
       const now = Math.floor(Date.now() / 1000);
+      let refreshedNow = false;
       if (
         token.cognito_refresh_token &&
         token.cognito_access_expires_at &&
@@ -275,8 +285,52 @@ export const authConfig = {
         if (refreshed) {
           token.cognito_access_token = refreshed.access_token;
           token.cognito_access_expires_at = refreshed.expires_at;
+          refreshedNow = true;
         } else {
           token.cognito_refresh_failed = true;
+        }
+      }
+
+      // Strong-factor flag for the app-side MFA gate. Only when passkeys
+      // are enabled (pool on mfa=OPTIONAL) — in the ON-mode default,
+      // Cognito already forces TOTP for everyone, so the gate is inert
+      // and we leave the flag true.
+      //
+      // Compute against Cognito ONLY at moments the factor set can have
+      // changed — sign-in (account/profile), an explicit session
+      // `update()` after enrollment, a token refresh, or the first time
+      // the flag is unset. NOT on every request (the jwt callback runs
+      // per request that reads the session; an unconditional call would
+      // be a Cognito round-trip on every navigation).
+      if (process.env.DANTE_PASSKEYS_ENABLED !== "true") {
+        token.has_strong_factor = true;
+      } else if (
+        token.cognito_access_token &&
+        !token.cognito_refresh_failed &&
+        // Recompute at sign-in / refresh / explicit update, OR whenever
+        // the flag isn't already true. The `!== true` clause means a
+        // factorless user re-checks on every request (they're pinned to
+        // /security/setup anyway, so it's a few calls) and the moment
+        // they enrol a factor the next request flips the flag true — no
+        // client-side session `update()` needed. Once true, only the
+        // sign-in / refresh / update triggers recompute, so a normal
+        // user pays no per-request Cognito call.
+        (account ||
+          profile ||
+          trigger === "update" ||
+          refreshedNow ||
+          token.has_strong_factor !== true)
+      ) {
+        try {
+          token.has_strong_factor = await hasStrongFactorWithToken(
+            token.cognito_access_token,
+          );
+        } catch {
+          // Don't lock the user out on a transient Cognito error — keep
+          // the prior value, defaulting to true (fail-open on the gate,
+          // fail-closed is worse here: a Cognito blip would bounce every
+          // user to /security/setup mid-session).
+          token.has_strong_factor = token.has_strong_factor ?? true;
         }
       }
       return token;
@@ -293,6 +347,9 @@ export const authConfig = {
         email: token.email,
         role: token.role,
         employee_id: token.employee_id,
+        // Non-sensitive boolean — safe to surface (unlike the Cognito
+        // tokens). requireSession() reads it to gate factorless users.
+        has_strong_factor: token.has_strong_factor ?? true,
       };
       return session;
     },
