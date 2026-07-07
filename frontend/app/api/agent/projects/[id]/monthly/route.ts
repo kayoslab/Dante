@@ -66,8 +66,40 @@ const ProjectMonthlySchema = z
       description: "FP-only.",
     }),
     cumulative_margin: z.string().nullable(),
-    tracked_hours: z.string(),
+    tracked_hours: z.string().openapi({
+      description:
+        "Employee attendance hours (Personio/awork) for the month. Does " +
+        "NOT include freelancer hours — see `freelancer_hours`.",
+    }),
+    freelancer_hours: z.string().openapi({
+      description:
+        "Freelancer hours entered for the month (from freelancer bills / " +
+        "time sheets, `freelancer_time_entry`). Separate from " +
+        "`tracked_hours`, which is employee attendance only — add both " +
+        "for total effort on a mixed project.",
+    }),
     has_personio_mapping: z.boolean(),
+    // Lifetime (project-to-date) aggregates — for both billing models.
+    cumulative_revenue: z.string().nullable().openapi({
+      description:
+        "Lifetime billable revenue: FP recognized revenue, T&M tracked " +
+        "hours × rate across all months.",
+    }),
+    cumulative_cost: z.string().nullable().openapi({
+      description: "Lifetime allocated (unburdened) cost across all months.",
+    }),
+    cumulative_burdened_cost: z.string().nullable().openapi({
+      description: "Lifetime burdened cost across all months.",
+    }),
+    cumulative_burdened_margin: z.string().nullable().openapi({
+      description: "cumulative_revenue − cumulative_burdened_cost.",
+    }),
+    lifetime_tracked_person_days: z.string().nullable().openapi({
+      description: "Lifetime tracked hours / 8 (person-days).",
+    }),
+    tracked_hours_lifetime: z.string().nullable().openapi({
+      description: "Lifetime tracked hours across all months.",
+    }),
     assignments: z.array(ProjectMonthlyAssignmentSchema).openapi({
       description:
         "Per-assignment breakdown for every allocation active during " +
@@ -131,7 +163,19 @@ export async function GET(
         (breakdown.cumulative_recognized_revenue as string | null) ?? null,
       cumulative_margin: (breakdown.cumulative_margin as string | null) ?? null,
       tracked_hours: breakdown.tracked_hours as string,
+      freelancer_hours: (breakdown.freelancer_hours as string | undefined) ?? "0.00",
       has_personio_mapping: Boolean(breakdown.has_personio_mapping),
+      cumulative_revenue:
+        (breakdown.cumulative_revenue as string | null) ?? null,
+      cumulative_cost: (breakdown.cumulative_cost as string | null) ?? null,
+      cumulative_burdened_cost:
+        (breakdown.cumulative_burdened_cost as string | null) ?? null,
+      cumulative_burdened_margin:
+        (breakdown.cumulative_burdened_margin as string | null) ?? null,
+      lifetime_tracked_person_days:
+        (breakdown.lifetime_tracked_person_days as string | null) ?? null,
+      tracked_hours_lifetime:
+        (breakdown.tracked_hours_lifetime as string | null) ?? null,
       assignments: (breakdown.assignments as Array<Record<string, unknown>>).map(
         (a) => ({
           assignment_id: a.assignment_id as number,
