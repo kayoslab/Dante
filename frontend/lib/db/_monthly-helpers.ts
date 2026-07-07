@@ -1405,24 +1405,29 @@ export async function cumulativeProjectCost(
           if (share.gt(monthly_cost)) share = monthly_cost;
           total = total.add(share);
         }
-      } else {
-        let paid_active_wd = active_wd;
-        if (emp_id !== null) {
-          const y = Number(m_start.slice(0, 4));
-          const [, unpaid] = await absencesForEmployee(
-            emp_id,
-            window_start,
-            window_end,
-            holidayFor(empStateCode, y),
-          );
-          paid_active_wd -= unpaid.size;
-        }
+      } else if (emp_id !== null) {
+        // Employee without time-mapping — allocation-based cost. NOT a
+        // freelancer branch: a freelancer with no entered-hours row for
+        // this month contributes 0 (pay-as-they-work), matching the
+        // monthly view. Falling through to allocation here charged
+        // freelancers `daily_cost × 20 × alloc` for months they never
+        // billed, which massively inflated lifetime cost and tanked
+        // margin on freelancer-heavy projects.
+        const y = Number(m_start.slice(0, 4));
+        const [, unpaid] = await absencesForEmployee(
+          emp_id,
+          window_start,
+          window_end,
+          holidayFor(empStateCode, y),
+        );
+        const paid_active_wd = active_wd - unpaid.size;
         if (paid_active_wd > 0) {
           total = total.add(
             monthly_cost.mul(alloc).mul(paid_active_wd).div(full_month_wd),
           );
         }
       }
+      // Freelancer with no entered-hours row: contributes 0.
       cur_month = firstOfNextMonth(cur_month);
     }
   }
@@ -1558,9 +1563,10 @@ export async function cumulativeProjectBurdenedCost(
             .div(20)
             .div(standard_daily_hours);
           total = total.add(cost_per_hour.mul(fl_entered_hours));
-        } else {
-          total = total.add(monthly_cost.mul(weighted_alloc_i));
         }
+        // Freelancer with no entered-hours row: contributes 0 — they only
+        // cost money when they work. (Previously charged
+        // monthly_cost × weighted_alloc, inflating lifetime burdened cost.)
       } else {
         const key = `${emp_id}|${m_start}`;
         let total_W = weightedAllocCache.get(key);
