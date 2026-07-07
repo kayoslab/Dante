@@ -1,5 +1,5 @@
 /** Update an existing project — used by the PO-extends-existing-project
- * branch in the dante-alighieri workflows when a new purchase order
+ * branch in the minos workflows when a new purchase order
  * extends the planned dates, tops up the agreed amount on an FP, moves
  * the project under a different framework, or rolls a status forward.
  *

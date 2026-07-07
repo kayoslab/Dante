@@ -57,14 +57,14 @@ variable "cognito_pretoken_lambda_package_zip_path" {
 # --- Agent integration -------------------------------------------------
 
 variable "agent_callback_urls" {
-  description = "OAuth callback URLs allowed for the Cognito agent app client. Covers (1) the EVE TUI's local callback on port 3000, (2) the deployed Vercel agent's EVE connection callback, (3) the test-token-fetch script on port 8765, (4) the Auth.js sign-in callback on the deployed Vercel agent (this is what completes the OAuth Authorization Code flow for browser sign-in via the dante-alighieri chat UI), plus the local-dev equivalents of (4). Add preview-deploy URLs explicitly when needed — Cognito doesn't accept wildcards on callback URLs. Cognito permits HTTP only for `localhost`; every other entry must be HTTPS."
+  description = "OAuth callback URLs allowed for the Cognito agent app client. Covers (1) the EVE TUI's local callback on port 3000, (2) the deployed Vercel agent's EVE connection callback, (3) the test-token-fetch script on port 8765, (4) the Auth.js sign-in callback on the deployed Vercel agent (this is what completes the OAuth Authorization Code flow for browser sign-in via the minos chat UI), plus the local-dev equivalents of (4). Add preview-deploy URLs explicitly when needed — Cognito doesn't accept wildcards on callback URLs. Cognito permits HTTP only for `localhost`; every other entry must be HTTPS."
   type        = list(string)
   default = [
     "http://localhost:3000/eve/v1/connections/dante/auth/callback",
     "http://localhost:3000/api/auth/callback",
     "http://localhost:8765/callback",
-    "https://dante-alighieri.vercel.app/eve/v1/connections/dante/auth/callback",
-    "https://dante-alighieri.vercel.app/api/auth/callback",
+    "https://minos-agent.vercel.app/eve/v1/connections/dante/auth/callback",
+    "https://minos-agent.vercel.app/api/auth/callback",
   ]
 }
 
