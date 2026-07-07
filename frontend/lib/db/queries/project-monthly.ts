@@ -24,6 +24,7 @@ import {
   burdenFactor,
   cumulativeProjectBurdenedCost,
   cumulativeProjectCost,
+  cumulativeProjectRevenue,
   employeeFte,
   employeeTotalTrackedMinutesInMonth,
   employeeWeightedAllocInMonth,
@@ -219,6 +220,15 @@ export async function computeProjectMonthly(
     });
   }
   const has_freelancer_hours = enteredHours.size > 0;
+  // Total freelancer hours entered for this project × month (across all
+  // freelancer assignments). Surfaced as its own field because freelancer
+  // hours live in `freelancer_time_entry`, NOT Personio/awork attendance,
+  // so they're absent from `tracked_hours` — the agent + UI need both to
+  // read a mostly-freelancer project completely.
+  let total_freelancer_hours = new Decimal(0);
+  for (const v of enteredHours.values()) {
+    total_freelancer_hours = total_freelancer_hours.add(v.hours);
+  }
 
   const assignment_rows: Array<Record<string, unknown>> = [];
   let total_revenue = new Decimal(0);
@@ -573,6 +583,9 @@ export async function computeProjectMonthly(
   let recognized_margin: Decimal | null = null;
   let recognized_margin_pct: Decimal | null = null;
   let cumulative_recognized: Decimal | null = null;
+  // Unified lifetime revenue for the lifetime box — FP uses recognized
+  // revenue, T&M uses tracked-hours × rate (cumulativeProjectRevenue).
+  let cumulative_revenue: Decimal | null = null;
   let cumulative_margin: Decimal | null = null;
   let cumulative_margin_pct: Decimal | null = null;
   let cumulative_burdened_margin: Decimal | null = null;
@@ -719,7 +732,43 @@ export async function computeProjectMonthly(
         }
       }
     }
+  } else {
+    // T&M lifetime aggregates for the lifetime box. FP computes these in
+    // the block above (recognized revenue basis); T&M's lifetime revenue
+    // is tracked-hours × rate. Cost + burdened cost + tracked hours reuse
+    // the same billing-model-agnostic helpers the FP path uses, so the
+    // lifetime numbers reconcile with the monthly views.
+    const today_iso = new Date().toISOString().slice(0, 10);
+    cumulative_cost = await cumulativeProjectCost(project_id, month_end, burden);
+    cumulative_burdened_cost = await cumulativeProjectBurdenedCost(
+      project_id,
+      month_end,
+      burden,
+    );
+    tracked_hours_lifetime = await projectTrackedHoursThrough(
+      project_id,
+      today_iso,
+    );
+    cumulative_revenue = await cumulativeProjectRevenue(project_id, today_iso);
+    cumulative_margin = cumulative_revenue.sub(cumulative_cost);
+    if (cumulative_revenue.gt(0)) {
+      cumulative_margin_pct = cumulative_margin
+        .div(cumulative_revenue)
+        .mul(100);
+    }
+    cumulative_burdened_margin = cumulative_revenue.sub(cumulative_burdened_cost);
+    if (cumulative_revenue.gt(0)) {
+      cumulative_burdened_margin_pct = cumulative_burdened_margin
+        .div(cumulative_revenue)
+        .mul(100);
+    }
   }
+
+  // Unify the lifetime revenue field: FP recognizes revenue; T&M tracks it.
+  if (cumulative_revenue === null) cumulative_revenue = cumulative_recognized;
+  // Person-days tracked over the project lifetime (8h/day convention).
+  const lifetime_tracked_person_days =
+    tracked_hours_lifetime === null ? null : tracked_hours_lifetime.div(8);
 
   const total_rate_unresolved =
     assignment_rows.reduce(
@@ -829,6 +878,14 @@ export async function computeProjectMonthly(
       cumulative_burdened_margin_pct === null
         ? null
         : fmt(cumulative_burdened_margin_pct, 2),
+    // Unified lifetime revenue (FP: recognized; T&M: tracked × rate) + the
+    // person-days figure — power the lifetime box for both billing models.
+    cumulative_revenue:
+      cumulative_revenue === null ? null : fmt(cumulative_revenue, 2),
+    lifetime_tracked_person_days:
+      lifetime_tracked_person_days === null
+        ? null
+        : fmt(lifetime_tracked_person_days, 1),
     tracked_hours_lifetime:
       tracked_hours_lifetime === null
         ? null
@@ -864,6 +921,7 @@ export async function computeProjectMonthly(
         : null,
     has_personio_mapping: has_time_mapping,
     has_freelancer_hours,
+    freelancer_hours: total_freelancer_hours.toFixed(2),
     assignments: assignment_rows,
     unassigned_tracked,
   };

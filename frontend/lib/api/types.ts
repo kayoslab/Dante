@@ -1241,7 +1241,11 @@ export type MonthlyBreakdown = {
         cumulative_burdened_margin?: string | null;
         /** Cumulative Burdened Margin Pct */
         cumulative_burdened_margin_pct?: string | null;
-        /** Lifetime tracked hours on the project (FP only). */
+        /** Lifetime billable revenue (FP: recognized; T&M: tracked × rate). */
+        cumulative_revenue?: string | null;
+        /** Lifetime tracked person-days (tracked hours / 8), both models. */
+        lifetime_tracked_person_days?: string | null;
+        /** Lifetime tracked hours on the project (both billing models). */
         tracked_hours_lifetime?: string | null;
         /** Future planned hours from today to planned_end (FP only). */
         future_planned_hours?: string | null;
@@ -1289,6 +1293,10 @@ export type MonthlyBreakdown = {
          * @default false
          */
         has_freelancer_hours: boolean;
+        /** Total freelancer hours entered this month (all freelancer
+         * assignments). Distinct from `tracked_hours`, which is
+         * Personio/awork employee attendance only. */
+        freelancer_hours?: string;
         /** Assignments */
         assignments: MonthlyAssignmentRow[];
         /**

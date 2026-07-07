@@ -98,10 +98,105 @@ function TmBreakdown({
     <div className="space-y-5">
       <TmStatusBanner data={data} />
       <TmMoneyBlock data={data} />
+      <TmLifetimeBlock data={data} />
       <TmEffortBlock data={data} />
       <AssignmentTable data={data} mode="tm" />
       <UnassignedTrackedTable data={data} />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// T&M lifetime (project-to-date) totals — sits under the monthly money box
+// ---------------------------------------------------------------------------
+
+function TmLifetimeBlock({
+  data,
+}: {
+  data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
+}) {
+  const num = (v: string | null | undefined) =>
+    v === null || v === undefined ? null : Number(v);
+  const revenue = num(data.cumulative_revenue);
+  const cost = num(data.cumulative_cost);
+  const burdenedCost = num(data.cumulative_burdened_cost);
+  const margin = num(data.cumulative_margin);
+  const marginPct = num(data.cumulative_margin_pct);
+  const burdenedMargin = num(data.cumulative_burdened_margin);
+  const burdenedMarginPct = num(data.cumulative_burdened_margin_pct);
+  const personDays = num(data.lifetime_tracked_person_days);
+  const trackedHours = num(data.tracked_hours_lifetime);
+
+  // Nothing to show until lifetime aggregates exist (e.g. brand-new
+  // project with no cost yet).
+  if (revenue === null && cost === null) return null;
+
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Lifetime (project to date)
+        </h3>
+        <span className="text-xs text-muted-foreground">all months combined</span>
+      </div>
+      <div className="rounded-md border bg-background">
+        <div className="flex flex-wrap gap-x-8 gap-y-1 border-b bg-muted/20 px-4 py-2 text-sm">
+          <div>
+            <span className="text-muted-foreground">Billable revenue: </span>
+            <span
+              className="font-medium tabular-nums"
+              title="Lifetime tracked hours × rate across all months (T&M)."
+            >
+              {revenue === null ? "—" : formatEUR(revenue.toFixed(2))}
+            </span>
+          </div>
+          <div>
+            <span className="text-muted-foreground">Person-days tracked: </span>
+            <span className="font-medium tabular-nums">
+              {personDays === null ? "—" : personDays.toFixed(1)}
+            </span>
+            {trackedHours !== null && (
+              <span className="text-xs text-muted-foreground">
+                {" "}
+                ({trackedHours.toFixed(0)}h)
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+          <div className="space-y-2 p-4">
+            <div className="flex items-baseline gap-1">
+              <div className="text-sm font-medium">Project P&amp;L</div>
+              <div className="text-xs text-muted-foreground">
+                · allocated salary (no burden)
+              </div>
+            </div>
+            <PLRow label="Cost total" value={cost} muted />
+            <PLRow
+              label="Margin total"
+              value={margin}
+              pct={marginPct}
+              emphasize
+            />
+          </div>
+          <div className="space-y-2 p-4">
+            <div className="flex items-baseline gap-1">
+              <div className="text-sm font-medium">True P&amp;L</div>
+              <div className="text-xs text-muted-foreground">
+                · burdened (real org cost)
+              </div>
+            </div>
+            <PLRow label="Burdened cost total" value={burdenedCost} muted />
+            <PLRow
+              label="Margin total"
+              value={burdenedMargin}
+              pct={burdenedMarginPct}
+              emphasize
+            />
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 

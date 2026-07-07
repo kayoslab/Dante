@@ -995,6 +995,73 @@ export async function projectHasTimeMapping(project_id: number): Promise<boolean
   return Boolean(row?.has_mapping);
 }
 
+/** Lifetime billable revenue for a T&M project through `through_date`.
+ *
+ * Employees: lifetime tracked person-days (Personio + awork, deduped by
+ * MAX per employee/day — same rule as `trackedMinutesPerEmployeeInMonth`)
+ * × the assignment's effective daily rate. Freelancers: entered
+ * person-days (`freelancer_time_entry.hours / 8`) × effective rate.
+ *
+ * Rate comes from `assignment_effective_rate`, which resolves as-of the
+ * assignment's start_date. Exact when the profile's rate is constant over
+ * the project (the common case — framework rates carry a single
+ * valid_from); if a rate changes mid-project this is a close approximation.
+ * Assignments whose rate is unresolved (`rate_source = 'unset'`)
+ * contribute 0, matching the monthly views. One rate per employee via
+ * DISTINCT ON so a re-assignment doesn't double-count. */
+export async function cumulativeProjectRevenue(
+  project_id: number,
+  through_date: string,
+): Promise<Decimal> {
+  const r = await db.execute(sql`
+    WITH per_day AS (
+      SELECT employee_id, work_date, MAX(minutes) AS minutes FROM (
+        SELECT a.employee_id, a.work_date, SUM(a.duration_minutes) AS minutes
+        FROM attendance a
+        JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
+        WHERE pl.project_id = ${project_id}
+          AND a.work_date <= ${through_date}::date
+        GROUP BY a.employee_id, a.work_date
+        UNION ALL
+        SELECT ul.employee_id, t.work_date, SUM(t.duration_minutes)
+        FROM awork_time_entry t
+        JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
+        JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
+        WHERE apl.project_id = ${project_id}
+          AND t.work_date <= ${through_date}::date
+        GROUP BY ul.employee_id, t.work_date
+      ) u GROUP BY employee_id, work_date
+    ),
+    emp_days AS (
+      SELECT employee_id, SUM(minutes) / 60.0 / 8.0 AS person_days
+      FROM per_day GROUP BY employee_id
+    ),
+    emp_rate AS (
+      SELECT DISTINCT ON (a.employee_id)
+             a.employee_id, aer.effective_daily_rate_eur AS rate
+      FROM assignment a
+      JOIN assignment_effective_rate aer ON aer.assignment_id = a.assignment_id
+      WHERE a.project_id = ${project_id} AND a.freelancer_id IS NULL
+      ORDER BY a.employee_id, a.start_date DESC
+    ),
+    emp_rev AS (
+      SELECT COALESCE(SUM(ed.person_days * er.rate), 0) AS rev
+      FROM emp_days ed
+      JOIN emp_rate er ON er.employee_id = ed.employee_id
+    ),
+    fl_rev AS (
+      SELECT COALESCE(SUM((fte.hours_decimal / 8.0) * aer.effective_daily_rate_eur), 0) AS rev
+      FROM freelancer_time_entry fte
+      JOIN assignment a ON a.assignment_id = fte.assignment_id AND a.project_id = ${project_id}
+      JOIN assignment_effective_rate aer ON aer.assignment_id = a.assignment_id
+      WHERE (fte.year_month || '-01')::date <= ${through_date}::date
+    )
+    SELECT (SELECT rev FROM emp_rev) + (SELECT rev FROM fl_rev) AS revenue
+  `);
+  const row = (r.rows as Array<{ revenue: string | number }>)[0];
+  return row ? new Decimal(row.revenue) : new Decimal(0);
+}
+
 // ----------------------------------------------------------------------------
 // Unassigned tracked rows for a project (employees who logged time but have
 // no assignment row that overlaps the month)
