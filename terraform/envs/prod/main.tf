@@ -225,6 +225,37 @@ resource "aws_route53_record" "ses_dkim" {
   records = ["${aws_sesv2_email_identity.dante.dkim_signing_attributes[0].tokens[count.index]}.dkim.amazonses.com"]
 }
 
+# SPF for the sending subdomain. Authorizes SES as a sender for
+# `dante.example.com`. Cognito's default envelope (MAIL FROM) is an
+# amazonses.com address, so DMARC alignment is carried by DKIM (above),
+# not SPF — but publishing SPF is standard hygiene and lets receivers
+# that check the header From domain see an explicit authorization.
+# `~all` (softfail) rather than `-all` so a stray legitimate path isn't
+# hard-rejected; nothing else sends from this subdomain today.
+resource "aws_route53_record" "spf" {
+  zone_id = var.hosted_zone_id
+  name    = var.domain
+  type    = "TXT"
+  ttl     = 600
+  records = ["v=spf1 include:amazonses.com ~all"]
+}
+
+# DMARC policy for the sending subdomain. Legitimate mail passes via
+# DKIM alignment (SES Easy-DKIM signs d=dante.example.com, which
+# matches the From domain); this record tells receivers to quarantine
+# anything claiming to be from dante.example.com that isn't
+# authenticated. `p=quarantine` is the prudent strong policy for a
+# dedicated transactional subdomain that only sends through SES — tighten
+# to `p=reject` once comfortable. No `rua` to avoid a cross-domain
+# report-authorization record in the corporate example.com zone.
+resource "aws_route53_record" "dmarc" {
+  zone_id = var.hosted_zone_id
+  name    = "_dmarc.${var.domain}"
+  type    = "TXT"
+  ttl     = 600
+  records = ["v=DMARC1; p=quarantine"]
+}
+
 # ACM cert for the Cognito custom domain. MUST be in us-east-1
 # regardless of the rest of the stack's region (Cognito requirement).
 resource "aws_acm_certificate" "cognito_custom" {
