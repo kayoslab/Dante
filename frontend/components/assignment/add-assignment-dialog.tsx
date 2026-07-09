@@ -52,7 +52,7 @@ const schema = z
     employee_id: optInt,
     freelancer_id: optInt,
     profile: z.string().optional(),
-    allocation_pct: z.coerce.number().min(0.1).max(1.5),
+    allocation_pct: z.coerce.number().gt(0).max(1.5),
     start_date: z.string().min(1, "required"),
     end_date: z.string().optional(),
     daily_rate_override_eur: optPosNum,
@@ -331,12 +331,12 @@ export function AddAssignmentDialog({ project_id }: { project_id: number }) {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="allocation_pct">Allocation (0.1–1.5)</Label>
+                  <Label htmlFor="allocation_pct">Allocation (0–1.5)</Label>
                   <Input
                     id="allocation_pct"
                     type="number"
-                    step="0.1"
-                    min="0.1"
+                    step="any"
+                    min="0"
                     max="1.5"
                     {...register("allocation_pct")}
                   />

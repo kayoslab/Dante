@@ -212,12 +212,12 @@ export function AllocateFromCellDialog({
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="allocation_pct">Allocation (0.1–1.5)</Label>
+                <Label htmlFor="allocation_pct">Allocation (0–1.5)</Label>
                 <Input
                   id="allocation_pct"
                   type="number"
-                  step="0.1"
-                  min="0.1"
+                  step="any"
+                  min="0"
                   max="1.5"
                   {...register("allocation_pct")}
                 />
