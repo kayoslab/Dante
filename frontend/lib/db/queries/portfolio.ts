@@ -6,6 +6,7 @@ import {
   employeeWeightedAllocInMonth,
   entityMonthlyCost,
   fmt,
+  fteFromWeeklyHours,
   holidaysForYearOf,
   lastOfMonth,
   workingDaysInRange,
@@ -109,7 +110,12 @@ export async function computeMonthlyBenchTotals(
         month_end,
         working_days,
       );
-      const util_clamped = Decimal.min(weighted_alloc, new Decimal(1));
+      // `allocation_pct` is a fraction of full-time, so a fully-booked
+      // part-timer's weighted_alloc equals their FTE. Utilization is
+      // relative to FTE — not a hardcoded 1.0 — else part-timers show
+      // spurious bench cost. Matches `computeEmployeeLoad` in utilization.ts.
+      const fte = fteFromWeeklyHours(raw.weekly_working_hours);
+      const util_clamped = Decimal.min(weighted_alloc.div(fte), new Decimal(1));
       let unalloc = cost_prorated.mul(new Decimal(1).sub(util_clamped));
       if (unalloc.lt(0)) unalloc = new Decimal(0);
       unallocated = unallocated.add(unalloc);

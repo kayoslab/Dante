@@ -78,6 +78,7 @@ export type UnallocatedPayrollEmployeeRow = {
   employee_id: number;
   first_name: string | null;
   last_name: string | null;
+  weekly_working_hours: number | null;
   hire_date: string | null;
   employment_end_date: string | null;
   team: string | null;
@@ -92,6 +93,7 @@ export async function listUnallocatedPayrollEmployees(
 ): Promise<UnallocatedPayrollEmployeeRow[]> {
   const r = await db.execute(sql`
     SELECT ec.employee_id, ec.first_name, ec.last_name,
+           ec.weekly_working_hours,
            ec.hire_date, ec.employment_end_date,
            COALESCE(ann.team_user, ec.department) AS team,
            COALESCE(ann.is_real_employee, TRUE) AS is_real
@@ -107,6 +109,8 @@ export async function listUnallocatedPayrollEmployees(
     employee_id: row.employee_id as number,
     first_name: (row.first_name as string | null) ?? null,
     last_name: (row.last_name as string | null) ?? null,
+    weekly_working_hours:
+      row.weekly_working_hours == null ? null : Number(row.weekly_working_hours),
     hire_date: (row.hire_date as string | null) ?? null,
     employment_end_date: (row.employment_end_date as string | null) ?? null,
     team: (row.team as string | null) ?? null,
@@ -304,17 +308,13 @@ export async function computeProjectMonthly(
     const absent_active = active_days.filter((d) => absence_set.has(d));
     const unpaid_active = active_days.filter((d) => unpaid_set.has(d));
     const billable_count_calendar = active_days.length - absent_active.length;
-    // FTE-prorated billable day equivalents. An employee on 88% FTE
-    // (e.g. Christian Szofer at 35h/week) spending 21 calendar days on
-    // a project bills the customer for 21 × 0.88 = 18.48 day-units of
-    // work — which is what they would actually log in Personio (7h/day
-    // instead of 8h). The display, the tracked-vs-billable variance
-    // colouring in `<TrackedCell>` and the `tracked_revenue`
-    // proration all need this FTE-adjusted figure; otherwise an 88%
-    // consultant tracking their full hours looks 12% under-billed.
-    // Revenue itself is already FTE-prorated via `r.mul(alloc).mul(fte)`
-    // below, so the denominator we use for tracked_revenue must match
-    // or we double-discount.
+    // FTE-prorated billable day equivalents = the actual output in 8h-day
+    // units. An 88%-FTE employee (e.g. Christian Szofer at 35h/week) over
+    // 21 calendar days works 21 × 0.88 = 18.48 day-units (7h/day, not 8h)
+    // — what they actually log in Personio. This is a measure of hours
+    // worked, independent of allocation. (`allocation_pct` is separately a
+    // fraction of full-time, so committed revenue is `rate × alloc` with
+    // no extra × fte — see `allocation_revenue` below.)
     const billable_day_equivs = new Decimal(billable_count_calendar).mul(fte);
     const paid_active_days = active_days.length - unpaid_active.length;
 
@@ -349,7 +349,11 @@ export async function computeProjectMonthly(
           rate_ov,
         );
         if (r !== null) {
-          allocation_revenue = allocation_revenue.add(r.mul(alloc).mul(fte));
+          // `allocation_pct` is a fraction of full-time, so committed
+          // billing = rate × alloc (a fully-booked 88% consultant → alloc
+          // 0.875 → bills 7h of an 8h day). No extra × fte, which would
+          // double-discount part-timers.
+          allocation_revenue = allocation_revenue.add(r.mul(alloc));
           resolved_rate_sum = resolved_rate_sum.add(r);
           resolved_rate_days++;
         } else {
@@ -406,10 +410,18 @@ export async function computeProjectMonthly(
         // We pay them their salary regardless of whether hours are
         // tracked here, so the projection reads as "what this project
         // would absorb if they delivered the allocation."
+        //
+        // `allocation_pct` is a fraction of full-time, so a fully-committed
+        // part-timer (alloc = fte) absorbs their WHOLE cost on this project.
+        // Divide by fte → cost = monthly_cost × (alloc / fte) × active
+        // share; otherwise an 88%-contract employee only ever charges 88%
+        // of their salary and the remainder reads as spurious bench.
         const paid_weighted_alloc_i = alloc
           .mul(paid_active_days)
-          .div(n_wd);
+          .div(n_wd)
+          .div(fte);
         cost_share = monthly_cost.mul(paid_weighted_alloc_i);
+        if (cost_share.gt(monthly_cost)) cost_share = monthly_cost;
       }
       // Freelancer with NO entered_hours row: cost_share stays 0.
       // Freelancers are pay-as-they-work — until an entry exists we

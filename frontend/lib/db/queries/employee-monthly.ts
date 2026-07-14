@@ -232,11 +232,10 @@ export async function computeEmployeeMonthly(
       (d) => d >= a_window_start && d <= a_window_end,
     );
     const absent_active = active_days.filter((d) => absences.has(d));
-    // FTE-prorated billable day equivalents — see the matching comment
-    // in project-monthly.ts. An 88%-FTE consultant on a project for 21
-    // calendar days bills 18.48 day-units, not 21, because each day is
-    // 7h not 8h. Keeps the figure consistent with revenue (which is
-    // already FTE-prorated via `r.mul(alloc).mul(fte)` below).
+    // Billable day-equivalents = calendar billable days × FTE (an 88%-FTE
+    // consultant works 7h not 8h/day, so 21 calendar days = 18.48 8h-day
+    // units). This is a measure of actual output in 8h-days and is
+    // independent of allocation.
     const billable_count_calendar = active_days.length - absent_active.length;
     const billable_day_equivs = new Decimal(billable_count_calendar).mul(fte);
     const weighted_alloc_i =
@@ -265,7 +264,11 @@ export async function computeEmployeeMonthly(
           rate_ov,
         );
         if (r !== null) {
-          allocation_revenue = allocation_revenue.add(r.mul(alloc).mul(fte));
+          // `allocation_pct` is a fraction of full-time, so a day's
+          // committed billing = rate × alloc (an 88%-contract consultant
+          // fully booked → alloc 0.875 → bills 7h of an 8h day). No extra
+          // × fte — that would double-discount part-timers.
+          allocation_revenue = allocation_revenue.add(r.mul(alloc));
           resolved_rate_sum = resolved_rate_sum.add(r);
           resolved_rate_days++;
         } else {
@@ -329,8 +332,11 @@ export async function computeEmployeeMonthly(
   const margin_pct = monthly_cost_dec.gt(0)
     ? margin.div(monthly_cost_dec).mul(100)
     : null;
+  // Utilization is measured against the employee's FTE: `allocation_pct`
+  // is a fraction of full-time, so a fully-booked part-timer's weighted
+  // allocation equals their FTE and should read as 100%, not their FTE %.
   const utilization = total_alloc_weighted.gt(0)
-    ? Number(total_alloc_weighted.toString())
+    ? Number(total_alloc_weighted.div(fte).toString())
     : 0;
   const total_rate_unresolved = assignment_rows.reduce(
     (a, r) => a + (r.rate_unresolved_days as number),

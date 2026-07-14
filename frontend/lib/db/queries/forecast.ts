@@ -42,7 +42,14 @@ import {
 
 const D0 = new Decimal(0);
 const FUTURE_MONTHS = 2;
-/** Full-time reference for FTE math is set on the client (hours ÷ wd ÷ 8). */
+/** A full-time day. `allocation_pct` is a fraction of full-time (40h/8h-day
+ * — the awork sync divides planned hours by an 8h day), so planned HOURS =
+ * allocation × 8 × working-days, independent of the employee's own daily
+ * hours. Capacity/vacation, by contrast, use the employee's ACTUAL daily
+ * hours (weekly_working_hours ÷ 5) — so a fully-booked part-timer's planned
+ * hours equal their capacity and bench is 0. FTE denominator on the client
+ * is the same (hours ÷ wd ÷ 8). */
+const FULL_TIME_DAILY = new Decimal(8);
 
 /** hours as a plain number, rounded to 2 dp (display formats to 1). */
 function hrs(d: Decimal): number {
@@ -317,9 +324,11 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
   const capTeamMap = new Map<string, CapAcc[]>();
 
   for (const emp of employees) {
-    const dailyHours = new Decimal(emp.weekly_working_hours ?? 40).div(5);
+    // Employee's ACTUAL daily hours — capacity/vacation basis.
+    const empDailyHours = new Decimal(emp.weekly_working_hours ?? 40).div(5);
 
     // Full-month planned allocation (hours) for every forecast month.
+    // Allocation is a fraction of full-time, so hours use the full-time day.
     const plannedByMonth: Decimal[] = [];
     for (const w of windows) {
       const alloc = await employeeWeightedAllocInMonth(
@@ -328,7 +337,7 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
         w.end,
         w.wd,
       );
-      plannedByMonth.push(plannedHours(alloc, dailyHours, w.wd.length));
+      plannedByMonth.push(plannedHours(alloc, FULL_TIME_DAILY, w.wd.length));
     }
 
     // Current-month planned to-date (for the realization ratio).
@@ -345,7 +354,7 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
 
     const e: EmployeeForecast = {
       planned_full: plannedByMonth[0],
-      planned_to_date: plannedHours(allocToDate, dailyHours, wdToDate.length),
+      planned_to_date: plannedHours(allocToDate, FULL_TIME_DAILY, wdToDate.length),
       actual: t.actual,
       billable: t.billable,
       next: plannedByMonth.slice(1),
@@ -398,9 +407,11 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
         else if (allAbs.has(d)) paidVacDays++;
       }
       // Paid capacity excludes unpaid leave entirely (no payroll load).
+      // Capacity/vacation use the employee's ACTUAL daily hours so a
+      // part-timer's capacity matches their fully-booked allocation hours.
       const capacityDays = Math.max(contractWd.length - unpaidDays, 0);
-      const capacity_h = dailyHours.mul(capacityDays);
-      const vacation_h = dailyHours.mul(paidVacDays);
+      const capacity_h = empDailyHours.mul(capacityDays);
+      const vacation_h = empDailyHours.mul(paidVacDays);
       const allocation_h = plannedByMonth[i];
       const bucket: CapAcc = {
         allocation: allocation_h,

@@ -8,6 +8,7 @@ import {
   employeeWeightedAllocInMonth,
   entityMonthlyCost,
   fmt,
+  fteFromWeeklyHours,
   holidaysForYearOf,
   lastOfMonth,
   workingDaysInRange,
@@ -62,6 +63,7 @@ type EligibleEmployee = {
   employee_id: number;
   first_name: string | null;
   last_name: string | null;
+  weekly_working_hours: number | null;
   hire_date: string | null;
   employment_end_date: string | null;
   team: string | null;
@@ -78,6 +80,7 @@ async function listEligibleEmployees(
   const roleTier = roleTierFromAlias("ec", "ann");
   const r = await db.execute(sql`
     SELECT ec.employee_id, ec.first_name, ec.last_name,
+           ec.weekly_working_hours,
            ec.hire_date, ec.employment_end_date,
            COALESCE(ann.team_user, ec.department) AS team,
            ${roleTier} AS role_tier
@@ -93,6 +96,8 @@ async function listEligibleEmployees(
     employee_id: row.employee_id as number,
     first_name: (row.first_name as string | null) ?? null,
     last_name: (row.last_name as string | null) ?? null,
+    weekly_working_hours:
+      row.weekly_working_hours == null ? null : Number(row.weekly_working_hours),
     hire_date: (row.hire_date as string | null) ?? null,
     employment_end_date: (row.employment_end_date as string | null) ?? null,
     team: (row.team as string | null) ?? null,
@@ -103,8 +108,10 @@ async function listEligibleEmployees(
 type EmployeeMonthlyLoad = {
   employee: EligibleEmployee;
   loaded_cost: Decimal;
-  weighted_alloc: Decimal; // 0–N (can exceed 1 = overbook)
-  unallocated_cost: Decimal; // 0 when overbooked (clamped)
+  weighted_alloc: Decimal; // 0–N as a fraction of FULL-TIME (can exceed fte)
+  fte: Decimal; // contracted FTE (weekly_working_hours / 40); "fully booked" target
+  util_ratio: Decimal; // weighted_alloc / fte — 1.0 = fully booked, >1 = overbook
+  unallocated_cost: Decimal; // 0 when fully booked / overbooked (clamped)
 };
 
 /** Per-employee load for a month: prorated loaded cost, weighted
@@ -165,7 +172,13 @@ async function computeEmployeeLoad(
     ctx.month_end,
     ctx.working_days,
   );
-  const util_clamped = Decimal.min(weighted_alloc, ONE);
+  // `allocation_pct` is a fraction of full-time (40h), so a fully-booked
+  // part-timer's `weighted_alloc` equals their FTE. Measure utilization
+  // against FTE, not a hardcoded 1.0 — otherwise an 88%-contract employee
+  // reads as 12% benched while fully allocated to their contract.
+  const fte = fteFromWeeklyHours(emp.weekly_working_hours);
+  const util_ratio = weighted_alloc.div(fte);
+  const util_clamped = Decimal.min(util_ratio, ONE);
   let unallocated_cost = loaded_cost.mul(ONE.sub(util_clamped));
   if (unallocated_cost.lt(0)) unallocated_cost = new Decimal(0);
 
@@ -173,6 +186,8 @@ async function computeEmployeeLoad(
     employee: emp,
     loaded_cost,
     weighted_alloc,
+    fte,
+    util_ratio,
     unallocated_cost,
   };
 }
@@ -225,7 +240,7 @@ function addToGroup(g: GroupAccumulator, load: EmployeeMonthlyLoad): void {
   g.n += 1;
   g.loaded = g.loaded.add(load.loaded_cost);
   g.unalloc = g.unalloc.add(load.unallocated_cost);
-  g.util_sum = g.util_sum.add(Decimal.min(load.weighted_alloc, ONE));
+  g.util_sum = g.util_sum.add(Decimal.min(load.util_ratio, ONE));
 }
 
 function summarizeGroup(key: string, g: GroupAccumulator): UtilizationGroupAggregate {
@@ -267,7 +282,7 @@ export async function computeUtilizationForMonth(
 
   for (const load of loads) {
     addToGroup(totalsAcc, load);
-    if (load.weighted_alloc.gt(ONE)) n_overbook++;
+    if (load.util_ratio.gt(ONE)) n_overbook++;
 
     const teamKey = load.employee.team ?? "(no team)";
     const t = teamMap.get(teamKey) ?? newGroupAcc();
@@ -378,17 +393,19 @@ export async function listUtilizationConsultantsForMonth(
     if (load === null) continue;
 
     const who_name = `${emp.first_name ?? ""} ${emp.last_name ?? ""}`.trim();
-    if (load.weighted_alloc.gt(ONE)) {
+    // Utilization is measured against the employee's FTE (see
+    // `computeEmployeeLoad`): fully booked = 1.0, overbooked > 1.0.
+    if (load.util_ratio.gt(ONE)) {
       overbooked.push({
         employee_id: emp.employee_id,
         who_name,
         team: emp.team,
         role_tier: emp.role_tier,
         loaded_cost: fmt(load.loaded_cost, 2),
-        utilization_pct: fmt(load.weighted_alloc, 4),
-        overbook_pct: fmt(load.weighted_alloc.sub(ONE).mul(100), 2),
+        utilization_pct: fmt(load.util_ratio, 4),
+        overbook_pct: fmt(load.util_ratio.sub(ONE).mul(100), 2),
       });
-    } else if (load.weighted_alloc.lt(ONE)) {
+    } else if (load.util_ratio.lt(ONE)) {
       // Bench-since only makes sense for FULL bench. Partial bench
       // (0 < util < 1) means they're allocated to something now;
       // surfacing a "since" date there is misleading.
@@ -412,7 +429,7 @@ export async function listUtilizationConsultantsForMonth(
         team: emp.team,
         role_tier: emp.role_tier,
         loaded_cost: fmt(load.loaded_cost, 2),
-        utilization_pct: fmt(load.weighted_alloc, 4),
+        utilization_pct: fmt(load.util_ratio, 4),
         unallocated_cost: fmt(load.unallocated_cost, 2),
         bench_since_date,
         bench_since_days,

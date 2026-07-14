@@ -264,17 +264,22 @@ export async function estimateAssignmentAction(
   let fte_factor = 1.0;
   if (employee_id !== null) {
     const hours = await getEmployeeWeeklyHours(employee_id);
-    if (hours !== null) fte_factor = hours / 40.0;
+    if (hours !== null && hours > 0) fte_factor = hours / 40.0;
   }
 
   let monthly_revenue: number | null = null;
   let monthly_margin: number | null = null;
   let margin_pct: number | null = null;
   if (billing_model === "time_and_material" && effective_rate !== null) {
+    // `allocation_pct` is a fraction of full-time, so revenue = rate ×
+    // days × alloc (a fully-booked 88% consultant → alloc 0.875 bills 7h
+    // of an 8h day). Cost, by contrast, is the person's FULL salary at
+    // full commitment, so it divides by fte (alloc/fte = share of their
+    // own capacity). No × fte on revenue — that double-discounts.
     monthly_revenue =
-      effective_rate * WORKING_DAYS_PER_MONTH * allocation_pct * fte_factor;
+      effective_rate * WORKING_DAYS_PER_MONTH * allocation_pct;
     if (monthly_cost !== null) {
-      const allocated_cost = monthly_cost * allocation_pct;
+      const allocated_cost = (monthly_cost * allocation_pct) / fte_factor;
       monthly_margin = monthly_revenue - allocated_cost;
       if (monthly_revenue > 0) {
         margin_pct = (monthly_margin / monthly_revenue) * 100;

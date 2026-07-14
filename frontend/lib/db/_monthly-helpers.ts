@@ -22,9 +22,11 @@ import {
   stateCodeForOffice,
 } from "./_de-holidays";
 import { resolveSalaryFromRow } from "./_salary-resolve";
+import { fteFromWeeklyHours } from "./_fte";
 
 export { resolveSalaryFromRow } from "./_salary-resolve";
 export type { SalaryRow, ResolvedSalary } from "./_salary-resolve";
+export { fteFromWeeklyHours } from "./_fte";
 
 // Match Python Decimal defaults: 28-digit precision, ROUND_HALF_EVEN (banker's).
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_EVEN });
@@ -349,8 +351,9 @@ export async function employeeFte(employee_id: number): Promise<Decimal> {
     SELECT weekly_working_hours FROM employee_current WHERE employee_id = ${employee_id}
   `);
   const row = (r.rows as Array<{ weekly_working_hours: number | string | null }>)[0];
-  if (!row || !row.weekly_working_hours) return new Decimal(1);
-  return new Decimal(row.weekly_working_hours as number).div(40);
+  return fteFromWeeklyHours(
+    row?.weekly_working_hours == null ? null : Number(row.weekly_working_hours),
+  );
 }
 
 // ----------------------------------------------------------------------------

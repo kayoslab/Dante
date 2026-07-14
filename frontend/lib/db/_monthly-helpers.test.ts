@@ -2,6 +2,21 @@ import { test } from "node:test";
 import { strict as assert } from "node:assert";
 
 import { resolveSalaryFromRow } from "./_salary-resolve";
+import { fteFromWeeklyHours } from "./_fte";
+
+test("fteFromWeeklyHours: 40h/week = 1.0 FTE", () => {
+  assert.equal(fteFromWeeklyHours(40).toFixed(3), "1.000");
+});
+
+test("fteFromWeeklyHours: 35h/week = 0.875 FTE (Christian Szofer repro)", () => {
+  assert.equal(fteFromWeeklyHours(35).toFixed(3), "0.875");
+});
+
+test("fteFromWeeklyHours: null / 0 → 1.0 (treat unknown as full-time)", () => {
+  assert.equal(fteFromWeeklyHours(null).toFixed(3), "1.000");
+  assert.equal(fteFromWeeklyHours(0).toFixed(3), "1.000");
+  assert.equal(fteFromWeeklyHours(undefined).toFixed(3), "1.000");
+});
 
 const base = {
   fix_salary: null,

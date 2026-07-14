@@ -139,6 +139,16 @@ export async function GET(req: NextRequest) {
       return { start, end, days, employees: [], cells: [] };
     }
 
+    // Per-employee FTE (weekly_working_hours / 40). Cell load is divided by
+    // this so it reads as a fraction of the person's OWN capacity: a
+    // fully-booked 88%-contract employee shows 1.0 (fully allocated), not
+    // 0.88. `allocation_pct` is a fraction of full-time, so without this a
+    // part-timer looks perpetually under-allocated. See day-cell coloring.
+    const fteByEmp = new Map<number, number>();
+    for (const r of empRows) {
+      fteByEmp.set(r.employee_id, r.fte && r.fte > 0 ? r.fte : 1);
+    }
+
     // Per-state holiday set, computed once per unique state code on the
     // grid. The set returned by `germanHolidaysForState` already includes
     // federal holidays — we subtract them when emitting per-cell so the
@@ -371,7 +381,13 @@ export async function GET(req: NextRequest) {
         const planned_entries = c.planned_entries
           .filter((e) => e.hours > 0)
           .sort((a, b) => b.hours - a.hours);
-        const { load, planned_hours } = computeLoad(c.project_load.values());
+        const { load: rawLoad, planned_hours } = computeLoad(
+          c.project_load.values(),
+        );
+        // Normalize to the employee's capacity so part-timers aren't shown
+        // as under-allocated (allocation_pct is a fraction of full-time).
+        const empFte = fteByEmp.get(c.employee_id) ?? 1;
+        const load = empFte > 0 ? rawLoad / empFte : rawLoad;
         return {
           employee_id: c.employee_id,
           date: c.date,
