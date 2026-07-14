@@ -85,7 +85,7 @@ version of this is wrong. That's why this exists.
               ┌─────────────┴─────────────┐
               ▼                           ▼
         Sync Lambda                  Cognito OIDC
-        (06:00 UTC)                  (sign-in + MFA)
+      (every 6h, UTC)                (sign-in + MFA)
               │
    ┌──────────┴──────────┐
    ▼                     ▼
@@ -99,7 +99,7 @@ version of this is wrong. That's why this exists.
 - **Database:** RDS PostgreSQL 16, single-AZ on day-one, Multi-AZ flip
   when traffic justifies it. Master credential rotated into Secrets
   Manager and never seen by the operator.
-- **Sync:** A Lambda fires daily at 06:00 UTC, pulls Personio + awork,
+- **Sync:** A Lambda fires every 6 hours (04:00 / 10:00 / 16:00 / 22:00 UTC), pulls Personio + awork,
   upserts via typed Drizzle inserts, purges audit log entries older than
   30 days. Failures throw, surface as CloudWatch `Errors`, land in an
   SQS DLQ, and trigger SNS alarm emails. The `/settings/sync` button

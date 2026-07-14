@@ -44,6 +44,17 @@ export type SyncOptions = {
   skip_compensations?: boolean;
   skip_time_entries?: boolean;
   skip_awork_maintenance?: boolean;
+  /** Force a full awork companies/projects scan instead of the default
+   * `updatedOn`-delta pull. Use for periodic reconciliation or when the
+   * manual "Sync" button wants a guaranteed complete refresh — awork's
+   * `updatedOn` is not guaranteed to bump on every mutation (e.g. custom
+   * fields), so a periodic full pass is the safety net for delta drift. */
+  awork_full?: boolean;
+  /** Force a full Personio attendance window backfill instead of the
+   * default `updated_at`-delta pull. Same reconciliation role as
+   * `awork_full`; also re-mirrors the window to recover from deletions
+   * (which delta can't detect). */
+  attendance_full?: boolean;
 };
 
 function isoOffset(days: number): string {
@@ -141,8 +152,19 @@ async function runPersonioSync(
     const start = isoOffset(-attendance_days);
     const end = today();
     try {
-      const n = await syncAttendances(conn, client, start, end, sync_run_id);
-      log(`  attendances (${start} → ${end}): ${n}`);
+      // Delta by default (updated_at.gte since the high-water mark);
+      // `attendance_full` forces the full attribution_date window. The
+      // first run after the v2 migration finds an empty table and does
+      // the window backfill automatically.
+      const r = await syncAttendances(
+        conn,
+        client,
+        sync_run_id,
+        { start_date: start, end_date: end },
+        opts.attendance_full ?? false,
+      );
+      const scope = r.mode === "full" ? `${start} → ${end}` : "delta";
+      log(`  attendances (${scope}): ${r.count} (${r.mode})`);
     } catch (err) {
       log(
         `  attendances: skipped — ${formatSyncError(err)}`,
@@ -171,12 +193,16 @@ async function runAworkSync(
   // catalog tables track freshness via last_seen_sync_run_id only).
   const sync_run_id = Math.floor(Date.now() / 1000);
 
-  let n = await syncAworkCompanies(conn, aworkClient, sync_run_id);
-  log(`  companies:            ${n}`);
-  n = await syncAworkUsers(conn, aworkClient, sync_run_id);
+  // Companies + projects pull incrementally by `updatedOn` by default;
+  // `awork_full` forces a complete scan (reconciliation / manual button).
+  const full = opts.awork_full ?? false;
+
+  const companyPull = await syncAworkCompanies(conn, aworkClient, sync_run_id, full);
+  log(`  companies:            ${companyPull.count} (${companyPull.mode})`);
+  let n = await syncAworkUsers(conn, aworkClient, sync_run_id);
   log(`  users:                ${n}`);
-  n = await syncAworkProjects(conn, aworkClient, sync_run_id);
-  log(`  projects:             ${n}`);
+  const projectPull = await syncAworkProjects(conn, aworkClient, sync_run_id, full);
+  log(`  projects:             ${projectPull.count} (${projectPull.mode})`);
 
   if (!opts.skip_time_entries) {
     const time_entry_days = opts.time_entry_days ?? 365;

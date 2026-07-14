@@ -58,6 +58,8 @@ export async function handler(
     skip_compensations: event.skip_compensations,
     skip_time_entries: event.skip_time_entries,
     skip_awork_maintenance: event.skip_awork_maintenance,
+    awork_full: event.awork_full,
+    attendance_full: event.attendance_full,
   };
 
   logger.info("sync_start", { request_id, source: opts.source ?? "all" });

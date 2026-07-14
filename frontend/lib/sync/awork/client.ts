@@ -95,12 +95,39 @@ async function paginate(
   return items;
 }
 
+/** OData delta-filter params for a full-scan `list*` pull. When
+ * `updated_since` is set, ask awork for only the rows whose `updatedOn`
+ * is at or after our high-water mark, sorted ascending so pagination
+ * stays stable while rows change. `ge` (not `gt`) re-includes the
+ * boundary row on every run — harmless because each downstream write is
+ * an idempotent upsert, and it closes the equal-timestamp gap a strict
+ * `gt` would silently drop. `updated_since` must be a bare OData datetime
+ * literal body (`YYYY-MM-DDTHH:MM:SS`, no timezone suffix); the caller in
+ * `sync.ts` (`aworkMaxUpdatedOn`) formats it. */
+function deltaParams(
+  updated_since: string | null | undefined,
+): Record<string, string> {
+  if (!updated_since) return {};
+  return {
+    filterby: `updatedOn ge datetime'${updated_since}'`,
+    orderby: "updatedOn asc",
+  };
+}
+
 /** Public read-only surface. Adding any non-`list*`/`get*` method here
  * MUST be reviewed — the invariant is enforced both by convention and by
  * the GET-only transport above. */
 export const aworkClient = {
-  listProjects: async (): Promise<AworkProject[]> =>
-    parseList(AworkProjectSchema, await paginate("/projects"), "project"),
+  // `updated_since` (optional) turns the full-catalog pull into a delta
+  // pull via `deltaParams`. Omit it (or pass null) for a full scan.
+  listProjects: async (
+    opts: { updated_since?: string | null } = {},
+  ): Promise<AworkProject[]> =>
+    parseList(
+      AworkProjectSchema,
+      await paginate("/projects", deltaParams(opts.updated_since)),
+      "project",
+    ),
   listCustomFieldDefinitions: async (): Promise<AworkCustomFieldDefinition[]> =>
     parseList(
       AworkCustomFieldDefinitionSchema,
@@ -109,8 +136,14 @@ export const aworkClient = {
     ),
   listUsers: async (): Promise<AworkUser[]> =>
     parseList(AworkUserSchema, await paginate("/users"), "user"),
-  listClients: async (): Promise<AworkCompany[]> =>
-    parseList(AworkCompanySchema, await paginate("/companies"), "company"),
+  listClients: async (
+    opts: { updated_since?: string | null } = {},
+  ): Promise<AworkCompany[]> =>
+    parseList(
+      AworkCompanySchema,
+      await paginate("/companies", deltaParams(opts.updated_since)),
+      "company",
+    ),
   listTimeEntries: async (params: {
     start_date: string;
     end_date: string;

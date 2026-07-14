@@ -1,8 +1,12 @@
-/** Personio /company/attendances/projects → personio_project rows.
+/** Personio v2 /projects → personio_project rows.
  *
  * The dropdown consultants pick when logging attendance time;
  * attendance.project_id refers to these. Stored here for the project-link
- * mapping UI. */
+ * mapping UI.
+ *
+ * v2 shape differs from v1: flat `{ id, name, status }` (no `attributes`
+ * envelope), `id` is a string, and `active` is derived from the
+ * `status` enum (`ACTIVE` / `ARCHIVED`). */
 import type { Client } from "pg";
 
 import { personioProject } from "@/lib/db/schema";
@@ -10,6 +14,8 @@ import { syncDrizzle } from "@/lib/sync/db";
 import { excludedSet } from "@/lib/sync/_upsert";
 
 import type { PersonioClient } from "./client";
+
+type V2Project = { id?: string; name?: string | null; status?: string | null };
 
 export async function syncPersonioProjects(
   conn: Client,
@@ -25,17 +31,19 @@ export async function syncPersonioProjects(
     "last_seen_sync_run_id",
     "last_updated_at",
   ] as const);
+  let count = 0;
   for (const item of items) {
-    const attrs =
-      (item as { attributes?: Record<string, unknown> }).attributes ?? {};
-    const pid = (item as { id?: unknown }).id;
-    if (pid === null || pid === undefined) continue;
+    const p = item as V2Project;
+    const pid = p.id;
+    if (!pid) continue;
     await db
       .insert(personioProject)
       .values({
-        personio_project_id: Number(pid),
-        name: ((attrs.name as string | undefined) ?? "") as string,
-        active: (attrs.active as boolean | undefined) ?? null,
+        personio_project_id: pid,
+        name: p.name ?? "",
+        // ACTIVE / ARCHIVED enum → boolean `active`. Null status leaves
+        // `active` null rather than guessing.
+        active: p.status ? p.status === "ACTIVE" : null,
         last_seen_sync_run_id: sync_run_id,
         last_updated_at: now,
       })
@@ -43,6 +51,7 @@ export async function syncPersonioProjects(
         target: personioProject.personio_project_id,
         set,
       });
+    count += 1;
   }
-  return items.length;
+  return count;
 }

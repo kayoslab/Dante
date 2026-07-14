@@ -41,9 +41,9 @@ variable "sync_lambda_alarm_emails" {
 }
 
 variable "sync_lambda_schedule_expression" {
-  description = "EventBridge schedule for the sync Lambda. Default: 04:00 UTC daily, which is 05:00–06:00 Frankfurt local time (winter/summer) — well before the 08:00 standup so even a slow run finishes before people start working."
+  description = "EventBridge schedule for the sync Lambda. Default: every 6 hours at 04:00, 10:00, 16:00, and 22:00 UTC. The 04:00 run (05:00–06:00 Frankfurt local, winter/summer) still lands before the 08:00 standup so overnight changes are in before people start working; the three daytime runs keep Personio + awork data fresh through the workday. A single EventBridge rule fires at all four hours via the comma-list hour field."
   type        = string
-  default     = "cron(0 4 * * ? *)"
+  default     = "cron(0 4,10,16,22 * * ? *)"
 }
 
 # --- Cognito Pre Token Generation Lambda -------------------------------

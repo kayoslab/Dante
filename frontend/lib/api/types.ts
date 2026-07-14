@@ -1382,7 +1382,7 @@ export type MonthlySeriesPoint = {
 
 export type PersonioProjectItem = {
         /** Personio Project Id */
-        personio_project_id: number;
+        personio_project_id: string;
         /** Name */
         name: string;
         /** Active */

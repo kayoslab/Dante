@@ -45,7 +45,7 @@ export function usePersonioLinksFor(project_id: number) {
 
 export function useCreatePersonioLink(project_id: number) {
   const qc = useQueryClient();
-  return useMutation<unknown, Error, number>({
+  return useMutation<unknown, Error, string>({
     mutationFn: async (personio_project_id) => {
       const r = await createPersonioLinkAction(project_id, { personio_project_id });
       if (!r.ok) throw new APIError(r.error.detail, r.error.code);
@@ -60,7 +60,7 @@ export function useCreatePersonioLink(project_id: number) {
 
 export function useDeletePersonioLink(project_id: number) {
   const qc = useQueryClient();
-  return useMutation<void, Error, number>({
+  return useMutation<void, Error, string>({
     mutationFn: async (personio_project_id) => {
       const r = await deletePersonioLinkAction(project_id, personio_project_id);
       if (!r.ok) throw new APIError(r.error.detail, r.error.code);

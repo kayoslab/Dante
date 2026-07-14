@@ -28,10 +28,72 @@ import {
 } from "@/lib/db/schema";
 import { syncDrizzle } from "@/lib/sync/db";
 import { excludedSet } from "@/lib/sync/_upsert";
+import { log } from "@/lib/logger";
 
 import type { AworkClient } from "./client";
 import { aworkUserStatus } from "./schemas";
 import type { AworkCustomFieldValue, AworkProject } from "./schemas";
+
+/** Result of a catalog pull: how many rows came back and whether the run
+ * was a delta (`incremental`) or a `full` scan. Surfaced so the sync log
+ * makes the mode visible per run. */
+type PullMode = "full" | "incremental";
+export type AworkPullResult = { count: number; mode: PullMode };
+
+/** High-water mark for an awork catalog table: the newest `updated_on`
+ * we've already stored, formatted as a bare OData datetime literal body
+ * (`YYYY-MM-DDTHH:MM:SS`, no ms / no `Z`) for awork's `filterby`. Returns
+ * null when the table is empty or every row's `updated_on` is null — the
+ * caller then falls back to a full pull.
+ *
+ * `table` is a fixed internal literal (typed union), never user input, so
+ * interpolating it is safe. Raw `conn.query` here matches this file's
+ * existing usage — `lib/sync` is the data-ingest tier and is exempt from
+ * the db-locality rule (see `scripts/check-db-locality.ts`). */
+async function aworkMaxUpdatedOn(
+  conn: Client,
+  table: "awork_company" | "awork_project",
+): Promise<string | null> {
+  const r = await conn.query<{ max: Date | null }>(
+    `SELECT MAX(updated_on) AS max FROM ${table}`,
+  );
+  const max = r.rows[0]?.max ?? null;
+  if (!max) return null;
+  return new Date(max).toISOString().replace(/\.\d{3}Z$/, "");
+}
+
+/** Pull a full-scan awork catalog either incrementally (only rows whose
+ * `updatedOn` is at/after our high-water mark) or in full. Falls back to
+ * a full pull when there is no watermark yet (first run / empty table) or
+ * when awork rejects the delta filter — so an unsupported `filterby` on a
+ * given endpoint degrades to a correct (if slower) full sync, logged,
+ * rather than throwing and aborting the whole awork run.
+ *
+ * Only safe for pure-upsert catalogs (companies, projects). Do NOT use
+ * for `time_bookings`, whose stale-row prune keys off
+ * `last_seen_sync_run_id` — a delta pull would prune every unchanged row. */
+async function pullAworkCatalog<T>(
+  conn: Client,
+  table: "awork_company" | "awork_project",
+  resource: string,
+  full: boolean,
+  list: (opts?: { updated_since?: string | null }) => Promise<T[]>,
+): Promise<{ items: T[]; mode: PullMode }> {
+  if (!full) {
+    const updated_since = await aworkMaxUpdatedOn(conn, table);
+    if (updated_since) {
+      try {
+        return { items: await list({ updated_since }), mode: "incremental" };
+      } catch (e) {
+        log.warn("awork_delta_fallback", {
+          resource,
+          issue: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  }
+  return { items: await list(), mode: "full" };
+}
 
 function dateOnly(iso: unknown): string | null {
   if (!iso) return null;
@@ -63,9 +125,16 @@ export async function syncAworkCompanies(
   conn: Client,
   client: AworkClient,
   sync_run_id: number,
-): Promise<number> {
+  full = false,
+): Promise<AworkPullResult> {
   const db = syncDrizzle(conn);
-  const items = await client.listClients();
+  const { items, mode } = await pullAworkCatalog(
+    conn,
+    "awork_company",
+    "company",
+    full,
+    (o) => client.listClients(o),
+  );
   const now = new Date();
   const set = excludedSet([
     "name",
@@ -96,7 +165,7 @@ export async function syncAworkCompanies(
         set,
       });
   }
-  return items.length;
+  return { count: items.length, mode };
 }
 
 export async function syncAworkUsers(
@@ -204,9 +273,16 @@ export async function syncAworkProjects(
   conn: Client,
   client: AworkClient,
   sync_run_id: number,
-): Promise<number> {
+  full = false,
+): Promise<AworkPullResult> {
   const db = syncDrizzle(conn);
-  const items = await client.listProjects();
+  const { items, mode } = await pullAworkCatalog(
+    conn,
+    "awork_project",
+    "project",
+    full,
+    (o) => client.listProjects(o),
+  );
   const now = new Date();
   let fieldIds: MoneyFieldIds;
   try {
@@ -278,7 +354,7 @@ export async function syncAworkProjects(
         set,
       });
   }
-  return items.length;
+  return { count: items.length, mode };
 }
 
 export async function syncAworkTimeEntries(
