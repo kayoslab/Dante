@@ -1,0 +1,48 @@
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+
+import { apiGet } from "./_fetch";
+
+export type ForecastMonthPlan = {
+  month: string; // YYYY-MM
+  planned_hours: number;
+  projected_actual_hours: number | null;
+};
+
+export type ForecastRow = {
+  key: string;
+  n_employees: number;
+  planned_hours: number;
+  planned_to_date_hours: number;
+  actual_hours: number;
+  actual_billable_hours: number;
+  realization_pct: number | null;
+  assumed_full_hours: number | null;
+  next: ForecastMonthPlan[];
+};
+
+export type ForecastConsultantRow = ForecastRow & {
+  employee_id: number;
+  who_name: string;
+  team: string | null;
+  role_tier: string | null;
+};
+
+export type ForecastReport = {
+  generated_for: string; // YYYY-MM-DD
+  current_month: string; // YYYY-MM
+  next_months: string[];
+  totals: ForecastRow;
+  by_team: ForecastRow[];
+  by_role_tier: ForecastRow[];
+  by_consultant: ForecastConsultantRow[];
+};
+
+export function useForecast() {
+  return useQuery<ForecastReport>({
+    queryKey: ["reports", "forecast"],
+    queryFn: () => apiGet<ForecastReport>("/reports/forecast"),
+    staleTime: 30_000,
+  });
+}

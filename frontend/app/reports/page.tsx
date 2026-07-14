@@ -20,6 +20,13 @@ type ReportTile = {
 
 const REPORTS: ReportTile[] = [
   {
+    href: "/reports/forecast",
+    title: "Forecast",
+    description:
+      "Planned vs. actual for the current month, assumed utilization at the current realization rate, and the planned allocation pipeline for the next two months. Per-team / per-role-tier with a consultant drill-down.",
+    minRole: "manager",
+  },
+  {
     href: "/reports/portfolio-rentability",
     title: "Portfolio rentability",
     description:
