@@ -89,7 +89,13 @@ export async function runSyncAction(
     const lines: string[] = [];
     const started = Date.now();
     try {
-      await runSync({ source: parsed.data.source }, (line) => lines.push(line));
+      // Manual sync forces a full scan on both integrations — an admin
+      // clicking "Sync" expects a guaranteed complete refresh, and it's
+      // the reconciliation safety net for the scheduled delta pulls.
+      await runSync(
+        { source: parsed.data.source, awork_full: true, attendance_full: true },
+        (line) => lines.push(line),
+      );
     } catch (e) {
       return err(
         "internal_error",
@@ -115,10 +121,14 @@ export async function runSyncAction(
         InvocationType: "RequestResponse",
         // Pass `use_secrets_manager` so the Lambda hits the same env
         // shape the daily cron uses.
+        // `*_full: true` — a manual sync guarantees a complete refresh of
+        // both integrations (the scheduled cron uses the delta pulls).
         Payload: new TextEncoder().encode(
           JSON.stringify({
             source: parsed.data.source,
             use_secrets_manager: true,
+            awork_full: true,
+            attendance_full: true,
           }),
         ),
       }),

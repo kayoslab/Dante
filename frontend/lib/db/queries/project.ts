@@ -982,7 +982,7 @@ export async function deleteProjectSdm(
  * the FE tries to link an unknown personio project. `null` when the
  * upstream row does not exist (operator needs to run `dante sync`). */
 export async function getPersonioProjectName(
-  personio_project_id: number,
+  personio_project_id: string,
 ): Promise<string | null> {
   const [row] = await db
     .select({ name: personioProject.name })
@@ -995,7 +995,7 @@ export async function getPersonioProjectName(
  * `project_id` (so the caller can craft a useful error message) or
  * `null` if no link exists. */
 export async function getPersonioLinkProjectId(
-  personio_project_id: number,
+  personio_project_id: string,
 ): Promise<number | null> {
   const [row] = await db
     .select({ project_id: personioProjectLink.project_id })
@@ -1007,7 +1007,7 @@ export async function getPersonioLinkProjectId(
 }
 
 export async function insertPersonioProjectLink(input: {
-  personio_project_id: number;
+  personio_project_id: string;
   project_id: number;
 }): Promise<void> {
   await db.insert(personioProjectLink).values({
@@ -1019,7 +1019,7 @@ export async function insertPersonioProjectLink(input: {
 
 export async function deletePersonioProjectLink(
   project_id: number,
-  personio_project_id: number,
+  personio_project_id: string,
 ): Promise<number> {
   const rows = await db
     .delete(personioProjectLink)

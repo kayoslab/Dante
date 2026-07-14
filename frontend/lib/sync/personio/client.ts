@@ -92,18 +92,73 @@ export class PersonioClient {
     );
   }
 
-  async listAttendances(
-    start_date: string,
-    end_date: string,
-  ): Promise<unknown[]> {
-    return this.paginate(`${API_BASE_V1}/company/attendances`, {
-      start_date,
-      end_date,
-    });
+  /** List Personio v2 /projects — the time-tracking project dropdown
+   * consultants pick when logging attendance; `attendance.project_id`
+   * references these. Cursor pagination like /v2/compensations. There is
+   * no `updated_at` filter on this endpoint, so the full list is fetched
+   * each run (small — one row per Personio project). */
+  async listPersonioProjects(): Promise<unknown[]> {
+    const items: unknown[] = [];
+    let url: string | null = `${API_BASE_V2}/projects?limit=200`;
+    while (url) {
+      const r = await this.request("GET", url);
+      const body = (await r.json()) as {
+        _data?: unknown[];
+        _meta?: { links?: { next?: { href?: string } } };
+      };
+      items.push(...(body._data ?? []));
+      const next = body._meta?.links?.next?.href;
+      url = next && next !== url ? next : null;
+    }
+    return items;
   }
 
-  async listPersonioProjects(): Promise<unknown[]> {
-    return this.paginate(`${API_BASE_V1}/company/attendances/projects`, {});
+  /** Walk Personio v2 /attendance-periods using cursor pagination.
+   *
+   * Returns raw period objects — BOTH `WORK` and `BREAK` types, because
+   * v2 exposes no `type` query filter; the caller splits them. v2 models
+   * a day as consecutive non-overlapping periods with breaks carved out
+   * between work spans, so net worked time is `Σ(WORK.end − WORK.start)`
+   * — no break subtraction (see `flattenAttendancePeriods`).
+   *
+   * Supply a window (`attribution_from`/`attribution_to` → the
+   * `attribution_date` filter, which correctly attributes overnight
+   * shifts to the right day) for a full backfill, and/or `updated_since`
+   * (`updated_at.gte`) for an incremental delta pull — `updated_since`
+   * MUST be a naive `YYYY-MM-DDTHH:MM:SS` (no `Z`/offset/fractional
+   * seconds; v2 400s otherwise — see `attendanceMaxUpdatedAt`). `status`
+   * is left
+   * unfiltered so PENDING / CONFIRMED / REJECTED periods all come back —
+   * matching the v1 sync, which counted all logged time. */
+  async listAttendancePeriods(
+    opts: {
+      attribution_from?: string;
+      attribution_to?: string;
+      updated_since?: string;
+    } = {},
+  ): Promise<unknown[]> {
+    const items: unknown[] = [];
+    const start = new URL(`${API_BASE_V2}/attendance-periods`);
+    if (opts.attribution_from)
+      start.searchParams.set("attribution_date.gte", opts.attribution_from);
+    if (opts.attribution_to)
+      start.searchParams.set("attribution_date.lte", opts.attribution_to);
+    if (opts.updated_since)
+      start.searchParams.set("updated_at.gte", opts.updated_since);
+    start.searchParams.set("limit", "100");
+
+    let url: string | null = start.toString();
+    while (url) {
+      const r = await this.request("GET", url);
+      const body = (await r.json()) as {
+        _data?: unknown[];
+        _meta?: { links?: { next?: { href?: string } } };
+      };
+      items.push(...(body._data ?? []));
+      const next = body._meta?.links?.next?.href;
+      url = next && next !== url ? next : null;
+    }
+    return items;
   }
 
   async getPersonEmployments(person_id: number): Promise<unknown[]> {

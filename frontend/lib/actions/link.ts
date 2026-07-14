@@ -47,13 +47,15 @@ import { requireProjectAccess } from "@/lib/auth/project-capability";
 // ----------------------------------------------------------------------------
 
 export type PersonioProjectItem = {
-  personio_project_id: number;
+  personio_project_id: string;
   name: string;
   mapped_to_project_id: number;
 };
 
+// v2 Personio project ids are strings (e.g. "82173"); non-empty guard
+// only — no numeric coercion (v2 ids aren't guaranteed numeric).
 const PersonioLinkCreateSchema = z.object({
-  personio_project_id: z.number().int(),
+  personio_project_id: z.string().min(1),
 });
 
 export async function createPersonioLinkAction(
@@ -132,9 +134,9 @@ export async function createPersonioLinkAction(
 
 export async function deletePersonioLinkAction(
   project_id: number,
-  personio_project_id: number,
+  personio_project_id: string,
 ): Promise<ActionResult<null>> {
-  if (!Number.isInteger(project_id) || !Number.isInteger(personio_project_id)) {
+  if (!Number.isInteger(project_id) || personio_project_id.length === 0) {
     return err("validation_error", "invalid id(s)");
   }
   const auth = await requireProjectAccess(project_id);

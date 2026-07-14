@@ -124,7 +124,7 @@ function AddLinkDialog({ projectId }: { projectId: number }) {
   // exactly what the user wants to skip / find by name search.
   const list = usePersonioProjects({ mapped: false, q: q.length >= 2 ? q : undefined });
 
-  async function link(personioId: number) {
+  async function link(personioId: string) {
     try {
       await create.mutateAsync(personioId);
       toast.success("Linked");
