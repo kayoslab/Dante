@@ -29,6 +29,24 @@ export type ForecastConsultantRow = ForecastRow & {
   role_tier: string | null;
 };
 
+export type CapacityBucket = {
+  allocation_h: number;
+  vacation_h: number;
+  intercontract_h: number;
+  capacity_h: number;
+};
+
+export type CapacityTeamRow = {
+  key: string; // "__total__" | team name
+  months: CapacityBucket[];
+};
+
+export type CapacityBreakdown = {
+  months: { month: string; working_days: number }[];
+  totals: CapacityTeamRow;
+  by_team: CapacityTeamRow[];
+};
+
 export type ForecastReport = {
   generated_for: string; // YYYY-MM-DD
   current_month: string; // YYYY-MM
@@ -37,6 +55,7 @@ export type ForecastReport = {
   by_team: ForecastRow[];
   by_role_tier: ForecastRow[];
   by_consultant: ForecastConsultantRow[];
+  capacity: CapacityBreakdown;
 };
 
 export function useForecast() {

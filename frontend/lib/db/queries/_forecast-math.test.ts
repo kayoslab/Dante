@@ -6,6 +6,7 @@ import {
   plannedHours,
   realizationRatio,
   projectAssumed,
+  intercontractHours,
 } from "./_forecast-math";
 
 const d = (v: number | string) => new Decimal(v);
@@ -54,6 +55,20 @@ test("projectAssumed: planned × ratio", () => {
 
 test("projectAssumed: null ratio → null (no basis to project)", () => {
   assert.equal(projectAssumed(d(120), null), null);
+});
+
+test("intercontractHours: capacity − vacation − allocation", () => {
+  // 160h capacity, 16h paid vacation, 120h allocated → 24h bench.
+  assert.equal(intercontractHours(d(160), d(16), d(120)).toFixed(2), "24.00");
+});
+
+test("intercontractHours: overbooked (alloc+vac > capacity) → 0, never negative", () => {
+  assert.equal(intercontractHours(d(160), d(16), d(200)).toFixed(2), "0.00");
+  assert.equal(intercontractHours(d(160), d(160), d(20)).toFixed(2), "0.00");
+});
+
+test("intercontractHours: fully benched (no vacation, no allocation) → capacity", () => {
+  assert.equal(intercontractHours(d(160), d(0), d(0)).toFixed(2), "160.00");
 });
 
 test("end-to-end: assumed full month = planned_full × (actual/planned_to_date)", () => {

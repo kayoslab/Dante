@@ -13,6 +13,7 @@ import {
 import { Kpi, KpiGrid } from "@/components/ui/kpi";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  type CapacityBreakdown,
   type ForecastConsultantRow,
   type ForecastReport,
   type ForecastRow,
@@ -146,6 +147,8 @@ function ForecastBody({ data }: { data: ForecastReport }) {
           ))}
         </CardContent>
       </Card>
+
+      <CapacitySection capacity={data.capacity} />
 
       <RollupSection
         title="Per team"
@@ -339,5 +342,153 @@ function RowMetrics({ r, muted }: { r: ForecastRow; muted?: boolean }) {
         </td>
       ))}
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Capacity breakdown — allocation / vacation / intercontract per team/month
+// ---------------------------------------------------------------------------
+
+type CapUnit = "hours" | "fte" | "pct";
+
+/** Format one bucket in the selected unit. FTE denominator is a full-timer's
+ * month (working_days × 8h); % is the bucket's share of paid capacity. */
+function capValue(
+  unit: CapUnit,
+  value_h: number,
+  capacity_h: number,
+  working_days: number,
+): string {
+  if (unit === "hours") return `${value_h.toFixed(0)}h`;
+  if (unit === "fte")
+    return working_days > 0 ? (value_h / (working_days * 8)).toFixed(2) : "—";
+  return capacity_h > 0 ? `${Math.round((value_h / capacity_h) * 100)}%` : "—";
+}
+
+function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
+  const [unit, setUnit] = useState<CapUnit>("hours");
+  const rows = [capacity.totals, ...capacity.by_team];
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <CardTitle className="text-base">Capacity breakdown</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Planned allocation, paid vacation, and intercontract (bench) per
+              team. Unpaid leave (sabbatical / parental) is excluded from
+              capacity — it doesn&rsquo;t load payroll. FTE: 1.0 = one
+              full-timer (40h/wk) for the month.
+            </p>
+          </div>
+          <div className="inline-flex rounded-md border bg-background p-0.5 text-xs">
+            {(["hours", "fte", "pct"] as const).map((u) => (
+              <button
+                key={u}
+                type="button"
+                onClick={() => setUnit(u)}
+                className={cn(
+                  "rounded px-2.5 py-1 font-medium",
+                  unit === u
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {u === "hours" ? "Hours" : u === "fte" ? "FTE" : "%"}
+              </button>
+            ))}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto rounded-md border bg-background">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th
+                  rowSpan={2}
+                  className="px-3 py-2 text-left align-bottom font-medium"
+                >
+                  Team
+                </th>
+                {capacity.months.map((m) => (
+                  <th
+                    key={m.month}
+                    colSpan={3}
+                    className="border-l px-3 py-1.5 text-center font-medium"
+                  >
+                    {monthLabel(m.month)}
+                  </th>
+                ))}
+              </tr>
+              <tr>
+                {capacity.months.map((m) => (
+                  <Fragment key={m.month}>
+                    <th
+                      className="border-l px-3 py-1 text-right font-medium"
+                      title="Planned allocation"
+                    >
+                      Alloc
+                    </th>
+                    <th
+                      className="px-3 py-1 text-right font-medium text-sky-700"
+                      title="Paid vacation"
+                    >
+                      Vac
+                    </th>
+                    <th
+                      className="px-3 py-1 text-right font-medium text-amber-700"
+                      title="Intercontract (bench)"
+                    >
+                      Bench
+                    </th>
+                  </Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {rows.map((r) => {
+                const isTotal = r.key === "__total__";
+                return (
+                  <tr
+                    key={r.key}
+                    className={cn(
+                      "hover:bg-muted/20",
+                      isTotal && "bg-muted/10 font-medium",
+                    )}
+                  >
+                    <td className="px-3 py-2">
+                      {isTotal ? "All teams" : r.key}
+                    </td>
+                    {r.months.map((b, i) => {
+                      const wd = capacity.months[i].working_days;
+                      return (
+                        <Fragment key={capacity.months[i].month}>
+                          <td className="border-l px-3 py-2 text-right tabular-nums">
+                            {capValue(unit, b.allocation_h, b.capacity_h, wd)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-sky-700">
+                            {capValue(unit, b.vacation_h, b.capacity_h, wd)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-amber-700">
+                            {capValue(
+                              unit,
+                              b.intercontract_h,
+                              b.capacity_h,
+                              wd,
+                            )}
+                          </td>
+                        </Fragment>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
