@@ -20,6 +20,28 @@ export class PersonioAuthError extends Error {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Backoff for a 429/503 retry. Honours a `Retry-After` header (seconds
+ * or HTTP-date) when Personio sends one; otherwise exponential backoff
+ * with jitter (~0.5s, 1s, 2s, 4s, 8s), capped at 30s so a single stuck
+ * request can't blow the sync Lambda's budget. */
+function retryDelayMs(r: Response, attempt: number): number {
+  const ra = r.headers.get("Retry-After");
+  if (ra) {
+    const secs = Number(ra);
+    if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, 30_000);
+    const dateMs = Date.parse(ra);
+    if (Number.isFinite(dateMs)) {
+      return Math.min(Math.max(dateMs - Date.now(), 0), 30_000);
+    }
+  }
+  const base = Math.min(500 * 2 ** attempt, 10_000);
+  return base + Math.floor(Math.random() * 250);
+}
+
 export class PersonioClient {
   private token: string | null = null;
   constructor(private creds: PersonioCredentials) {}
@@ -49,31 +71,50 @@ export class PersonioClient {
   ): Promise<Response> {
     if (this.token === null) await this.authenticate();
 
-    const headers = new Headers(init.headers);
-    headers.set("Authorization", `Bearer ${this.token}`);
-    let r = await fetch(url, { ...init, method, headers });
+    // Personio v2 enforces a strict rate limit. Cursor-paginated pulls
+    // (a full year of attendance is ~100+ pages) trip it, and an
+    // unhandled 429 aborts the whole sync step. Re-auth once on 401 and
+    // back off + retry on 429/503 instead of throwing on the first one.
+    let reauthed = false;
+    let rateLimitRetries = 0;
+    const MAX_RATE_LIMIT_RETRIES = 8;
 
-    if (r.status === 401) {
-      await this.authenticate();
+    for (;;) {
+      const headers = new Headers(init.headers);
       headers.set("Authorization", `Bearer ${this.token}`);
-      r = await fetch(url, { ...init, method, headers });
-    }
+      const r = await fetch(url, { ...init, method, headers });
 
-    // Token rotation — every response may carry a new bearer.
-    const rotated = r.headers.get("Authorization");
-    if (rotated) {
-      const [scheme, value] = rotated.split(" ", 2);
-      if (scheme && scheme.toLowerCase() === "bearer" && value) {
-        this.token = value;
+      // Token rotation — every response may carry a new bearer.
+      const rotated = r.headers.get("Authorization");
+      if (rotated) {
+        const [scheme, value] = rotated.split(" ", 2);
+        if (scheme && scheme.toLowerCase() === "bearer" && value) {
+          this.token = value;
+        }
       }
-    }
 
-    if (!r.ok) {
-      throw new Error(
-        `Personio ${method} ${url} → ${r.status} ${await r.text()}`,
-      );
+      if (r.status === 401 && !reauthed) {
+        reauthed = true;
+        await this.authenticate();
+        continue;
+      }
+
+      if (
+        (r.status === 429 || r.status === 503) &&
+        rateLimitRetries < MAX_RATE_LIMIT_RETRIES
+      ) {
+        await sleep(retryDelayMs(r, rateLimitRetries));
+        rateLimitRetries += 1;
+        continue;
+      }
+
+      if (!r.ok) {
+        throw new Error(
+          `Personio ${method} ${url} → ${r.status} ${await r.text()}`,
+        );
+      }
+      return r;
     }
-    return r;
   }
 
   async listEmployees(): Promise<unknown[]> {

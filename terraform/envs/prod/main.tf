@@ -428,6 +428,13 @@ module "sync_lambda" {
   schedule_expression   = var.sync_lambda_schedule_expression
   alarm_email_addresses = var.sync_lambda_alarm_emails
 
+  # The one-time Personio v2 attendance backfill pulls a full year in
+  # ~100+ cursor pages (~16k WORK rows) plus a rate-limit backoff; that
+  # plus the rest of the sync can exceed the 300s default. Scheduled
+  # delta runs stay well under a minute. 900s is the Lambda cap and only
+  # bills for time actually used.
+  timeout = 900
+
   # TODO(free-plan): -1 disables the reservation entirely because the
   # 2025 Free Plan caps account-wide concurrency below the minimum AWS
   # requires to leave unreserved (10). Restore to 2 once IT upgrades
