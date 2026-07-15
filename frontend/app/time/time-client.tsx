@@ -29,10 +29,10 @@ export function TimeClient() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Time tracking</h1>
           <p className="text-sm text-muted-foreground">
-            Personio attendance per consultant, split by how the time was
-            tagged. Untagged hours are typically Security Testing (no project
-            field) — they&apos;ll move to <em>billable</em> once awork
-            integration ships.
+            Tracked time per consultant (Personio + awork), split into
+            billable vs. bench (non-billable projects + untagged). For people
+            who track in awork, awork wins and their duplicate Personio
+            placeholder time is excluded.
           </p>
         </div>
         <div className="flex items-center gap-1">
@@ -129,16 +129,16 @@ function KpiRow({ data }: { data: ReturnType<typeof useTrackedHours>["data"] & o
         emphasize
       />
       <Kpi
-        label="Unmapped tagged"
-        value={`${data.total_unmapped_hours.toLocaleString()}h`}
-        sub="Personio project but not mapped"
+        label="Non-billable"
+        value={`${data.total_non_billable_hours.toLocaleString()}h`}
+        sub="Internal / non-billable projects (bench)"
         tone="amber"
         emphasize
       />
       <Kpi
         label="Untagged"
         value={`${data.total_untagged_hours.toLocaleString()}h`}
-        sub="No Personio project on entry"
+        sub="No project on entry (bench)"
         tone="muted"
         emphasize
       />
@@ -164,19 +164,19 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
             <th className="px-3 py-2 text-right font-medium">Total</th>
             <th
               className="px-3 py-2 text-right font-medium"
-              title="Logged on a Personio project that's mapped to one of our T&M projects."
+              title="Tracked on a billable project. awork-tracked days take precedence over duplicate Personio placeholders."
             >
               Billable
             </th>
             <th
               className="px-3 py-2 text-right font-medium"
-              title="Logged on a Personio project that isn't mapped (e.g. Interne Tätigkeit)."
+              title="Tracked on a non-billable / internal project (e.g. Interne Tätigkeit). Counts as bench."
             >
-              Unmapped
+              Non-billable
             </th>
             <th
               className="px-3 py-2 text-right font-medium"
-              title="Attendance entries without a Personio project (Security Testing pattern)."
+              title="Personio attendance without a project. Counts as bench (awork-tracked days are excluded)."
             >
               Untagged
             </th>
@@ -187,7 +187,7 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
           {rows.map((c) => {
             const tot = c.total_hours || 1;
             const bPct = (c.billable_hours / tot) * 100;
-            const uPct = (c.unmapped_hours / tot) * 100;
+            const nbPct = (c.non_billable_hours / tot) * 100;
             return (
               <tr key={c.employee_id} className="hover:bg-muted/20">
                 <td className="px-3 py-2">
@@ -208,13 +208,13 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
                   {c.billable_hours > 0 ? `${c.billable_hours}h` : "—"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-amber-700">
-                  {c.unmapped_hours > 0 ? `${c.unmapped_hours}h` : "—"}
+                  {c.non_billable_hours > 0 ? `${c.non_billable_hours}h` : "—"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
                   {c.untagged_hours > 0 ? `${c.untagged_hours}h` : "—"}
                 </td>
                 <td className="px-3 py-2">
-                  <MixBar billable={bPct} unmapped={uPct} />
+                  <MixBar billable={bPct} unmapped={nbPct} />
                 </td>
               </tr>
             );
@@ -226,6 +226,9 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
 }
 
 function MixBar({ billable, unmapped }: { billable: number; unmapped: number }) {
+  // `unmapped` = the non-billable (bench) share; kept the prop name to avoid
+  // churn. Emerald = billable, amber = non-billable, remainder (untagged) shows
+  // as the muted track behind.
   return (
     <div className="flex h-2 w-24 overflow-hidden rounded-full bg-muted">
       <div
@@ -236,7 +239,7 @@ function MixBar({ billable, unmapped }: { billable: number; unmapped: number }) 
       <div
         className="bg-amber-500"
         style={{ width: `${unmapped}%` }}
-        title={`unmapped ${unmapped.toFixed(0)}%`}
+        title={`non-billable ${unmapped.toFixed(0)}%`}
       />
     </div>
   );

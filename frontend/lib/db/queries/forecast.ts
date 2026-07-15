@@ -312,7 +312,7 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
   const trackedByEmp = new Map<number, { actual: Decimal; billable: Decimal }>();
   for (const t of tracked) {
     trackedByEmp.set(t.employee_id, {
-      actual: new Decimal(t.b_min + t.u_min + t.n_min).div(60),
+      actual: new Decimal(t.b_min + t.nb_min + t.n_min).div(60),
       billable: new Decimal(t.b_min).div(60),
     });
   }

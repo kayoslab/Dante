@@ -68,6 +68,11 @@ export const personioProject = pgTable("personio_project", {
   personio_project_id: text().primaryKey(),
   name: text().notNull(),
   active: boolean(),
+  // v2 `billable` flag. For an UNLINKED Personio project this is the source
+  // of truth for billability; for a LINKED one it only seeds the Dante
+  // project's `billable` at link time (which then overrides). Nullable —
+  // the flag is unreliable until the Personio admin curates it.
+  billable: boolean(),
   last_seen_sync_run_id: integer(),
   last_updated_at: timestamp({ mode: "date" }),
 });

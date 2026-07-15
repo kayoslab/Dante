@@ -21,6 +21,7 @@ const schema = z
     planned_end_date: z.string().optional(),
     status: z.string().min(1),
     notes: z.string().optional(),
+    billable: z.boolean().default(true),
   })
   .refine(
     (v) =>
@@ -45,6 +46,7 @@ type Props = {
     planned_end_date: string | null | undefined;
     status: string;
     notes: string | null | undefined;
+    billable: boolean;
   };
   frameworks: { framework_id: number; name: string }[];
 };
@@ -66,6 +68,7 @@ export function EditProjectDialog({
     planned_end_date: initial.planned_end_date ?? "",
     status: initial.status,
     notes: initial.notes ?? "",
+    billable: initial.billable,
   };
 
   return (
@@ -90,6 +93,7 @@ export function EditProjectDialog({
         planned_end_date: v.planned_end_date || null,
         status: v.status,
         notes: v.notes ?? null,
+        billable: v.billable,
       })}
       successMessage="Project updated"
       disableSubmitWhilePristine
@@ -174,6 +178,22 @@ export function EditProjectDialog({
             <FormField label="Notes" htmlFor="notes">
               <Textarea id="notes" rows={3} {...form.register("notes")} />
             </FormField>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                id="billable"
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                {...form.register("billable")}
+              />
+              <span>
+                <span className="font-medium">Billable</span>
+                <span className="block text-xs text-muted-foreground">
+                  Tracked time on this project counts as billable. Uncheck for
+                  internal / non-billable work (counts as bench). Seeded from
+                  Personio/awork; override here.
+                </span>
+              </span>
+            </label>
           </>
         );
       }}

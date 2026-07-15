@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   date,
   index,
@@ -89,6 +90,11 @@ export const project = pgTable(
     updated_at: timestamp({ mode: "date" }).notNull(),
     // Phase B.4: hours budget, separate from agreed_amount_eur (Euro ceiling).
     time_budget_hours: integer(),
+    // Dante-owned billability for tracked time on this project. Default true;
+    // seeded false when a linked Personio/awork source project is non-billable
+    // (link auto-set); overridable by manager/admin/SDM. Governs whether
+    // tracked hours on linked source projects count as billable vs bench.
+    billable: boolean().notNull().default(true),
   },
   (t) => [unique("uq_project_customer_name").on(t.customer_id, t.name)],
 );

@@ -114,6 +114,7 @@ function ProjectBody({
               planned_end_date: data.planned_end_date,
               status: data.status,
               notes: data.notes,
+              billable: data.billable,
             }}
             frameworks={customer?.frameworks ?? []}
           />

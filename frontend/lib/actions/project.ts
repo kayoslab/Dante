@@ -78,6 +78,10 @@ const UpdateProjectSchema = z.object({
   planned_end_date: IsoDate.nullable().optional(),
   status: z.string().optional(),
   notes: z.string().nullable().optional(),
+  // Billability override (manager/admin/SDM, gated by requireProjectAccess).
+  // Seeded from the linked Personio/awork source flag at link time; this is
+  // the manual override that reclassifies the project's tracked time.
+  billable: z.boolean().optional(),
 });
 
 const RateCreateSchema = z.object({
@@ -212,6 +216,7 @@ export async function updateProjectAction(
   }
   if (parsed.data.status !== undefined) updates.status = parsed.data.status;
   if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes;
+  if (parsed.data.billable !== undefined) updates.billable = parsed.data.billable;
 
   if (Object.keys(updates).length === 0) {
     const d = await getProjectDetail(project_id);

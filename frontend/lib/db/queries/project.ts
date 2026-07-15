@@ -65,6 +65,7 @@ export type ProjectDetail = {
   planned_end_date: string | null;
   status: string;
   notes: string | null;
+  billable: boolean;
   created_at: string;
   rates: Rate[];
   framework_rates: Rate[];
@@ -81,7 +82,7 @@ export async function getProjectDetail(
            (SELECT name FROM framework_agreement WHERE framework_id = p.framework_id) AS framework_name,
            p.name, p.billing_model, p.agreed_amount_eur,
            p.planned_start_date, p.planned_end_date, p.status, p.notes,
-           p.created_at
+           p.billable, p.created_at
     FROM project p
     JOIN customer c ON c.customer_id = p.customer_id
     WHERE p.project_id = ${project_id}
@@ -233,6 +234,7 @@ export async function getProjectDetail(
     planned_end_date: row.planned_end_date as string | null,
     status: row.status as string,
     notes: row.notes as string | null,
+    billable: row.billable as boolean,
     created_at: new Date(row.created_at as Date | string).toISOString(),
     rates,
     framework_rates,
@@ -989,6 +991,19 @@ export async function getPersonioProjectName(
     .from(personioProject)
     .where(eq(personioProject.personio_project_id, personio_project_id));
   return row?.name ?? null;
+}
+
+/** The Personio project's synced `billable` flag — used at link time to
+ * seed the Dante project's billability. `null` when unknown (row missing
+ * or Personio hasn't set the flag). */
+export async function getPersonioProjectBillable(
+  personio_project_id: string,
+): Promise<boolean | null> {
+  const [row] = await db
+    .select({ billable: personioProject.billable })
+    .from(personioProject)
+    .where(eq(personioProject.personio_project_id, personio_project_id));
+  return row?.billable ?? null;
 }
 
 /** Is this personio project already linked? Returns the linked

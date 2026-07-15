@@ -22,10 +22,12 @@ import {
   getAworkProjectLinkProjectId,
   getAworkProjectName,
   getPersonioLinkProjectId,
+  getPersonioProjectBillable,
   getPersonioProjectName,
   insertAworkProjectLink,
   insertPersonioProjectLink,
   projectExists,
+  updateProject,
 } from "@/lib/db/queries/project";
 import {
   getSettingDescription,
@@ -120,6 +122,13 @@ export async function createPersonioLinkAction(
   }
 
   await insertPersonioProjectLink({ personio_project_id, project_id });
+  // Seed the Dante project's billability from the source: if Personio marks
+  // this project non-billable, force the Dante project non-billable too
+  // (a manager/admin/SDM can override it back afterward). Personio-true /
+  // null leaves the Dante default (true) untouched.
+  if ((await getPersonioProjectBillable(personio_project_id)) === false) {
+    await updateProject(project_id, { billable: false });
+  }
   await audit(ctx, {
     action: "project_personio_link_created",
     target_type: "project",

@@ -15,7 +15,12 @@ import { excludedSet } from "@/lib/sync/_upsert";
 
 import type { PersonioClient } from "./client";
 
-type V2Project = { id?: string; name?: string | null; status?: string | null };
+type V2Project = {
+  id?: string;
+  name?: string | null;
+  status?: string | null;
+  billable?: boolean | null;
+};
 
 export async function syncPersonioProjects(
   conn: Client,
@@ -28,6 +33,7 @@ export async function syncPersonioProjects(
   const set = excludedSet([
     "name",
     "active",
+    "billable",
     "last_seen_sync_run_id",
     "last_updated_at",
   ] as const);
@@ -44,6 +50,9 @@ export async function syncPersonioProjects(
         // ACTIVE / ARCHIVED enum → boolean `active`. Null status leaves
         // `active` null rather than guessing.
         active: p.status ? p.status === "ACTIVE" : null,
+        // v2 per-project billable flag. Source of truth for unlinked
+        // projects; seeds the Dante project on link for linked ones.
+        billable: p.billable ?? null,
         last_seen_sync_run_id: sync_run_id,
         last_updated_at: now,
       })

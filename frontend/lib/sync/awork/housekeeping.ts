@@ -383,12 +383,14 @@ export async function bulkImportFromAwork(
     due_date: string | null;
     time_budget_seconds: number | null;
     description: string | null;
+    is_billable_by_default: boolean | null;
     customer_id: number | null;
     customer_name: string | null;
   }>(`
     SELECT ap.awork_project_id, ap.name, ap.awork_company_id,
            ap.project_status_type, ap.start_date, ap.due_date,
            ap.time_budget_seconds, ap.description,
+           ap.is_billable_by_default,
            link.customer_id, c.name AS customer_name
     FROM awork_project ap
     LEFT JOIN awork_project_link apl ON apl.awork_project_id = ap.awork_project_id
@@ -428,6 +430,10 @@ export async function bulkImportFromAwork(
             status: our_status,
             notes,
             time_budget_hours,
+            // Seed billability from awork's own flag (source of truth for
+            // linked projects until a manager/admin/SDM overrides). Null →
+            // default billable.
+            billable: p.is_billable_by_default ?? true,
             created_at: now,
             updated_at: now,
           })

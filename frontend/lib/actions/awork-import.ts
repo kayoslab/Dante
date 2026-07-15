@@ -29,6 +29,7 @@ import {
   getProjectDetail,
   insertAworkProjectLink,
   setProjectTimeBudgetHours,
+  updateProject,
   type ProjectDetail,
 } from "@/lib/db/queries/project";
 
@@ -241,6 +242,13 @@ export async function importProjectFromAworkAction(
       created.data.project_id,
       Math.floor(Number(row.ap_time_budget_sec) / 3600),
     );
+  }
+
+  // Seed billability from awork's flag (createProjectAction defaults to
+  // billable=true). Only patch when awork says non-billable; a
+  // manager/admin/SDM can override afterward.
+  if (row.ap_is_billable === false) {
+    await updateProject(created.data.project_id, { billable: false });
   }
 
   await insertAworkProjectLink({

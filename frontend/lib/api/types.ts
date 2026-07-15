@@ -400,8 +400,8 @@ export type ConsultantTrackedHoursRow = {
         team?: string | null;
         /** Billable Hours */
         billable_hours: number;
-        /** Unmapped Hours */
-        unmapped_hours: number;
+        /** Non Billable Hours */
+        non_billable_hours: number;
         /** Untagged Hours */
         untagged_hours: number;
         /** Total Hours */
@@ -1587,6 +1587,8 @@ export type ProjectDetail = {
         status: string;
         /** Notes */
         notes?: string | null;
+        /** Billable */
+        billable: boolean;
         /**
          * Created At
          * Format: date-time
@@ -1686,6 +1688,8 @@ export type ProjectUpdate = {
         status?: string | null;
         /** Notes */
         notes?: string | null;
+        /** Billable */
+        billable?: boolean;
     };
 
 export type Rate = {
@@ -1795,8 +1799,8 @@ export type TrackedHoursMonth = {
         n_consultants: number;
         /** Total Billable Hours */
         total_billable_hours: number;
-        /** Total Unmapped Hours */
-        total_unmapped_hours: number;
+        /** Total Non Billable Hours */
+        total_non_billable_hours: number;
         /** Total Untagged Hours */
         total_untagged_hours: number;
         /** Total Hours */

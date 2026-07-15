@@ -302,6 +302,7 @@ export type AworkProjectImportRow = {
   ap_time_budget_sec: number | null;
   ap_status_type: string | null;
   ap_description: string | null;
+  ap_is_billable: boolean | null;
   linked_customer_id: number | null;
 };
 
@@ -318,6 +319,7 @@ export async function getAworkProjectImportContext(
       ap_time_budget_sec: aworkProject.time_budget_seconds,
       ap_status_type: aworkProject.project_status_type,
       ap_description: aworkProject.description,
+      ap_is_billable: aworkProject.is_billable_by_default,
       linked_customer_id: aworkCompanyLink.customer_id,
     })
     .from(aworkProject)

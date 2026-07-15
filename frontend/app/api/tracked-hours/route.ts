@@ -50,14 +50,14 @@ export async function GET(req: NextRequest) {
     });
 
     let total_b = 0;
-    let total_u = 0;
+    let total_nb = 0;
     let total_n = 0;
     const consultants = rows.map((r) => {
       const b_h = Math.round(r.b_min / 60);
-      const u_h = Math.round(r.u_min / 60);
+      const nb_h = Math.round(r.nb_min / 60);
       const n_h = Math.round(r.n_min / 60);
       total_b += b_h;
-      total_u += u_h;
+      total_nb += nb_h;
       total_n += n_h;
       return {
         employee_id: r.employee_id,
@@ -65,9 +65,10 @@ export async function GET(req: NextRequest) {
         last_name: r.last_name,
         team: r.team,
         billable_hours: b_h,
-        unmapped_hours: u_h,
+        // Non-billable (internal projects) + untagged = bench.
+        non_billable_hours: nb_h,
         untagged_hours: n_h,
-        total_hours: b_h + u_h + n_h,
+        total_hours: b_h + nb_h + n_h,
       };
     });
 
@@ -78,9 +79,9 @@ export async function GET(req: NextRequest) {
       working_days_in_month: n_working,
       n_consultants: consultants.length,
       total_billable_hours: total_b,
-      total_unmapped_hours: total_u,
+      total_non_billable_hours: total_nb,
       total_untagged_hours: total_n,
-      total_hours: total_b + total_u + total_n,
+      total_hours: total_b + total_nb + total_n,
       consultants,
     };
   });

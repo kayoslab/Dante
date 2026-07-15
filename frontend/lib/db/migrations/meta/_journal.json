@@ -134,6 +134,13 @@
       "when": 1782432000000,
       "tag": "0018_personio_v2_attendance_projects",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1782518400000,
+      "tag": "0019_project_billability",
+      "breakpoints": true
     }
   ]
 }
