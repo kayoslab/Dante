@@ -26,10 +26,14 @@ export type CalendarEmployeeRow = {
   effective_end_date: string | null;
 };
 
-/** Active, real employees whose effective contract window intersects
- * the calendar range. `include_non_contributing=true` lifts the
- * `is_project_contributing` filter so the operator can audit who's
- * on the bench. Sorted team-then-name to match the existing UI grouping. */
+/** Real employees whose effective contract window intersects the calendar
+ * range. Includes `onboarding` hires (Personio's status for a not-yet-started
+ * employee — they only flip to `active` on their start date) so future joiners
+ * are visible for planning; the hire_date/end-date window below scopes them to
+ * the days they're actually employed. `inactive` (departed) staff stay
+ * excluded. `include_non_contributing=true` lifts the `is_project_contributing`
+ * filter so the operator can audit who's on the bench. Sorted team-then-name
+ * to match the existing UI grouping. */
 export async function listCalendarEmployees(opts: {
   start: string;
   end: string;
@@ -55,7 +59,7 @@ export async function listCalendarEmployees(opts: {
     FROM employee_current ec
     LEFT JOIN employee_annotation a ON a.employee_id = ec.employee_id
     LEFT JOIN employee_role_tier rt ON rt.employee_id = ec.employee_id
-    WHERE ec.status = 'active'
+    WHERE ec.status IN ('active', 'onboarding')
       AND COALESCE(a.is_real_employee, TRUE) = TRUE
       AND (ec.hire_date IS NULL OR ec.hire_date <= ${opts.end}::date)
       AND LEAST(
