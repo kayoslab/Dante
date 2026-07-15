@@ -85,7 +85,9 @@ async function listForecastEligible(
     LEFT JOIN employee_annotation ann ON ann.employee_id = ec.employee_id
     WHERE COALESCE(ann.is_real_employee, TRUE) = TRUE
       AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
-      AND ec.status = 'active'
+      -- Include onboarding (future-start) hires so a joiner adds capacity to
+      -- the forecast months they've started; the hire_date window scopes them.
+      AND ec.status IN ('active', 'onboarding')
       AND (ec.hire_date IS NULL OR ec.hire_date <= ${window_end}::date)
       AND (ec.employment_end_date IS NULL OR ec.employment_end_date >= ${window_start}::date)
   `);

@@ -88,7 +88,10 @@ async function listEligibleEmployees(
     LEFT JOIN employee_annotation ann ON ann.employee_id = ec.employee_id
     WHERE COALESCE(ann.is_real_employee, TRUE) = TRUE
       AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
-      AND ec.status = 'active'
+      -- Include onboarding (future-start) hires; the hire_date window below
+      -- scopes them to months they've actually started. Personio flips
+      -- onboarding -> active on the start date.
+      AND ec.status IN ('active', 'onboarding')
       AND (ec.hire_date IS NULL OR ec.hire_date <= ${month_end}::date)
       AND (ec.employment_end_date IS NULL OR ec.employment_end_date >= ${month_start}::date)
   `);
@@ -527,7 +530,10 @@ export async function listForecastDrivers(
       AND ec.hire_date BETWEEN ${from_date}::date AND ${to_date}::date
       AND COALESCE(ann.is_real_employee, TRUE) = TRUE
       AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
-      AND ec.status = 'active'
+      -- Future hires are 'onboarding' in Personio until their start date;
+      -- this "hires starting" driver must include them (that is its whole
+      -- point) -- active-only would list nobody actually joining.
+      AND ec.status IN ('active', 'onboarding')
     ORDER BY ec.hire_date, ec.last_name
   `);
   const hires_starting = (hiresRes.rows as Array<Record<string, unknown>>).map(
