@@ -59,7 +59,7 @@ export async function listPersonioProjects(opts: {
       GROUP BY project_id
     ) att ON att.personio_project_id = pp.personio_project_id
     WHERE ${whereClause}
-    ORDER BY COALESCE(att.n_entries, 0) DESC, pp.name
+    ORDER BY LOWER(pp.name)
   `);
   return (r.rows as Array<Record<string, unknown>>).map((row) => ({
     personio_project_id: row.personio_project_id as string,

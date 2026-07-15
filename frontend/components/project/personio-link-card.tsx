@@ -119,9 +119,9 @@ function AddLinkDialog({ projectId }: { projectId: number }) {
   const [q, setQ] = useState("");
   const create = useCreatePersonioLink(projectId);
   // Show only currently-unmapped projects so the user can't double-link.
-  // Server sorts by attendance entry count desc, so the most-used internal
-  // projects (6443 Interne Tätigkeit etc.) bubble to the top — usually
-  // exactly what the user wants to skip / find by name search.
+  // Server sorts alphabetically by name so a specific project (incl. a
+  // brand-new one with no tracked time yet) is where you'd expect it —
+  // find it by scrolling or the name search.
   const list = usePersonioProjects({ mapped: false, q: q.length >= 2 ? q : undefined });
 
   async function link(personioId: string) {
