@@ -6,7 +6,7 @@ import {
   plannedHours,
   realizationRatio,
   projectAssumed,
-  benchAndOverbook,
+  capacitySplit,
 } from "./_forecast-math";
 
 const d = (v: number | string) => new Decimal(v);
@@ -57,30 +57,46 @@ test("projectAssumed: null ratio → null (no basis to project)", () => {
   assert.equal(projectAssumed(d(120), null), null);
 });
 
-test("benchAndOverbook: under-booked → bench = available − allocation, no overbook", () => {
-  // available 144h (160 capacity − 16 vacation), 120h allocated → 24h bench.
-  const r = benchAndOverbook(d(144), d(120));
+test("capacitySplit: under-booked → on-project = allocation, rest bench, no over", () => {
+  // 160h capacity, 16h vacation → 144h available; 120h allocated.
+  const r = capacitySplit(d(160), d(16), d(120));
+  assert.equal(r.on_project.toFixed(2), "120.00");
   assert.equal(r.bench.toFixed(2), "24.00");
   assert.equal(r.overbook.toFixed(2), "0.00");
+  // on-project + bench + vacation = capacity
+  assert.equal(r.on_project.add(r.bench).add(d(16)).toFixed(2), "160.00");
 });
 
-test("benchAndOverbook: overbooked → bench 0, excess in overbook", () => {
-  // available 144h, planned 160h → bench 0, overbook 16.
-  const r = benchAndOverbook(d(144), d(160));
+test("capacitySplit: full allocation + vacation → over 0 (vacation is not over)", () => {
+  // 160h capacity, allocated a full 160h, 16h vacation. The 16h that lands on
+  // vacation isn't deliverable, but that's PLANNED — not overbooked.
+  const r = capacitySplit(d(160), d(16), d(160));
+  assert.equal(r.on_project.toFixed(2), "144.00"); // capped at available
   assert.equal(r.bench.toFixed(2), "0.00");
-  assert.equal(r.overbook.toFixed(2), "16.00");
+  assert.equal(r.overbook.toFixed(2), "0.00"); // allocation == capacity → no over
+  assert.equal(r.on_project.add(r.bench).add(d(16)).toFixed(2), "160.00");
 });
 
-test("benchAndOverbook: nothing allocated → all bench", () => {
-  const r = benchAndOverbook(d(160), d(0));
+test("capacitySplit: genuine over-allocation (>capacity) → overbook flagged", () => {
+  // 160h capacity, no vacation, planned 192h (120%) → over 32h.
+  const r = capacitySplit(d(160), d(0), d(192));
+  assert.equal(r.on_project.toFixed(2), "160.00");
+  assert.equal(r.bench.toFixed(2), "0.00");
+  assert.equal(r.overbook.toFixed(2), "32.00");
+});
+
+test("capacitySplit: over-allocation with vacation → over vs capacity, not available", () => {
+  // 160h capacity, 16h vacation, planned 192h → over = 192 − 160 = 32 (NOT 48).
+  const r = capacitySplit(d(160), d(16), d(192));
+  assert.equal(r.on_project.toFixed(2), "144.00");
+  assert.equal(r.overbook.toFixed(2), "32.00");
+});
+
+test("capacitySplit: nothing allocated → all bench", () => {
+  const r = capacitySplit(d(160), d(0), d(0));
+  assert.equal(r.on_project.toFixed(2), "0.00");
   assert.equal(r.bench.toFixed(2), "160.00");
   assert.equal(r.overbook.toFixed(2), "0.00");
-});
-
-test("benchAndOverbook: zero available (fully off) → all overbook, no bench", () => {
-  const r = benchAndOverbook(d(0), d(40));
-  assert.equal(r.bench.toFixed(2), "0.00");
-  assert.equal(r.overbook.toFixed(2), "40.00");
 });
 
 test("end-to-end: assumed full month = planned_full × (actual/planned_to_date)", () => {

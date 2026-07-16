@@ -44,22 +44,31 @@ export function projectAssumed(
   return planned.mul(ratio);
 }
 
-/** Derive bench (intercontract) and overbook from available capacity and
- * planned allocation.
+/** Split a person's total paid capacity into on-project / bench / vacation,
+ * plus a separate overbook figure. `available` = capacity − vacation (workable
+ * time; unpaid leave is already out of capacity).
  *
- * `available` = paid capacity minus paid vacation (workable time; unpaid leave
- * is already out of capacity). The capacity breakdown reports on-project as the
- * RAW allocation, so that `on_project + bench + vacation = 100%` of total
- * capacity when not overbooked, and exceeds 100% (by `overbook`) when it is.
- * - bench    = max(0, available − allocation)  (paid, idle, fixable)
- * - overbook = max(0, allocation − available)  (planned beyond workable time)
- * `available` is clamped at 0 (a fully-off month has no workable capacity). */
-export function benchAndOverbook(
-  available: Decimal,
+ * - on-project = min(allocation, available) — the DELIVERABLE plan; allocation
+ *   that lands on vacation days can't be worked, so it's not on-project.
+ * - bench      = available − on-project = max(0, available − allocation)
+ *   (paid, idle, fixable).
+ * - overbook   = max(0, allocation − CAPACITY) — allocation beyond the person's
+ *   FULL capacity (genuine over-allocation, e.g. 120% or double-booking).
+ *   Deliberately measured against total capacity, NOT available: a person
+ *   allocated 100% who takes planned vacation is *not* overbooked.
+ *
+ * `on_project + bench + vacation` always equals total capacity (100%);
+ * `overbook` is a separate "beyond a full person" flag. */
+export function capacitySplit(
+  capacity: Decimal,
+  vacation: Decimal,
   allocation: Decimal,
-): { bench: Decimal; overbook: Decimal } {
-  const avail = available.gt(0) ? available : new Decimal(0);
-  const bench = allocation.lt(avail) ? avail.sub(allocation) : new Decimal(0);
-  const overbook = allocation.gt(avail) ? allocation.sub(avail) : new Decimal(0);
-  return { bench, overbook };
+): { on_project: Decimal; bench: Decimal; overbook: Decimal } {
+  const cap = capacity.gt(0) ? capacity : new Decimal(0);
+  const availRaw = cap.sub(vacation);
+  const available = availRaw.gt(0) ? availRaw : new Decimal(0);
+  const on_project = Decimal.min(allocation, available);
+  const bench = available.sub(on_project); // ≥ 0 by construction
+  const overbook = allocation.gt(cap) ? allocation.sub(cap) : new Decimal(0);
+  return { on_project, bench, overbook };
 }

@@ -14,7 +14,7 @@ import {
 import { roleTierFromAlias } from "../_sql-fragments";
 import { getTrackedHoursForMonth } from "./tracked-hours";
 import {
-  benchAndOverbook,
+  capacitySplit,
   plannedHours,
   projectAssumed,
   realizationRatio,
@@ -427,15 +427,19 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
       const capacityDays = Math.max(contractWd.length - unpaidDays, 0);
       const capacity_h = empDailyHours.mul(capacityDays);
       const vacation_h = empDailyHours.mul(paidVacDays);
-      const allocation_h = plannedByMonth[i]; // billable + non-billable
-      // Available = capacity − vacation (vacation is paid time off, unworkable).
-      // On-project is reported RAW (split billable/non-billable), so
-      // on_project + bench + vacation = capacity (100%) when not overbooked,
-      // and exceeds it by `overbook` when the plan runs past available.
+      const allocation_h = plannedByMonth[i];
+      // Split total capacity into on-project (deliverable, capped at available)
+      // + bench + vacation — which always sums to capacity (100%). Overbook is
+      // allocation beyond FULL capacity (genuine over-allocation); planned
+      // vacation never counts as overbooking.
       const available_h = capacity_h.sub(vacation_h);
-      const { bench, overbook } = benchAndOverbook(available_h, allocation_h);
+      const { on_project, bench, overbook } = capacitySplit(
+        capacity_h,
+        vacation_h,
+        allocation_h,
+      );
       const bucket: CapAcc = {
-        allocation: allocation_h,
+        allocation: on_project,
         vacation: vacation_h,
         intercontract: bench,
         overbook,

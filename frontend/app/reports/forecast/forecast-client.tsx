@@ -373,7 +373,7 @@ const CAP_COLS = [
   { key: "onproject", label: "On-project", cls: "text-emerald-700", title: "Planned on-project allocation" },
   { key: "bench", label: "Bench", cls: "text-amber-700", title: "Intercontract / bench — paid but idle (fixable)" },
   { key: "vac", label: "Vac", cls: "text-sky-700", title: "Paid vacation (fixed, not fixable)" },
-  { key: "over", label: "Over", cls: "text-red-700", title: "Overbooked — planned beyond available capacity (the overshoot past 100%)" },
+  { key: "over", label: "Over", cls: "text-red-700", title: "Over-allocated — planned beyond the person's FULL capacity (e.g. >100% or double-booked). Planned vacation is NOT over." },
 ] as const;
 
 function capCell(
@@ -408,10 +408,11 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
             <p className="text-xs text-muted-foreground">
               Where each team&rsquo;s paid capacity goes. <strong>On-project +
               Bench + Vacation = 100%</strong> of total capacity;
-              <strong> Over</strong> is the overshoot past 100% (planned beyond
-              available). Bench is the only <em>fixable</em> idle time. Unpaid
-              leave is excluded (no payroll load). FTE: 1.0 = one full-timer
-              (40h/wk) for the month.
+              <strong> Over</strong> flags allocation beyond a person&rsquo;s
+              <em> full</em> capacity (genuine over-allocation) &mdash; planned
+              vacation is <em>not</em> over. Bench is the only <em>fixable</em>
+              idle time. Unpaid leave is excluded (no payroll load). FTE: 1.0 =
+              one full-timer (40h/wk) for the month.
             </p>
           </div>
           <div className="inline-flex rounded-md border bg-background p-0.5 text-xs">
