@@ -156,13 +156,29 @@ export type CalendarTrackedRow = {
 /** Per-day tracked time, union of Personio attendance + awork time
  * entries. Awork rows carry both their native `awork_project_id` and
  * the linked `dante_project_id` (when mapped) so the per-cell load math
- * in the route can collapse manual + tracked into a single project key. */
+ * in the route can collapse manual + tracked into a single project key.
+ *
+ * Day-level awork reconciliation (same rule as `getTrackedHoursForMonth`):
+ * pentesters track real work in awork but also book placeholder time in
+ * Personio ("Generic Pentest" / untagged). For any (employee, day) with
+ * ≥1 awork entry, that day's Personio attendance is dropped as a duplicate
+ * (awork is the truth) — so it doesn't inflate the cell's Personio corner
+ * number / tooltip. Non-awork users have no awork days, so all their
+ * Personio attendance is kept. Cell LOAD is unaffected either way: Personio
+ * attendance never fed the load (only manual alloc + awork planned/tracked
+ * do). */
 export async function listCalendarTrackedTime(opts: {
   start: string;
   end: string;
 }): Promise<CalendarTrackedRow[]> {
   const r = await db.execute(sql`
-    WITH personio AS (
+    WITH awork_days AS (
+      SELECT DISTINCT ul.employee_id, t.work_date
+      FROM awork_time_entry t
+      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
+      WHERE t.work_date BETWEEN ${opts.start}::date AND ${opts.end}::date
+    ),
+    personio AS (
       SELECT a.employee_id, a.work_date,
              COALESCE(pp.name, 'Untagged') AS project_name,
              SUM(a.duration_minutes) AS minutes,
@@ -170,6 +186,10 @@ export async function listCalendarTrackedTime(opts: {
       FROM attendance a
       LEFT JOIN personio_project pp ON pp.personio_project_id = a.project_id
       WHERE a.work_date BETWEEN ${opts.start}::date AND ${opts.end}::date
+        AND NOT EXISTS (
+          SELECT 1 FROM awork_days ad
+          WHERE ad.employee_id = a.employee_id AND ad.work_date = a.work_date
+        )
       GROUP BY a.employee_id, a.work_date, pp.name
     ),
     awork AS (
