@@ -20,6 +20,13 @@ type ReportTile = {
 
 const REPORTS: ReportTile[] = [
   {
+    href: "/reports/time",
+    title: "Tracked hours",
+    description:
+      "Billable vs. bench per consultant (Personio + awork), split into billable / non-billable / untagged. awork-tracked days take precedence over duplicate Personio placeholders.",
+    minRole: "manager",
+  },
+  {
     href: "/reports/forecast",
     title: "Forecast",
     description:
