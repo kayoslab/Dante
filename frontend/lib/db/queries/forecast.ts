@@ -14,7 +14,7 @@ import {
 import { roleTierFromAlias } from "../_sql-fragments";
 import { getTrackedHoursForMonth } from "./tracked-hours";
 import {
-  intercontractHours,
+  splitAvailableCapacity,
   plannedHours,
   projectAssumed,
   realizationRatio,
@@ -215,10 +215,12 @@ function summarize(key: string, acc: Acc, nextMonths: string[]): ForecastRow {
 // ---------------------------------------------------------------------------
 
 type CapAcc = {
-  allocation: Decimal;
+  allocation: Decimal; // allocated (capped at available)
   vacation: Decimal;
-  intercontract: Decimal;
-  capacity: Decimal;
+  intercontract: Decimal; // bench
+  overbook: Decimal; // planned beyond available
+  available: Decimal; // capacity − vacation (base for alloc/bench %)
+  capacity: Decimal; // total paid capacity (base for vacation %)
 };
 
 function newCapMonths(n: number): CapAcc[] {
@@ -226,6 +228,8 @@ function newCapMonths(n: number): CapAcc[] {
     allocation: D0,
     vacation: D0,
     intercontract: D0,
+    overbook: D0,
+    available: D0,
     capacity: D0,
   }));
 }
@@ -235,15 +239,19 @@ function addCap(accs: CapAcc[], i: number, b: CapAcc): void {
     allocation: accs[i].allocation.add(b.allocation),
     vacation: accs[i].vacation.add(b.vacation),
     intercontract: accs[i].intercontract.add(b.intercontract),
+    overbook: accs[i].overbook.add(b.overbook),
+    available: accs[i].available.add(b.available),
     capacity: accs[i].capacity.add(b.capacity),
   };
 }
 
 export type CapacityBucket = {
-  allocation_h: number;
+  allocation_h: number; // allocated (capped at available); allocation_h + intercontract_h = available_h
   vacation_h: number;
-  intercontract_h: number;
-  capacity_h: number;
+  intercontract_h: number; // bench
+  overbook_h: number; // planned beyond available
+  available_h: number; // capacity − vacation (base for alloc/bench %)
+  capacity_h: number; // total paid capacity (base for vacation %)
 };
 
 export type CapacityTeamRow = {
@@ -266,6 +274,8 @@ function summarizeCap(key: string, accs: CapAcc[]): CapacityTeamRow {
       allocation_h: hrs(a.allocation),
       vacation_h: hrs(a.vacation),
       intercontract_h: hrs(a.intercontract),
+      overbook_h: hrs(a.overbook),
+      available_h: hrs(a.available),
       capacity_h: hrs(a.capacity),
     })),
   };
@@ -415,11 +425,22 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
       const capacity_h = empDailyHours.mul(capacityDays);
       const vacation_h = empDailyHours.mul(paidVacDays);
       const allocation_h = plannedByMonth[i];
+      // Vacation is time off — it can't be worked or allocated. So the
+      // alloc/bench split is over AVAILABLE capacity (capacity − vacation):
+      // allocated + bench = available (a clean 100%), and anything planned
+      // beyond available is overbooked. Vacation is reported separately.
+      const available_h = capacity_h.sub(vacation_h);
+      const { allocated, bench, overbook } = splitAvailableCapacity(
+        available_h,
+        allocation_h,
+      );
       const bucket: CapAcc = {
-        allocation: allocation_h,
+        allocation: allocated,
         vacation: vacation_h,
+        intercontract: bench,
+        overbook,
+        available: available_h.gt(0) ? available_h : D0,
         capacity: capacity_h,
-        intercontract: intercontractHours(capacity_h, vacation_h, allocation_h),
       };
       addCap(capTotals, i, bucket);
       addCap(empCap, i, bucket);

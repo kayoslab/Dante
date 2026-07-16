@@ -30,10 +30,12 @@ export type ForecastConsultantRow = ForecastRow & {
 };
 
 export type CapacityBucket = {
-  allocation_h: number;
+  allocation_h: number; // allocated (capped at available); alloc + bench = available
   vacation_h: number;
-  intercontract_h: number;
-  capacity_h: number;
+  intercontract_h: number; // bench
+  overbook_h: number; // planned beyond available
+  available_h: number; // capacity − vacation (base for alloc/bench %)
+  capacity_h: number; // total paid capacity (base for vacation %)
 };
 
 export type CapacityTeamRow = {
