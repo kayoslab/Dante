@@ -6,7 +6,7 @@ import {
   plannedHours,
   realizationRatio,
   projectAssumed,
-  splitAvailableCapacity,
+  benchAndOverbook,
 } from "./_forecast-math";
 
 const d = (v: number | string) => new Decimal(v);
@@ -57,34 +57,28 @@ test("projectAssumed: null ratio → null (no basis to project)", () => {
   assert.equal(projectAssumed(d(120), null), null);
 });
 
-test("splitAvailableCapacity: allocated + bench = available (partition)", () => {
+test("benchAndOverbook: under-booked → bench = available − allocation, no overbook", () => {
   // available 144h (160 capacity − 16 vacation), 120h allocated → 24h bench.
-  const r = splitAvailableCapacity(d(144), d(120));
-  assert.equal(r.allocated.toFixed(2), "120.00");
+  const r = benchAndOverbook(d(144), d(120));
   assert.equal(r.bench.toFixed(2), "24.00");
   assert.equal(r.overbook.toFixed(2), "0.00");
-  assert.equal(r.allocated.add(r.bench).toFixed(2), "144.00"); // = available
 });
 
-test("splitAvailableCapacity: overbooked → allocated capped, bench 0, excess in overbook", () => {
-  // available 144h, planned 160h → allocated 144, bench 0, overbook 16.
-  const r = splitAvailableCapacity(d(144), d(160));
-  assert.equal(r.allocated.toFixed(2), "144.00");
+test("benchAndOverbook: overbooked → bench 0, excess in overbook", () => {
+  // available 144h, planned 160h → bench 0, overbook 16.
+  const r = benchAndOverbook(d(144), d(160));
   assert.equal(r.bench.toFixed(2), "0.00");
   assert.equal(r.overbook.toFixed(2), "16.00");
-  assert.equal(r.allocated.add(r.bench).toFixed(2), "144.00");
 });
 
-test("splitAvailableCapacity: nothing allocated → all bench", () => {
-  const r = splitAvailableCapacity(d(160), d(0));
-  assert.equal(r.allocated.toFixed(2), "0.00");
+test("benchAndOverbook: nothing allocated → all bench", () => {
+  const r = benchAndOverbook(d(160), d(0));
   assert.equal(r.bench.toFixed(2), "160.00");
   assert.equal(r.overbook.toFixed(2), "0.00");
 });
 
-test("splitAvailableCapacity: zero available (fully off) → all overbook, no bench", () => {
-  const r = splitAvailableCapacity(d(0), d(40));
-  assert.equal(r.allocated.toFixed(2), "0.00");
+test("benchAndOverbook: zero available (fully off) → all overbook, no bench", () => {
+  const r = benchAndOverbook(d(0), d(40));
   assert.equal(r.bench.toFixed(2), "0.00");
   assert.equal(r.overbook.toFixed(2), "40.00");
 });

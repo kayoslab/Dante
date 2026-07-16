@@ -44,22 +44,22 @@ export function projectAssumed(
   return planned.mul(ratio);
 }
 
-/** Split available capacity into allocated / bench / overbooked.
+/** Derive bench (intercontract) and overbook from available capacity and
+ * planned allocation.
  *
- * `available` = paid capacity minus paid vacation (the time actually
- * workable; unpaid leave is already out of capacity). Allocated is capped at
- * available, so **allocated + bench always equals available** — a clean 100%
- * partition of the workable time. Anything planned beyond available is
- * `overbook` (surfaced separately, "beyond 100%"), NOT negative bench.
- * `available` is clamped at 0 (a fully-off month has no workable capacity).
- */
-export function splitAvailableCapacity(
+ * `available` = paid capacity minus paid vacation (workable time; unpaid leave
+ * is already out of capacity). The capacity breakdown reports on-project as the
+ * RAW allocation, so that `on_project + bench + vacation = 100%` of total
+ * capacity when not overbooked, and exceeds 100% (by `overbook`) when it is.
+ * - bench    = max(0, available − allocation)  (paid, idle, fixable)
+ * - overbook = max(0, allocation − available)  (planned beyond workable time)
+ * `available` is clamped at 0 (a fully-off month has no workable capacity). */
+export function benchAndOverbook(
   available: Decimal,
   allocation: Decimal,
-): { allocated: Decimal; bench: Decimal; overbook: Decimal } {
+): { bench: Decimal; overbook: Decimal } {
   const avail = available.gt(0) ? available : new Decimal(0);
-  const allocated = Decimal.min(allocation, avail);
-  const bench = avail.sub(allocated);
+  const bench = allocation.lt(avail) ? avail.sub(allocation) : new Decimal(0);
   const overbook = allocation.gt(avail) ? allocation.sub(avail) : new Decimal(0);
-  return { allocated, bench, overbook };
+  return { bench, overbook };
 }

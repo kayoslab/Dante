@@ -14,6 +14,7 @@ import { Kpi, KpiGrid } from "@/components/ui/kpi";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   type CapacityBreakdown,
+  type CapacityBucket,
   type ForecastConsultantRow,
   type ForecastReport,
   type ForecastRow,
@@ -346,15 +347,16 @@ function RowMetrics({ r, muted }: { r: ForecastRow; muted?: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
-// Capacity breakdown — allocation / vacation / intercontract per team/month
+// Capacity breakdown — where a team's paid capacity goes, per month.
+// Billable + Non-billable (on-project) + Bench + Vacation = 100% of total
+// capacity when not overbooked; the total exceeds 100% by Over otherwise.
 // ---------------------------------------------------------------------------
 
 type CapUnit = "hours" | "fte" | "pct";
 
-/** Format one bucket in the selected unit. FTE denominator is a full-timer's
- * month (working_days × 8h); % is the bucket's share of `base_h` — available
- * capacity for alloc/bench/overbook (so alloc% + bench% = 100%), total
- * capacity for vacation. */
+/** Format one bucket in the selected unit. Hours = raw; FTE denominator is a
+ * full-timer's month (working_days × 8h); % is the bucket's share of total
+ * capacity (`base_h`) — so every column shares one base. */
 function capValue(
   unit: CapUnit,
   value_h: number,
@@ -367,8 +369,39 @@ function capValue(
   return base_h > 0 ? `${Math.round((value_h / base_h) * 100)}%` : "—";
 }
 
+const CAP_COLS = [
+  { key: "billable", label: "Bill", cls: "text-emerald-700", title: "On-project, billable" },
+  { key: "nonbill", label: "Non-bill", cls: "text-violet-700", title: "On-project, non-billable / internal" },
+  { key: "bench", label: "Bench", cls: "text-amber-700", title: "Intercontract / bench — paid but idle (fixable)" },
+  { key: "vac", label: "Vac", cls: "text-sky-700", title: "Paid vacation (fixed, not fixable)" },
+  { key: "over", label: "Over", cls: "text-red-700", title: "Overbooked — planned beyond available capacity (the overshoot past 100%)" },
+] as const;
+
+function capCell(
+  col: (typeof CAP_COLS)[number]["key"],
+  b: CapacityBucket,
+  unit: CapUnit,
+  wd: number,
+): string {
+  const base = b.capacity_h;
+  switch (col) {
+    case "billable":
+      return capValue(unit, b.billable_alloc_h, base, wd);
+    case "nonbill":
+      return b.nonbillable_alloc_h > 0
+        ? capValue(unit, b.nonbillable_alloc_h, base, wd)
+        : "—";
+    case "bench":
+      return capValue(unit, b.intercontract_h, base, wd);
+    case "vac":
+      return b.vacation_h > 0 ? capValue(unit, b.vacation_h, base, wd) : "—";
+    case "over":
+      return b.overbook_h > 0 ? capValue(unit, b.overbook_h, base, wd) : "—";
+  }
+}
+
 function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
-  const [unit, setUnit] = useState<CapUnit>("hours");
+  const [unit, setUnit] = useState<CapUnit>("pct");
   const rows = [capacity.totals, ...capacity.by_team];
 
   return (
@@ -378,16 +411,16 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
           <div>
             <CardTitle className="text-base">Capacity breakdown</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Allocated + Bench = 100% of <em>available</em> capacity (total
-              minus vacation). Vacation is shown separately (as a share of
-              total capacity); Over = planned beyond available (overbooked).
-              Unpaid leave (sabbatical / parental) is excluded from capacity —
-              it doesn&rsquo;t load payroll. FTE: 1.0 = one full-timer (40h/wk)
-              for the month.
+              Where each team&rsquo;s paid capacity goes. <strong>Billable +
+              Non-billable + Bench + Vacation = 100%</strong> of total capacity;
+              <strong> Over</strong> is the overshoot past 100% (planned beyond
+              available). Bench is the only <em>fixable</em> idle time. Unpaid
+              leave is excluded (no payroll load). FTE: 1.0 = one full-timer
+              (40h/wk) for the month.
             </p>
           </div>
           <div className="inline-flex rounded-md border bg-background p-0.5 text-xs">
-            {(["hours", "fte", "pct"] as const).map((u) => (
+            {(["pct", "hours", "fte"] as const).map((u) => (
               <button
                 key={u}
                 type="button"
@@ -405,7 +438,7 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
           </div>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-5">
         <div className="overflow-x-auto rounded-md border bg-background">
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
@@ -419,7 +452,7 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
                 {capacity.months.map((m) => (
                   <th
                     key={m.month}
-                    colSpan={4}
+                    colSpan={CAP_COLS.length}
                     className="border-l px-3 py-1.5 text-center font-medium"
                   >
                     {monthLabel(m.month)}
@@ -429,30 +462,19 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
               <tr>
                 {capacity.months.map((m) => (
                   <Fragment key={m.month}>
-                    <th
-                      className="border-l px-3 py-1 text-right font-medium"
-                      title="Allocated (of available capacity)"
-                    >
-                      Alloc
-                    </th>
-                    <th
-                      className="px-3 py-1 text-right font-medium text-amber-700"
-                      title="Intercontract / bench (of available capacity). Alloc + Bench = 100%."
-                    >
-                      Bench
-                    </th>
-                    <th
-                      className="px-3 py-1 text-right font-medium text-sky-700"
-                      title="Paid vacation (share of total capacity)"
-                    >
-                      Vac
-                    </th>
-                    <th
-                      className="px-3 py-1 text-right font-medium text-red-700"
-                      title="Overbooked: planned beyond available capacity"
-                    >
-                      Over
-                    </th>
+                    {CAP_COLS.map((col, ci) => (
+                      <th
+                        key={col.key}
+                        className={cn(
+                          "px-3 py-1 text-right font-medium",
+                          ci === 0 && "border-l",
+                          col.cls,
+                        )}
+                        title={col.title}
+                      >
+                        {col.label}
+                      </th>
+                    ))}
                   </Fragment>
                 ))}
               </tr>
@@ -475,30 +497,25 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
                       const wd = capacity.months[i].working_days;
                       return (
                         <Fragment key={capacity.months[i].month}>
-                          {/* Alloc + Bench are % of AVAILABLE (sum to 100%). */}
-                          <td className="border-l px-3 py-2 text-right tabular-nums">
-                            {capValue(unit, b.allocation_h, b.available_h, wd)}
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums text-amber-700">
-                            {capValue(unit, b.intercontract_h, b.available_h, wd)}
-                          </td>
-                          {/* Vacation is % of TOTAL capacity. */}
-                          <td className="px-3 py-2 text-right tabular-nums text-sky-700">
-                            {capValue(unit, b.vacation_h, b.capacity_h, wd)}
-                          </td>
-                          {/* Overbooked (% of available); dim when none. */}
-                          <td
-                            className={cn(
-                              "px-3 py-2 text-right tabular-nums",
-                              b.overbook_h > 0
-                                ? "text-red-700"
-                                : "text-muted-foreground",
-                            )}
-                          >
-                            {b.overbook_h > 0
-                              ? capValue(unit, b.overbook_h, b.available_h, wd)
-                              : "—"}
-                          </td>
+                          {CAP_COLS.map((col, ci) => (
+                            <td
+                              key={col.key}
+                              className={cn(
+                                "px-3 py-2 text-right tabular-nums",
+                                ci === 0 && "border-l",
+                                col.key === "over" && b.overbook_h > 0
+                                  ? "text-red-700"
+                                  : col.cls,
+                                (col.key === "nonbill" && b.nonbillable_alloc_h === 0) ||
+                                  (col.key === "vac" && b.vacation_h === 0) ||
+                                  (col.key === "over" && b.overbook_h === 0)
+                                  ? "text-muted-foreground"
+                                  : undefined,
+                              )}
+                            >
+                              {capCell(col.key, b, unit, wd)}
+                            </td>
+                          ))}
                         </Fragment>
                       );
                     })}
@@ -508,7 +525,97 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
             </tbody>
           </table>
         </div>
+
+        <CapacityBars
+          rows={capacity.by_team}
+          monthLabelText={monthLabel(capacity.months[0]?.month ?? "")}
+        />
       </CardContent>
     </Card>
+  );
+}
+
+/** Stacked bar per team for the current month: Billable / Non-billable / Bench
+ * / Vacation as % of total capacity. Bars overrun the 100% line when a team is
+ * overbooked (the overshoot is flagged). */
+function CapacityBars({
+  rows,
+  monthLabelText,
+}: {
+  rows: CapacityBreakdown["by_team"];
+  monthLabelText: string;
+}) {
+  const withData = rows
+    .map((r) => ({ key: r.key, b: r.months[0] }))
+    .filter((r) => r.b && r.b.capacity_h > 0);
+  if (withData.length === 0) return null;
+
+  const seg = (h: number, cap: number) => (cap > 0 ? (h / cap) * 100 : 0);
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {monthLabelText} · capacity mix
+        </h4>
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+          <Legend cls="bg-emerald-500" label="Billable" />
+          <Legend cls="bg-violet-400" label="Non-billable" />
+          <Legend cls="bg-amber-400" label="Bench" />
+          <Legend cls="bg-sky-300" label="Vacation" />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        {withData.map(({ key, b }) => {
+          const cap = b!.capacity_h;
+          const parts = [
+            { w: seg(b!.billable_alloc_h, cap), cls: "bg-emerald-500" },
+            { w: seg(b!.nonbillable_alloc_h, cap), cls: "bg-violet-400" },
+            { w: seg(b!.intercontract_h, cap), cls: "bg-amber-400" },
+            { w: seg(b!.vacation_h, cap), cls: "bg-sky-300" },
+          ];
+          const overPct = Math.round(seg(b!.overbook_h, cap));
+          return (
+            <div key={key} className="flex items-center gap-2">
+              <div className="w-40 shrink-0 truncate text-xs" title={key}>
+                {key}
+              </div>
+              {/* Track = 100% capacity; right border marks the 100% line.
+                  Overbooked bars overflow past it. */}
+              <div className="relative h-4 flex-1 overflow-visible rounded-sm bg-muted/60">
+                <div className="absolute inset-y-0 right-0 w-px bg-foreground/30" />
+                <div className="flex h-full">
+                  {parts.map((p, idx) => (
+                    <div
+                      key={idx}
+                      className={cn("h-full shrink-0", p.cls)}
+                      style={{ width: `${p.w}%` }}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="w-16 shrink-0 text-right text-xs tabular-nums">
+                {overPct > 0 ? (
+                  <span className="text-red-700" title="Overbooked">
+                    +{overPct}%
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Legend({ cls, label }: { cls: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className={cn("inline-block h-2.5 w-2.5 rounded-sm", cls)} />
+      {label}
+    </span>
   );
 }
