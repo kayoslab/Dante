@@ -746,13 +746,19 @@ export async function trackedMinutesByProjectForEmployee(
   return out;
 }
 
-/** Utilization based on tracked project hours instead of assignment
- * allocation. Numerator = `employeeProjectTrackedMinutesInMonth`;
- * denominator = (contract workdays − absence workdays) ×
- * standard_daily_hours × 60. Returns null when there's no available
- * time (entirely off-contract month, or entirely on holiday/leave).
- * Returned ratio can exceed 1 — that's tracked overtime, real signal,
- * not a bug to clamp. */
+/** Utilization based on tracked hours instead of assignment allocation.
+ * Numerator = `employeeTotalTrackedMinutesInMonth` — ALL tracked time
+ * (Personio + awork, per-day MAX dedup), NOT just time on Dante-linked
+ * projects. Using linked-only badly understated teams whose real work is
+ * on unmapped projects: pentesters book "Generic Pentest" (unlinked
+ * Personio) and much of their awork is on unlinked projects, so e.g.
+ * someone with a full month of tracked work read as ~0%. This metric
+ * answers "how much of available capacity did they actually log", which is
+ * mapping-agnostic (billability is a separate axis — see the tracked-hours
+ * report). Denominator = (contract workdays − absence workdays) ×
+ * standard_daily_hours × 60. Returns null when there's no available time
+ * (entirely off-contract month, or entirely on holiday/leave). Ratio can
+ * exceed 1 — tracked overtime, real signal, not a bug to clamp. */
 export async function employeeTrackedUtilizationInMonth(
   employee_id: number,
   month_start: string,
@@ -770,7 +776,7 @@ export async function employeeTrackedUtilizationInMonth(
     .mul(standard_daily_hours)
     .mul(60);
   if (available_minutes.lte(0)) return null;
-  const tracked_minutes = await employeeProjectTrackedMinutesInMonth(
+  const tracked_minutes = await employeeTotalTrackedMinutesInMonth(
     employee_id,
     month_start,
     month_end,
