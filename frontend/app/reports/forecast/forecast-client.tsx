@@ -370,8 +370,7 @@ function capValue(
 }
 
 const CAP_COLS = [
-  { key: "billable", label: "Bill", cls: "text-emerald-700", title: "On-project, billable" },
-  { key: "nonbill", label: "Non-bill", cls: "text-violet-700", title: "On-project, non-billable / internal" },
+  { key: "onproject", label: "On-project", cls: "text-emerald-700", title: "Planned on-project allocation" },
   { key: "bench", label: "Bench", cls: "text-amber-700", title: "Intercontract / bench — paid but idle (fixable)" },
   { key: "vac", label: "Vac", cls: "text-sky-700", title: "Paid vacation (fixed, not fixable)" },
   { key: "over", label: "Over", cls: "text-red-700", title: "Overbooked — planned beyond available capacity (the overshoot past 100%)" },
@@ -385,12 +384,8 @@ function capCell(
 ): string {
   const base = b.capacity_h;
   switch (col) {
-    case "billable":
-      return capValue(unit, b.billable_alloc_h, base, wd);
-    case "nonbill":
-      return b.nonbillable_alloc_h > 0
-        ? capValue(unit, b.nonbillable_alloc_h, base, wd)
-        : "—";
+    case "onproject":
+      return capValue(unit, b.allocation_h, base, wd);
     case "bench":
       return capValue(unit, b.intercontract_h, base, wd);
     case "vac":
@@ -411,8 +406,8 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
           <div>
             <CardTitle className="text-base">Capacity breakdown</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Where each team&rsquo;s paid capacity goes. <strong>Billable +
-              Non-billable + Bench + Vacation = 100%</strong> of total capacity;
+              Where each team&rsquo;s paid capacity goes. <strong>On-project +
+              Bench + Vacation = 100%</strong> of total capacity;
               <strong> Over</strong> is the overshoot past 100% (planned beyond
               available). Bench is the only <em>fixable</em> idle time. Unpaid
               leave is excluded (no payroll load). FTE: 1.0 = one full-timer
@@ -506,8 +501,7 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
                                 col.key === "over" && b.overbook_h > 0
                                   ? "text-red-700"
                                   : col.cls,
-                                (col.key === "nonbill" && b.nonbillable_alloc_h === 0) ||
-                                  (col.key === "vac" && b.vacation_h === 0) ||
+                                (col.key === "vac" && b.vacation_h === 0) ||
                                   (col.key === "over" && b.overbook_h === 0)
                                   ? "text-muted-foreground"
                                   : undefined,
@@ -559,8 +553,7 @@ function CapacityBars({
           {monthLabelText} · capacity mix
         </h4>
         <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-          <Legend cls="bg-emerald-500" label="Billable" />
-          <Legend cls="bg-violet-400" label="Non-billable" />
+          <Legend cls="bg-emerald-500" label="On-project" />
           <Legend cls="bg-amber-400" label="Bench" />
           <Legend cls="bg-sky-300" label="Vacation" />
         </div>
@@ -569,8 +562,7 @@ function CapacityBars({
         {withData.map(({ key, b }) => {
           const cap = b!.capacity_h;
           const parts = [
-            { w: seg(b!.billable_alloc_h, cap), cls: "bg-emerald-500" },
-            { w: seg(b!.nonbillable_alloc_h, cap), cls: "bg-violet-400" },
+            { w: seg(b!.allocation_h, cap), cls: "bg-emerald-500" },
             { w: seg(b!.intercontract_h, cap), cls: "bg-amber-400" },
             { w: seg(b!.vacation_h, cap), cls: "bg-sky-300" },
           ];

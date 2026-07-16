@@ -6,7 +6,6 @@ import {
   absencesForEmployee,
   addMonths,
   employeeWeightedAllocInMonth,
-  employeeWeightedAllocByBillableInMonth,
   firstOfMonth,
   holidaysForYearOf,
   lastOfMonth,
@@ -216,10 +215,9 @@ function summarize(key: string, acc: Acc, nextMonths: string[]): ForecastRow {
 // ---------------------------------------------------------------------------
 
 type CapAcc = {
-  billable_alloc: Decimal; // on-project, billable projects
-  nonbillable_alloc: Decimal; // on-project, non-billable/internal projects
+  allocation: Decimal; // on-project (planned assignment allocation, raw)
   vacation: Decimal;
-  intercontract: Decimal; // bench = max(0, available − total allocation)
+  intercontract: Decimal; // bench = max(0, available − allocation)
   overbook: Decimal; // planned beyond available
   available: Decimal; // capacity − vacation
   capacity: Decimal; // total paid capacity (the 100% base)
@@ -227,8 +225,7 @@ type CapAcc = {
 
 function newCapMonths(n: number): CapAcc[] {
   return Array.from({ length: n }, () => ({
-    billable_alloc: D0,
-    nonbillable_alloc: D0,
+    allocation: D0,
     vacation: D0,
     intercontract: D0,
     overbook: D0,
@@ -239,8 +236,7 @@ function newCapMonths(n: number): CapAcc[] {
 
 function addCap(accs: CapAcc[], i: number, b: CapAcc): void {
   accs[i] = {
-    billable_alloc: accs[i].billable_alloc.add(b.billable_alloc),
-    nonbillable_alloc: accs[i].nonbillable_alloc.add(b.nonbillable_alloc),
+    allocation: accs[i].allocation.add(b.allocation),
     vacation: accs[i].vacation.add(b.vacation),
     intercontract: accs[i].intercontract.add(b.intercontract),
     overbook: accs[i].overbook.add(b.overbook),
@@ -249,12 +245,11 @@ function addCap(accs: CapAcc[], i: number, b: CapAcc): void {
   };
 }
 
-// On-project (billable + non_billable) + intercontract + vacation = capacity
-// (the 100% base) when not overbooked; the total exceeds capacity by overbook
-// when it is. All figures are hours; the client renders % of `capacity_h`.
+// On-project + intercontract + vacation = capacity (the 100% base) when not
+// overbooked; the total exceeds capacity by overbook when it is. All figures
+// are hours; the client renders % of `capacity_h`.
 export type CapacityBucket = {
-  billable_alloc_h: number; // on-project, billable
-  nonbillable_alloc_h: number; // on-project, non-billable / internal
+  allocation_h: number; // on-project (planned assignment allocation)
   vacation_h: number;
   intercontract_h: number; // bench
   overbook_h: number; // planned beyond available (the overshoot past 100%)
@@ -279,8 +274,7 @@ function summarizeCap(key: string, accs: CapAcc[]): CapacityTeamRow {
   return {
     key,
     months: accs.map((a) => ({
-      billable_alloc_h: hrs(a.billable_alloc),
-      nonbillable_alloc_h: hrs(a.nonbillable_alloc),
+      allocation_h: hrs(a.allocation),
       vacation_h: hrs(a.vacation),
       intercontract_h: hrs(a.intercontract),
       overbook_h: hrs(a.overbook),
@@ -348,25 +342,17 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
     // Employee's ACTUAL daily hours — capacity/vacation basis.
     const empDailyHours = new Decimal(emp.weekly_working_hours ?? 40).div(5);
 
-    // Full-month planned allocation (hours) for every forecast month, split
-    // by the assigned project's billable flag. Allocation is a fraction of
-    // full-time, so hours use the full-time day. `plannedByMonth` (total) feeds
-    // the pipeline/realization; the billable split feeds the capacity table.
+    // Full-month planned allocation (hours) for every forecast month.
+    // Allocation is a fraction of full-time, so hours use the full-time day.
     const plannedByMonth: Decimal[] = [];
-    const billableByMonth: Decimal[] = [];
-    const nonbillByMonth: Decimal[] = [];
     for (const w of windows) {
-      const split = await employeeWeightedAllocByBillableInMonth(
+      const alloc = await employeeWeightedAllocInMonth(
         emp.employee_id,
         w.start,
         w.end,
         w.wd,
       );
-      const billable_h = plannedHours(split.billable, FULL_TIME_DAILY, w.wd.length);
-      const nonbill_h = plannedHours(split.non_billable, FULL_TIME_DAILY, w.wd.length);
-      billableByMonth.push(billable_h);
-      nonbillByMonth.push(nonbill_h);
-      plannedByMonth.push(billable_h.add(nonbill_h));
+      plannedByMonth.push(plannedHours(alloc, FULL_TIME_DAILY, w.wd.length));
     }
 
     // Current-month planned to-date (for the realization ratio).
@@ -449,8 +435,7 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
       const available_h = capacity_h.sub(vacation_h);
       const { bench, overbook } = benchAndOverbook(available_h, allocation_h);
       const bucket: CapAcc = {
-        billable_alloc: billableByMonth[i],
-        nonbillable_alloc: nonbillByMonth[i],
+        allocation: allocation_h,
         vacation: vacation_h,
         intercontract: bench,
         overbook,

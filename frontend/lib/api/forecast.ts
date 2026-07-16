@@ -30,8 +30,7 @@ export type ForecastConsultantRow = ForecastRow & {
 };
 
 export type CapacityBucket = {
-  billable_alloc_h: number; // on-project, billable
-  nonbillable_alloc_h: number; // on-project, non-billable / internal
+  allocation_h: number; // on-project (planned assignment allocation)
   vacation_h: number;
   intercontract_h: number; // bench
   overbook_h: number; // planned beyond available (overshoot past 100%)
