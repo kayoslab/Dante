@@ -561,22 +561,35 @@ function CapacityBars({
       <div className="space-y-1.5">
         {withData.map(({ key, b }) => {
           const cap = b!.capacity_h;
-          const parts = [
-            { w: seg(b!.allocation_h, cap), cls: "bg-emerald-500" },
-            { w: seg(b!.intercontract_h, cap), cls: "bg-amber-400" },
-            { w: seg(b!.vacation_h, cap), cls: "bg-sky-300" },
-          ];
+          const benchW = seg(b!.intercontract_h, cap);
+          const vacW = seg(b!.vacation_h, cap);
+          // Clamp on-project so the stack never exceeds the 100% track (keeps
+          // the graph on-page and vacation visible). Overbooking is shown by
+          // the red ring + the "+X%" label, not by overflowing the bar.
+          const onprojW = Math.min(
+            seg(b!.allocation_h, cap),
+            Math.max(0, 100 - benchW - vacW),
+          );
           const overPct = Math.round(seg(b!.overbook_h, cap));
+          const parts = [
+            { w: onprojW, cls: "bg-emerald-500" },
+            { w: benchW, cls: "bg-amber-400" },
+            { w: vacW, cls: "bg-sky-300" },
+          ];
           return (
             <div key={key} className="flex items-center gap-2">
               <div className="w-40 shrink-0 truncate text-xs" title={key}>
                 {key}
               </div>
-              {/* Track = 100% capacity; right border marks the 100% line.
-                  Overbooked bars overflow past it. */}
-              <div className="relative h-4 flex-1 overflow-visible rounded-sm bg-muted/60">
-                <div className="absolute inset-y-0 right-0 w-px bg-foreground/30" />
-                <div className="flex h-full">
+              {/* Track = 100% capacity. Overbooked rows get a red ring
+                  (the bar itself is clamped to the track). */}
+              <div
+                className={cn(
+                  "h-4 flex-1 overflow-hidden rounded-sm bg-muted/60",
+                  overPct > 0 && "ring-1 ring-red-500",
+                )}
+              >
+                <div className="flex h-full w-full">
                   {parts.map((p, idx) => (
                     <div
                       key={idx}
@@ -588,7 +601,7 @@ function CapacityBars({
               </div>
               <div className="w-16 shrink-0 text-right text-xs tabular-nums">
                 {overPct > 0 ? (
-                  <span className="text-red-700" title="Overbooked">
+                  <span className="text-red-700" title="Overbooked beyond capacity">
                     +{overPct}%
                   </span>
                 ) : (
