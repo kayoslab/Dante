@@ -24,6 +24,10 @@
  * users have no awork days, so all their Personio attendance is kept (untagged
  * = genuine bench).
  *
+ * Roster: every active, real, project-contributing employee appears — even
+ * with no tracked time this month (zeros; the gap is the signal) — plus
+ * anyone who logged time (so nothing is hidden). See the `roster` CTE.
+ *
  * `team` filter is an exact match on `employee_annotation.team_user`.
  * NULL `team` skips the filter (returns all consultants). */
 import { sql } from "drizzle-orm";
@@ -94,19 +98,42 @@ export async function getTrackedHoursForMonth(opts: {
     ),
     all_tracked AS (
       SELECT * FROM personio UNION ALL SELECT * FROM awork
+    ),
+    agg AS (
+      SELECT employee_id,
+             SUM(CASE WHEN bucket = 'billable' THEN dm ELSE 0 END) AS b_min,
+             SUM(CASE WHEN bucket = 'non_billable' THEN dm ELSE 0 END) AS nb_min,
+             SUM(CASE WHEN bucket = 'untagged' THEN dm ELSE 0 END) AS n_min
+      FROM all_tracked
+      GROUP BY employee_id
+    ),
+    -- The roster is every active, real, project-contributing employee (so
+    -- people who have not tracked time yet this month still appear, with
+    -- zeros — the gap is the signal) PLUS anyone who did track time (so no
+    -- logged time is ever hidden, even for a non-contributing/departed
+    -- employee).
+    roster AS (
+      SELECT ec.employee_id
+      FROM employee_current ec
+      LEFT JOIN employee_annotation ann ON ann.employee_id = ec.employee_id
+      WHERE ec.status = 'active'
+        AND COALESCE(ann.is_real_employee, TRUE) = TRUE
+        AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
+      UNION
+      SELECT employee_id FROM agg
     )
-    SELECT t.employee_id,
+    SELECT r.employee_id,
            ec.first_name, ec.last_name, ann.team_user AS team,
-           SUM(CASE WHEN t.bucket = 'billable' THEN t.dm ELSE 0 END) AS b_min,
-           SUM(CASE WHEN t.bucket = 'non_billable' THEN t.dm ELSE 0 END) AS nb_min,
-           SUM(CASE WHEN t.bucket = 'untagged' THEN t.dm ELSE 0 END) AS n_min
-    FROM all_tracked t
-    LEFT JOIN employee_current ec ON ec.employee_id = t.employee_id
-    LEFT JOIN employee_annotation ann ON ann.employee_id = t.employee_id
+           COALESCE(a.b_min, 0) AS b_min,
+           COALESCE(a.nb_min, 0) AS nb_min,
+           COALESCE(a.n_min, 0) AS n_min
+    FROM roster r
+    LEFT JOIN employee_current ec ON ec.employee_id = r.employee_id
+    LEFT JOIN employee_annotation ann ON ann.employee_id = r.employee_id
+    LEFT JOIN agg a ON a.employee_id = r.employee_id
     WHERE 1=1 ${teamFilter}
-    GROUP BY t.employee_id, ec.first_name, ec.last_name, ann.team_user
-    HAVING SUM(t.dm) > 0
-    ORDER BY SUM(t.dm) DESC
+    ORDER BY (COALESCE(a.b_min, 0) + COALESCE(a.nb_min, 0) + COALESCE(a.n_min, 0)) DESC,
+             ec.last_name, ec.first_name
   `);
 
   return (result.rows as Array<Record<string, unknown>>).map((r) => ({
