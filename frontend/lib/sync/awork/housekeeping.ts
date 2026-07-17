@@ -207,6 +207,15 @@ export async function backfillImportedProjects(
     if (overwrite_existing) return fresh !== null ? fresh : current;
     return current !== null ? current : fresh;
   };
+  // Planned dates are awork-owned: awork's timeline is the source of truth,
+  // so a changed start/due date in awork always propagates to Dante (awork
+  // wins whenever it has a value). Only awork clearing a date back to NULL
+  // leaves the existing Dante value untouched — we never blank a date. This
+  // is deliberately stronger than `pick`: unlike time_budget/notes (which
+  // stay fill-NULL-only so manual Dante curation survives), dates are not
+  // meant to be hand-edited in Dante — they mirror the awork Planner window.
+  const pickAworkDate = (current: string | null, fresh: string | null): string | null =>
+    fresh !== null ? fresh : current;
 
   let n_updated = 0;
   let n_skipped = 0;
@@ -219,8 +228,8 @@ export async function backfillImportedProjects(
       r.ap_budget_sec === null
         ? null
         : Math.floor(Number(r.ap_budget_sec) / 3600);
-    const new_start = pick(cur_start, r.ap_start);
-    const new_end = pick(cur_end, r.ap_due);
+    const new_start = pickAworkDate(cur_start, r.ap_start);
+    const new_end = pickAworkDate(cur_end, r.ap_due);
     const new_budget = pick(cur_budget, ap_budget_h);
     const new_notes = pick(cur_notes, stripHtml(r.ap_desc));
 

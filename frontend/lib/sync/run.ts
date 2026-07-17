@@ -285,7 +285,7 @@ async function runAworkSync(
   try {
     const s = await backfillImportedProjects(conn);
     log(
-      `  refresh-imported:${s.linked_projects} projects · updated ${s.updated} (fill-NULL-only)`,
+      `  refresh-imported:${s.linked_projects} projects · updated ${s.updated} (dates←awork; budget/notes fill-NULL-only)`,
     );
   } catch (err) {
     log(
