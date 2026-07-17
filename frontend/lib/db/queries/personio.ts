@@ -42,9 +42,13 @@ export async function listPersonioProjects(opts: {
   // self-heals on the picker side.
   const conditions = [sql`1=1`];
   if (opts.mapped === true) {
-    conditions.push(sql`link.personio_project_id IS NOT NULL AND p.project_id IS NOT NULL`);
+    conditions.push(sql`(link.personio_project_id IS NOT NULL AND p.project_id IS NOT NULL)`);
   } else if (opts.mapped === false) {
-    conditions.push(sql`link.personio_project_id IS NULL OR p.project_id IS NULL`);
+    // Parenthesised: this is an OR, and the conditions are AND-joined. Without
+    // the parens, SQL's AND-binds-tighter-than-OR precedence lets the first
+    // branch (link IS NULL) satisfy the whole WHERE on its own, silently
+    // bypassing every other condition (e.g. the archived filter below).
+    conditions.push(sql`(link.personio_project_id IS NULL OR p.project_id IS NULL)`);
   }
   if (opts.q) {
     // Match the project's own name OR its parent's name, so searching a
