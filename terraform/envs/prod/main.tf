@@ -256,6 +256,35 @@ resource "aws_route53_record" "dmarc" {
   records = ["v=DMARC1; p=quarantine"]
 }
 
+# Recipient-domain verification for the corporate PARENT domain.
+#
+# We do NOT send from example.com — Dante sends from the dedicated
+# subdomain dante.example.com (identity + DKIM above). This identity
+# exists purely so that, while the SES account is in the sandbox, every
+# @example.com employee counts as a *verified destination*. Without it,
+# the sandbox's "verified recipients only" rule blocks Cognito from ever
+# delivering an invite/reset to a staff mailbox (only the subdomain is
+# verified today, and no employee has a @dante.example.com address).
+#
+# Because we only need ownership proof — not sending — we use the classic
+# single-TXT verification (SESv1 aws_ses_domain_identity) rather than the
+# DKIM-CNAME flow. IT publishes ONE TXT record; no DKIM, no SPF/DMARC
+# changes to the corporate zone, and no interaction with the existing
+# corporate mail auth (MX / SPF / DKIM stay untouched — the
+# _amazonses.example.com name is used only by SES for ownership).
+#
+# The example.com zone is NOT managed by this Terraform (corporate IT
+# owns it), so Terraform creates only the identity here; the verification
+# record is surfaced via the `ses_parent_domain_verification` output for
+# IT to publish. Until that TXT resolves the identity sits "pending" and
+# has no effect — creating it is inert and free.
+#
+# Once verified, this whole block can be removed if the account leaves the
+# SES sandbox (production access makes recipient verification moot).
+resource "aws_ses_domain_identity" "company_parent" {
+  domain = "example.com"
+}
+
 # ACM cert for the Cognito custom domain. MUST be in us-east-1
 # regardless of the rest of the stack's region (Cognito requirement).
 resource "aws_acm_certificate" "cognito_custom" {

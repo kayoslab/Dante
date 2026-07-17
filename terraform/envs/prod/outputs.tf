@@ -152,6 +152,22 @@ output "waf_alarm_topic_arn" {
   value       = module.waf.alarm_topic_arn
 }
 
+# --- SES ---------------------------------------------------------------
+
+# Hand these three values to corporate IT. Publishing this single TXT
+# record in the example.com zone verifies the domain as an SES identity,
+# which (while the account is sandboxed) makes every @example.com address
+# a valid recipient — unblocking Cognito invite/reset delivery to staff.
+# Read with: terraform output -json ses_parent_domain_verification
+output "ses_parent_domain_verification" {
+  description = "Publish in the example.com DNS zone to verify the parent domain as an SES identity."
+  value = {
+    record_name  = "_amazonses.example.com"
+    record_type  = "TXT"
+    record_value = aws_ses_domain_identity.company_parent.verification_token
+  }
+}
+
 # --- GitHub Actions ----------------------------------------------------
 
 output "github_check_role_arn" {
