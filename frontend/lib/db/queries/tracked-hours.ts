@@ -25,8 +25,10 @@
  * = genuine bench).
  *
  * Roster: every active, real, project-contributing employee appears — even
- * with no tracked time this month (zeros; the gap is the signal) — plus
- * anyone who logged time (so nothing is hidden). See the `roster` CTE.
+ * with no tracked time this month (zeros; the gap is the signal). Non-project-
+ * contributing employees are excluded entirely, even if they logged time —
+ * this report is about the delivery org's utilization only. See the `roster`
+ * CTE and the final `is_project_contributing` filter.
  *
  * `team` filter is an exact match on `employee_annotation.team_user`.
  * NULL `team` skips the filter (returns all consultants). */
@@ -109,9 +111,10 @@ export async function getTrackedHoursForMonth(opts: {
     ),
     -- The roster is every active, real, project-contributing employee (so
     -- people who have not tracked time yet this month still appear, with
-    -- zeros — the gap is the signal) PLUS anyone who did track time (so no
-    -- logged time is ever hidden, even for a non-contributing/departed
-    -- employee).
+    -- zeros — the gap is the signal) PLUS anyone who did track time. The
+    -- final SELECT then drops any non-project-contributing employee the
+    -- agg UNION pulled in, so departed/non-contributing trackers don't
+    -- show here even though their time is counted elsewhere.
     roster AS (
       SELECT ec.employee_id
       FROM employee_current ec
@@ -131,7 +134,10 @@ export async function getTrackedHoursForMonth(opts: {
     LEFT JOIN employee_current ec ON ec.employee_id = r.employee_id
     LEFT JOIN employee_annotation ann ON ann.employee_id = r.employee_id
     LEFT JOIN agg a ON a.employee_id = r.employee_id
-    WHERE 1=1 ${teamFilter}
+    -- Non-project-contributing employees are excluded from this report
+    -- entirely — even if they logged time (the agg UNION would otherwise
+    -- re-add them). Missing annotation defaults to contributing (TRUE).
+    WHERE COALESCE(ann.is_project_contributing, TRUE) = TRUE ${teamFilter}
     ORDER BY (COALESCE(a.b_min, 0) + COALESCE(a.nb_min, 0) + COALESCE(a.n_min, 0)) DESC,
              ec.last_name, ec.first_name
   `);
