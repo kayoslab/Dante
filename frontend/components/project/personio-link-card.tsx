@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CornerDownRight, Link2, Plus, Trash2, X } from "lucide-react";
+import { CornerDownRight, Link2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -252,12 +252,6 @@ function AddLinkDialog({ projectId }: { projectId: number }) {
               ))}
             </ul>
           )}
-        </div>
-        <div className="flex justify-end">
-          <Button variant="ghost" onClick={() => setOpen(false)}>
-            <X className="mr-1.5 h-4 w-4" />
-            Close
-          </Button>
         </div>
       </DialogContent>
     </Dialog>
