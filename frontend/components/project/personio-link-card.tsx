@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Link2, Plus, Trash2, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { CornerDownRight, Link2, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -18,12 +18,52 @@ import {
 import { Input } from "@/components/ui/input";
 import { QueryGuard } from "@/components/ui/query-guard";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   useCreatePersonioLink,
   useDeletePersonioLink,
   usePersonioLinksFor,
   usePersonioProjects,
+  type PersonioProjectItem,
 } from "@/lib/api/personio-projects";
+
+/** Flatten the Personio projects into depth-annotated rows so parent →
+ * subproject nesting renders as an indented tree. A child whose parent
+ * isn't in the current (searched/filtered) result set is surfaced at the
+ * root as an "orphan" — still findable, with a breadcrumb to its parent. */
+type PersonioTreeRow = {
+  item: PersonioProjectItem;
+  depth: number;
+  orphan: boolean;
+};
+
+function flattenPersonioTree(
+  items: PersonioProjectItem[],
+): PersonioTreeRow[] {
+  const byId = new Map(items.map((i) => [i.personio_project_id, i]));
+  const childrenOf = new Map<string, PersonioProjectItem[]>();
+  const roots: { item: PersonioProjectItem; orphan: boolean }[] = [];
+  for (const it of items) {
+    const pid = it.parent_id ?? null;
+    if (pid && byId.has(pid)) {
+      const arr = childrenOf.get(pid) ?? [];
+      arr.push(it);
+      childrenOf.set(pid, arr);
+    } else {
+      // Top-level (no parent) or orphan (parent filtered out of this view).
+      roots.push({ item: it, orphan: Boolean(pid) });
+    }
+  }
+  const out: PersonioTreeRow[] = [];
+  const visit = (item: PersonioProjectItem, depth: number, orphan: boolean) => {
+    out.push({ item, depth, orphan });
+    for (const child of childrenOf.get(item.personio_project_id) ?? []) {
+      visit(child, depth + 1, false);
+    }
+  };
+  for (const r of roots) visit(r.item, 0, r.orphan);
+  return out;
+}
 
 export function PersonioLinkCard({ projectId }: { projectId: number }) {
   const linksQ = usePersonioLinksFor(projectId);
@@ -117,12 +157,22 @@ function LinkRow({
 function AddLinkDialog({ projectId }: { projectId: number }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  // Off by default: hide archived (and vanished-from-Personio) projects so
+  // the list isn't cluttered with dead entries. Flip on to re-link one.
+  const [showArchived, setShowArchived] = useState(false);
   const create = useCreatePersonioLink(projectId);
   // Show only currently-unmapped projects so the user can't double-link.
-  // Server sorts alphabetically by name so a specific project (incl. a
-  // brand-new one with no tracked time yet) is where you'd expect it —
-  // find it by scrolling or the name search.
-  const list = usePersonioProjects({ mapped: false, q: q.length >= 2 ? q : undefined });
+  // Server groups each parent → subproject subtree together and resolves the
+  // parent name; the tree is rebuilt client-side for indented rendering.
+  const list = usePersonioProjects({
+    mapped: false,
+    q: q.length >= 2 ? q : undefined,
+    show_archived: showArchived,
+  });
+  const rows = useMemo(
+    () => flattenPersonioTree(list.data ?? []),
+    [list.data],
+  );
 
   async function link(personioId: string) {
     try {
@@ -158,7 +208,8 @@ function AddLinkDialog({ projectId }: { projectId: number }) {
             Pick the Personio project (or projects) consultants tagged when
             logging time for this customer engagement. Multiple Personio
             projects can map to one of ours — useful when a customer name
-            was renamed or split mid-engagement.
+            was renamed or split mid-engagement. Subprojects are shown
+            indented under their parent.
           </DialogDescription>
         </DialogHeader>
         <Input
@@ -167,6 +218,15 @@ function AddLinkDialog({ projectId }: { projectId: number }) {
           onChange={(e) => setQ(e.target.value)}
           autoFocus
         />
+        <div className="flex items-center justify-between gap-2 px-0.5">
+          <span className="text-sm text-muted-foreground">
+            Show archived projects
+          </span>
+          <Switch
+            checked={showArchived}
+            onCheckedChange={(next) => setShowArchived(next)}
+          />
+        </div>
         <div className="overflow-y-auto rounded-md border max-h-[55vh]">
           {list.isLoading && (
             <div className="space-y-1.5 p-3">
@@ -175,41 +235,20 @@ function AddLinkDialog({ projectId }: { projectId: number }) {
               <Skeleton className="h-8 w-full" />
             </div>
           )}
-          {list.data && list.data.length === 0 && (
+          {list.data && rows.length === 0 && (
             <p className="p-4 text-sm text-muted-foreground">
               No unmapped Personio projects match.
             </p>
           )}
-          {list.data && list.data.length > 0 && (
+          {rows.length > 0 && (
             <ul className="divide-y text-sm">
-              {list.data.slice(0, 200).map((p) => (
-                <li
-                  key={p.personio_project_id}
-                  className="flex items-center justify-between gap-3 px-3 py-2 hover:bg-muted/40"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium truncate">{p.name}</span>
-                      <span className="font-mono text-xs text-muted-foreground">
-                        #{p.personio_project_id}
-                      </span>
-                      {p.active === false && (
-                        <Badge variant="outline">archived</Badge>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted-foreground tabular-nums">
-                      {p.n_attendance_entries.toLocaleString()} entries
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => link(p.personio_project_id)}
-                    disabled={create.isPending}
-                  >
-                    Link
-                  </Button>
-                </li>
+              {rows.slice(0, 200).map((row) => (
+                <PersonioPickRow
+                  key={row.item.personio_project_id}
+                  row={row}
+                  onLink={link}
+                  disabled={create.isPending}
+                />
               ))}
             </ul>
           )}
@@ -222,5 +261,51 @@ function AddLinkDialog({ projectId }: { projectId: number }) {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PersonioPickRow({
+  row,
+  onLink,
+  disabled,
+}: {
+  row: PersonioTreeRow;
+  onLink: (personioId: string) => void;
+  disabled: boolean;
+}) {
+  const { item, depth, orphan } = row;
+  return (
+    <li
+      className="flex items-center justify-between gap-3 py-2 pr-3 hover:bg-muted/40"
+      // Indent nested subprojects; base padding 12px + 20px per level.
+      style={{ paddingLeft: 12 + depth * 20 }}
+    >
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          {depth > 0 && (
+            <CornerDownRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <span className="font-medium truncate">{item.name}</span>
+          <span className="font-mono text-xs text-muted-foreground">
+            #{item.personio_project_id}
+          </span>
+          {item.active === false && <Badge variant="outline">archived</Badge>}
+        </div>
+        <div className="text-xs text-muted-foreground tabular-nums">
+          {orphan && item.parent_name && (
+            <span className="mr-2">sub-project of {item.parent_name} · </span>
+          )}
+          {item.n_attendance_entries.toLocaleString()} entries
+        </div>
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => onLink(item.personio_project_id)}
+        disabled={disabled}
+      >
+        Link
+      </Button>
+    </li>
   );
 }

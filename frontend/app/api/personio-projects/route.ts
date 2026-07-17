@@ -11,7 +11,11 @@ export async function GET(req: NextRequest) {
     const mapped =
       mappedRaw === null ? null : mappedRaw.toLowerCase() === "true";
     const q = boundedSearchQuery(searchParams.get("q"));
+    // Default false: archived (and vanished-from-Personio) projects are
+    // hidden unless the picker's "Show archived projects" toggle is on.
+    const showArchived =
+      searchParams.get("show_archived")?.toLowerCase() === "true";
 
-    return listPersonioProjects({ mapped, q });
+    return listPersonioProjects({ mapped, q, showArchived });
   });
 }

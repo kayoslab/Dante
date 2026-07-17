@@ -12,18 +12,21 @@ import {
 
 export type { PersonioProjectItem };
 
+type PersonioProjectFilters = {
+  mapped?: boolean;
+  q?: string;
+  show_archived?: boolean;
+};
+
 export const personioProjectKeys = {
   all: ["personio-projects"] as const,
-  list: (filters: { mapped?: boolean; q?: string }) =>
+  list: (filters: PersonioProjectFilters) =>
     [...personioProjectKeys.all, filters] as const,
   linksFor: (project_id: number) =>
     [...personioProjectKeys.all, "links", project_id] as const,
 };
 
-export function usePersonioProjects(filters: {
-  mapped?: boolean;
-  q?: string;
-} = {}) {
+export function usePersonioProjects(filters: PersonioProjectFilters = {}) {
   return useQuery<PersonioProjectItem[]>({
     queryKey: personioProjectKeys.list(filters),
     queryFn: async () => {

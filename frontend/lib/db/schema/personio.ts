@@ -73,6 +73,12 @@ export const personioProject = pgTable("personio_project", {
   // project's `billable` at link time (which then overrides). Nullable —
   // the flag is unreliable until the Personio admin curates it.
   billable: boolean(),
+  // v2 subproject link: `parent_project.id` on the Personio project, or null
+  // for a top-level project. Self-references `personio_project_id`; kept as a
+  // plain nullable text (no FK) so an out-of-order sync — a child upserted
+  // before its parent row exists — can't fail on a constraint. The link UI
+  // resolves the parent name via a self-join.
+  parent_id: text(),
   last_seen_sync_run_id: integer(),
   last_updated_at: timestamp({ mode: "date" }),
 });

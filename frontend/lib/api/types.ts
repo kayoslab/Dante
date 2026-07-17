@@ -1387,6 +1387,10 @@ export type PersonioProjectItem = {
         name: string;
         /** Active */
         active?: boolean | null;
+        /** Parent Id */
+        parent_id?: string | null;
+        /** Parent Name */
+        parent_name?: string | null;
         /** Mapped To Project Id */
         mapped_to_project_id?: number | null;
         /** Mapped To Project Name */
