@@ -11,7 +11,6 @@ import { and, sql } from "drizzle-orm";
 import type { Client } from "pg";
 
 import { personioProject } from "@/lib/db/schema";
-import { log } from "@/lib/logger";
 import { syncDrizzle } from "@/lib/sync/db";
 import { excludedSet } from "@/lib/sync/_upsert";
 
@@ -35,30 +34,6 @@ export async function syncPersonioProjects(
   const db = syncDrizzle(conn);
   const items = await client.listPersonioProjects();
   const now = new Date();
-
-  // TEMP DIAGNOSTIC (remove after): confirm the raw v2 /projects shape from
-  // the live tenant — whether ARCHIVED projects are returned at all, where
-  // `status` lives, and whether `parent_project.id` is present. Read from
-  // CloudWatch: filter the sync log group for event="personio_projects_diag".
-  {
-    const statusCounts: Record<string, number> = {};
-    let withParent = 0;
-    for (const it of items) {
-      const p = it as V2Project;
-      const s = String(p.status ?? "(missing)");
-      statusCounts[s] = (statusCounts[s] ?? 0) + 1;
-      if (p.parent_project?.id) withParent += 1;
-    }
-    const sample =
-      items.find((it) => /jost|companion/i.test((it as V2Project).name ?? "")) ??
-      items[0];
-    log.info("personio_projects_diag", {
-      total: items.length,
-      status_counts: statusCounts,
-      with_parent: withParent,
-      sample_raw: JSON.stringify(sample ?? null),
-    });
-  }
   const set = excludedSet([
     "name",
     "active",
