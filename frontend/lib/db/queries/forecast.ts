@@ -144,8 +144,6 @@ export type ForecastRow = {
   planned_billable_h: number;
   actual_billable_h: number;
   actual_nonbillable_h: number;
-  billable_delivered_h: number;
-  allocated_not_billed_h: number;
   bench_h: number;
   over_h: number;
   /** actual billable ÷ available — the headline utilization (month-to-date). */
@@ -172,8 +170,8 @@ export type CapacityBucket = {
   capacity_h: number;
   available_h: number;
   vacation_h: number;
-  billable_delivered_h: number;
-  allocated_not_billed_h: number;
+  on_project_billable_h: number;
+  on_project_nonbillable_h: number;
   bench_h: number;
   over_h: number;
 };
@@ -217,8 +215,6 @@ function toForecastRow(key: string, accs: CapacityAcc[], months: string[]): Fore
     planned_billable_h: hrs(cur.planned_billable),
     actual_billable_h: hrs(cur.actual_billable),
     actual_nonbillable_h: hrs(cur.actual_nonbillable),
-    billable_delivered_h: hrs(cur.billable_delivered),
-    allocated_not_billed_h: hrs(cur.allocated_not_billed),
     bench_h: hrs(cur.bench),
     over_h: hrs(cur.over),
     utilization_pct: pct(ratioOrNull(cur.actual_billable, cur.available)),
@@ -237,8 +233,8 @@ function toCapacityBucket(a: CapacityAcc): CapacityBucket {
     capacity_h: hrs(a.capacity),
     available_h: hrs(a.available),
     vacation_h: hrs(a.vacation),
-    billable_delivered_h: hrs(a.billable_delivered),
-    allocated_not_billed_h: hrs(a.allocated_not_billed),
+    on_project_billable_h: hrs(a.on_project_billable),
+    on_project_nonbillable_h: hrs(a.on_project_nonbillable),
     bench_h: hrs(a.bench),
     over_h: hrs(a.over),
   };
@@ -365,7 +361,8 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
       const buckets = capacityBuckets({
         capacity,
         vacation,
-        planned: planned_total,
+        planned_total,
+        planned_billable,
         actual_billable,
       });
       const contribution: CapacityContribution = {

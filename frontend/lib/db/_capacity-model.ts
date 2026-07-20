@@ -8,28 +8,32 @@
  * The partition of AVAILABLE hours (= capacity − paid absence):
  *
  *   available
- *   ├─ billable_delivered   min(actual_billable, available)      ← revenue time
- *   ├─ allocated_not_billed available − billable − bench         ← planned but
- *   │                                                              not billed:
- *   │                                                              meetings,
- *   │                                                              internal work,
- *   │                                                              under-delivery
- *   └─ bench                max(0, available − max(planned,       ← UNUSED capacity
- *                                              actual_billable))
+ *   ├─ on_project_billable    engaged capacity on BILLABLE work    ← revenue time
+ *   ├─ on_project_nonbillable engaged capacity on non-billable /   ← planned
+ *   │                         internal projects                      internal
+ *   └─ bench                  max(0, available − max(planned_total,← UNUSED capacity
+ *                                               actual_billable))
+ *
+ * The billable / non-billable split is PLAN-based (planned billable allocation),
+ * so a mostly-billable plan reads as billable in the current AND future months —
+ * it does NOT depend on how much has been *tracked* month-to-date. Actual
+ * billable delivery only raises the billable figure when it exceeds the plan
+ * (`max(planned_billable, actual_billable)`), so picking up unplanned billable
+ * work shows as billable rather than bench.
  *
  * Bench is UNUSED capacity, per the C-level definition:
- *  - It's driven by the PLAN: someone allocated to a project is not on bench,
- *    even if they book internal time (that's `allocated_not_billed`, not bench).
- *  - Actual billable work REDUCES bench: picking up unplanned billable work (or
- *    delivering above your allocation) shrinks the unused-capacity figure. Hence
- *    `max(planned, actual_billable)` — whichever engaged more of your capacity.
+ *  - Driven by the PLAN: someone allocated to a project is not on bench, even if
+ *    they book internal time.
+ *  - Actual billable work REDUCES bench: delivering above your allocation (or
+ *    picking up unplanned billable work) shrinks unused capacity. Hence
+ *    `max(planned_total, actual_billable)` — whichever engaged more capacity.
  *  - Under-delivering an allocation never CREATES bench (you were still booked).
  *
  * `over` is allocation/delivery beyond FULL capacity (genuine over-allocation).
  * Paid absence sits outside `available` entirely (no billable expectation).
  *
- * With `actual_billable = 0` (e.g. future months, no bookings yet) this reduces
- * to the pure planned view: available → planned (capped) + bench + vacation.
+ * With `actual_billable = 0` (e.g. future months, no bookings yet) this is the
+ * pure planned view: available → planned billable + planned non-billable + bench.
  *
  * This module is PURE (no DB) so the bucketing is unit-testable in isolation;
  * the allocation-split query lives in `_monthly-helpers.ts`.
@@ -46,36 +50,43 @@ export type CapacityInput = {
   capacity: Decimal;
   /** Paid absence hours (vacation / paid leave) — removed from `available`. */
   vacation: Decimal;
-  /** Planned allocation hours across all projects (the assignment plan). */
-  planned: Decimal;
+  /** Planned allocation hours across ALL projects (the assignment plan). */
+  planned_total: Decimal;
+  /** Planned allocation hours on BILLABLE projects (⊆ planned_total). */
+  planned_billable: Decimal;
   /** Booked BILLABLE hours (month-to-date for the current month; 0 for future). */
   actual_billable: Decimal;
 };
 
 export type CapacityBuckets = {
   available: Decimal;
-  billable_delivered: Decimal;
-  allocated_not_billed: Decimal;
+  on_project_billable: Decimal;
+  on_project_nonbillable: Decimal;
   bench: Decimal;
   over: Decimal;
 };
 
 /** Partition one (employee, month)'s capacity. See the module header for the
- * model. `billable_delivered + allocated_not_billed + bench = available`
+ * model. `on_project_billable + on_project_nonbillable + bench = available`
  * always; `over` is a separate beyond-full-capacity flag. */
 export function capacityBuckets(inp: CapacityInput): CapacityBuckets {
   const capacity = clamp0(inp.capacity);
   const available = clamp0(capacity.sub(inp.vacation));
-  // Capacity that was engaged — by the plan OR by actual billable delivery,
-  // whichever pulled in more of the person's time.
-  const engaged = dmax(clamp0(inp.planned), clamp0(inp.actual_billable));
-  const billable_delivered = dmin(clamp0(inp.actual_billable), available);
-  const bench = clamp0(available.sub(engaged));
-  const allocated_not_billed = clamp0(
-    available.sub(billable_delivered).sub(bench),
-  );
-  const over = clamp0(engaged.sub(capacity));
-  return { available, billable_delivered, allocated_not_billed, bench, over };
+  const planned_total = clamp0(inp.planned_total);
+  const planned_billable = dmin(clamp0(inp.planned_billable), planned_total);
+  const actual_billable = clamp0(inp.actual_billable);
+
+  // Total capacity engaged — by the plan OR by actual billable delivery,
+  // whichever pulled in more of the person's time. Bench is the rest.
+  const engagedTotal = dmax(planned_total, actual_billable);
+  const bench = clamp0(available.sub(engagedTotal));
+  const engaged = available.sub(bench); // = min(engagedTotal, available)
+  // Billable share of engaged capacity: at least the planned billable
+  // allocation, raised by any actual billable delivery beyond the plan.
+  const on_project_billable = dmin(dmax(planned_billable, actual_billable), engaged);
+  const on_project_nonbillable = clamp0(engaged.sub(on_project_billable));
+  const over = clamp0(engagedTotal.sub(capacity));
+  return { available, on_project_billable, on_project_nonbillable, bench, over };
 }
 
 /** Safe ratio helper for KPIs at a rollup level. Null when the denominator is
@@ -100,8 +111,8 @@ export type CapacityAcc = {
   planned_billable_to_date: Decimal;
   actual_billable: Decimal;
   actual_nonbillable: Decimal;
-  billable_delivered: Decimal;
-  allocated_not_billed: Decimal;
+  on_project_billable: Decimal;
+  on_project_nonbillable: Decimal;
   bench: Decimal;
   over: Decimal;
 };
@@ -117,8 +128,8 @@ export function newCapacityAcc(): CapacityAcc {
     planned_billable_to_date: D0,
     actual_billable: D0,
     actual_nonbillable: D0,
-    billable_delivered: D0,
-    allocated_not_billed: D0,
+    on_project_billable: D0,
+    on_project_nonbillable: D0,
     bench: D0,
     over: D0,
   };
@@ -152,11 +163,11 @@ export function addToCapacityAcc(
   );
   acc.actual_billable = acc.actual_billable.add(c.actual_billable);
   acc.actual_nonbillable = acc.actual_nonbillable.add(c.actual_nonbillable);
-  acc.billable_delivered = acc.billable_delivered.add(
-    c.buckets.billable_delivered,
+  acc.on_project_billable = acc.on_project_billable.add(
+    c.buckets.on_project_billable,
   );
-  acc.allocated_not_billed = acc.allocated_not_billed.add(
-    c.buckets.allocated_not_billed,
+  acc.on_project_nonbillable = acc.on_project_nonbillable.add(
+    c.buckets.on_project_nonbillable,
   );
   acc.bench = acc.bench.add(c.buckets.bench);
   acc.over = acc.over.add(c.buckets.over);

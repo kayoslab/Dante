@@ -22,8 +22,6 @@ export type ForecastRow = {
   planned_billable_h: number;
   actual_billable_h: number;
   actual_nonbillable_h: number;
-  billable_delivered_h: number;
-  allocated_not_billed_h: number;
   bench_h: number;
   over_h: number;
   utilization_pct: number | null; // actual billable ÷ available
@@ -45,8 +43,8 @@ export type CapacityBucket = {
   capacity_h: number;
   available_h: number;
   vacation_h: number;
-  billable_delivered_h: number;
-  allocated_not_billed_h: number;
+  on_project_billable_h: number;
+  on_project_nonbillable_h: number;
   bench_h: number;
   over_h: number;
 };
