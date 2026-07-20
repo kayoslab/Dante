@@ -392,8 +392,7 @@ function capValue(
 }
 
 const CAP_COLS = [
-  { key: "billable", label: "Billable", cls: "text-emerald-700", title: "Capacity on billable work — planned billable allocation (raised by any billable delivery beyond the plan)." },
-  { key: "internal", label: "Non-bill", cls: "text-violet-700", title: "Capacity planned on non-billable / internal projects." },
+  { key: "billable", label: "On-project", cls: "text-emerald-700", title: "Engaged capacity — planned (billable) allocation, raised by any billable delivery beyond the plan. Non-billable work is never planned." },
   { key: "bench", label: "Bench", cls: "text-amber-700", title: "Unused capacity — neither planned onto work nor covered by billable delivery." },
   { key: "vac", label: "Vac", cls: "text-sky-700", title: "Paid vacation / absence (outside available)." },
   { key: "over", label: "Over", cls: "text-red-700", title: "Allocated or delivered beyond FULL capacity (over-allocation / overtime)." },
@@ -408,11 +407,7 @@ function capCell(
   const base = b.capacity_h;
   switch (col) {
     case "billable":
-      return capValue(unit, b.on_project_billable_h, base, wd);
-    case "internal":
-      return b.on_project_nonbillable_h > 0
-        ? capValue(unit, b.on_project_nonbillable_h, base, wd)
-        : "—";
+      return capValue(unit, b.on_project_h, base, wd);
     case "bench":
       return capValue(unit, b.bench_h, base, wd);
     case "vac":
@@ -433,15 +428,13 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
           <div>
             <CardTitle className="text-base">Capacity breakdown</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Where each team&rsquo;s paid capacity goes. <strong>Billable +
-              Non-bill + Bench + Vacation = 100%</strong> of capacity;
+              Where each team&rsquo;s paid capacity goes. <strong>On-project +
+              Bench + Vacation = 100%</strong> of capacity;
               <strong> Over</strong> flags allocation/delivery beyond full
-              capacity. The billable / non-billable split is based on the
-              <em> planned</em> allocation (so it reflects the real project mix
-              in the current and future months); actual billable delivery only
-              raises billable when it exceeds the plan. <strong>Bench</strong>
-              is unused capacity. FTE: 1.0 = one full-timer (40h/wk) for the
-              month.
+              capacity. <strong>On-project</strong> is engaged capacity from the
+              planned (billable) allocation, raised only when billable delivery
+              exceeds the plan. <strong>Bench</strong> is unused capacity.
+              FTE: 1.0 = one full-timer (40h/wk) for the month.
             </p>
           </div>
           <div className="inline-flex rounded-md border bg-background p-0.5 text-xs">
@@ -530,9 +523,7 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
                                 ci === 0 && "border-l",
                                 col.cls,
                                 (col.key === "vac" && b.vacation_h === 0) ||
-                                  (col.key === "over" && b.over_h === 0) ||
-                                  (col.key === "internal" &&
-                                    b.on_project_nonbillable_h === 0)
+                                  (col.key === "over" && b.over_h === 0)
                                   ? "text-muted-foreground"
                                   : undefined,
                               )}
@@ -583,8 +574,7 @@ function CapacityBars({
           {monthLabelText} · capacity mix
         </h4>
         <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-          <Legend cls="bg-emerald-500" label="Billable" />
-          <Legend cls="bg-violet-400" label="Non-bill" />
+          <Legend cls="bg-emerald-500" label="On-project" />
           <Legend cls="bg-amber-400" label="Bench" />
           <Legend cls="bg-sky-300" label="Vacation" />
         </div>
@@ -592,14 +582,12 @@ function CapacityBars({
       <div className="space-y-1.5">
         {withData.map(({ key, b }) => {
           const cap = b!.capacity_h;
-          const billW = seg(b!.on_project_billable_h, cap);
-          const internalW = seg(b!.on_project_nonbillable_h, cap);
+          const billW = seg(b!.on_project_h, cap);
           const benchW = seg(b!.bench_h, cap);
           const vacW = seg(b!.vacation_h, cap);
           const overPct = Math.round(seg(b!.over_h, cap));
           const parts = [
             { w: billW, cls: "bg-emerald-500" },
-            { w: internalW, cls: "bg-violet-400" },
             { w: benchW, cls: "bg-amber-400" },
             { w: vacW, cls: "bg-sky-300" },
           ];

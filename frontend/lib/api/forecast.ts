@@ -43,8 +43,7 @@ export type CapacityBucket = {
   capacity_h: number;
   available_h: number;
   vacation_h: number;
-  on_project_billable_h: number;
-  on_project_nonbillable_h: number;
+  on_project_h: number; // engaged (on-project) capacity ≈ billable allocation
   bench_h: number;
   over_h: number;
 };

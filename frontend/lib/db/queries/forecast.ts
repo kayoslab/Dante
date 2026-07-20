@@ -170,8 +170,10 @@ export type CapacityBucket = {
   capacity_h: number;
   available_h: number;
   vacation_h: number;
-  on_project_billable_h: number;
-  on_project_nonbillable_h: number;
+  /** Engaged (on-project) capacity. Non-billable is never planned, so this is
+   * effectively the billable allocation; any rare planned-internal allocation
+   * is folded in here rather than shown as its own (near-always-empty) column. */
+  on_project_h: number;
   bench_h: number;
   over_h: number;
 };
@@ -233,8 +235,7 @@ function toCapacityBucket(a: CapacityAcc): CapacityBucket {
     capacity_h: hrs(a.capacity),
     available_h: hrs(a.available),
     vacation_h: hrs(a.vacation),
-    on_project_billable_h: hrs(a.on_project_billable),
-    on_project_nonbillable_h: hrs(a.on_project_nonbillable),
+    on_project_h: hrs(a.on_project_billable.add(a.on_project_nonbillable)),
     bench_h: hrs(a.bench),
     over_h: hrs(a.over),
   };
