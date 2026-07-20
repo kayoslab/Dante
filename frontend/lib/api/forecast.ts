@@ -4,21 +4,31 @@ import { useQuery } from "@tanstack/react-query";
 
 import { apiGet } from "./_fetch";
 
+/** Planned billable / available for a forward month. */
 export type ForecastMonthPlan = {
   month: string; // YYYY-MM
-  planned_hours: number;
-  projected_actual_hours: number | null;
+  planned_billable_h: number;
+  available_h: number;
 };
 
+/** Performed-vs-planned rollup (total / team / role / consultant). Current-month
+ * hours; where the month is still running, actuals are month-to-date. */
 export type ForecastRow = {
   key: string;
   n_employees: number;
-  planned_hours: number;
-  planned_to_date_hours: number;
-  actual_hours: number;
-  actual_billable_hours: number;
-  realization_pct: number | null;
-  assumed_full_hours: number | null;
+  capacity_h: number;
+  available_h: number;
+  vacation_h: number;
+  planned_billable_h: number;
+  actual_billable_h: number;
+  actual_nonbillable_h: number;
+  billable_delivered_h: number;
+  allocated_not_billed_h: number;
+  bench_h: number;
+  over_h: number;
+  utilization_pct: number | null; // actual billable ÷ available
+  bench_pct: number | null; // bench ÷ available
+  delivery_pct: number | null; // actual billable ÷ planned billable to-date
   next: ForecastMonthPlan[];
 };
 
@@ -29,13 +39,16 @@ export type ForecastConsultantRow = ForecastRow & {
   role_tier: string | null;
 };
 
+/** Per-month partition of a team's paid capacity. billable_delivered +
+ * allocated_not_billed + bench + vacation = capacity (over shown separately). */
 export type CapacityBucket = {
-  allocation_h: number; // on-project (planned assignment allocation)
+  capacity_h: number;
+  available_h: number;
   vacation_h: number;
-  intercontract_h: number; // bench
-  overbook_h: number; // planned beyond available (overshoot past 100%)
-  available_h: number; // capacity − vacation
-  capacity_h: number; // total paid capacity (the 100% base)
+  billable_delivered_h: number;
+  allocated_not_billed_h: number;
+  bench_h: number;
+  over_h: number;
 };
 
 export type CapacityTeamRow = {

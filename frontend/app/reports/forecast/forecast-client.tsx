@@ -29,11 +29,22 @@ const NO_TIER = "(unset)";
 function fmtH(n: number | null | undefined): string {
   return n === null || n === undefined ? "—" : `${n.toFixed(1)}h`;
 }
+function fmtPct(n: number | null | undefined): string {
+  return n === null || n === undefined ? "—" : `${n.toFixed(0)}%`;
+}
 
-function realizationTone(pct: number | null): string {
+/** Utilization: high is good. */
+function utilTone(pct: number | null): string {
   if (pct === null) return "text-muted-foreground";
-  if (pct >= 90) return "text-emerald-700";
-  if (pct >= 70) return "text-amber-700";
+  if (pct >= 80) return "text-emerald-700";
+  if (pct >= 60) return "text-amber-700";
+  return "text-red-700";
+}
+/** Bench: high is bad. */
+function benchTone(pct: number | null): string {
+  if (pct === null) return "text-muted-foreground";
+  if (pct <= 10) return "text-emerald-700";
+  if (pct <= 25) return "text-amber-700";
   return "text-red-700";
 }
 
@@ -47,10 +58,13 @@ export function ForecastClient() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Forecast</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Planned allocation vs. work actually tracked so far this month, the
-          assumed full-month utilization at the current realization rate, and
-          the planned allocation for the next two months. Actuals combine
-          Personio + awork; billable is broken out.
+          Billable delivery against available capacity. Utilization compares
+          hours booked on <strong>billable</strong> projects to each
+          team&rsquo;s available capacity (contract hours minus paid absence).
+          Bench is unused capacity &mdash; time neither planned onto work nor
+          spent on billable delivery. Internal / non-billable time (meetings,
+          research, travel) is shown for context but never counts as delivery.
+          Current-month actuals are month-to-date.
         </p>
       </div>
 
@@ -73,17 +87,11 @@ function ForecastBody({ data }: { data: ForecastReport }) {
   const { totals, by_team, by_role_tier, by_consultant, current_month } = data;
 
   const pipeline = [
-    {
-      month: current_month,
-      planned: totals.planned_hours,
-      projLabel: "assumed full month",
-      proj: totals.assumed_full_hours,
-    },
+    { month: current_month, planned: totals.planned_billable_h, available: totals.available_h },
     ...totals.next.map((m) => ({
       month: m.month,
-      planned: m.planned_hours,
-      projLabel: "projected",
-      proj: m.projected_actual_hours,
+      planned: m.planned_billable_h,
+      available: m.available_h,
     })),
   ];
 
@@ -91,61 +99,69 @@ function ForecastBody({ data }: { data: ForecastReport }) {
     <>
       <KpiGrid>
         <Kpi
-          label={`Planned · ${monthLabel(current_month)}`}
-          value={fmtH(totals.planned_hours)}
-          sub={`${fmtH(totals.planned_to_date_hours)} to date`}
+          label={`Available · ${monthLabel(current_month)}`}
+          value={fmtH(totals.available_h)}
+          sub={`${fmtH(totals.capacity_h)} capacity − ${fmtH(totals.vacation_h)} absence`}
         />
         <Kpi
-          label="Worked to date"
-          value={fmtH(totals.actual_hours)}
-          sub={`${fmtH(totals.actual_billable_hours)} billable`}
-        />
-        <Kpi
-          label="Realization"
-          value={
-            totals.realization_pct === null
-              ? "—"
-              : `${totals.realization_pct.toFixed(0)}%`
-          }
+          label="Billable utilization"
+          value={fmtPct(totals.utilization_pct)}
           tone={
-            totals.realization_pct === null
+            totals.utilization_pct === null
               ? null
-              : totals.realization_pct >= 80
+              : totals.utilization_pct >= 70
                 ? "positive"
                 : "negative"
           }
-          hint="actual ÷ planned, both up to today"
+          hint="billable hours booked ÷ available capacity (month-to-date)"
         />
         <Kpi
-          label="Assumed full month"
-          value={fmtH(totals.assumed_full_hours)}
-          hint="planned × current realization ratio"
+          label="Bench"
+          value={fmtH(totals.bench_h)}
+          sub={`${fmtPct(totals.bench_pct)} of available`}
+          tone={
+            totals.bench_pct === null
+              ? null
+              : totals.bench_pct <= 15
+                ? "positive"
+                : "negative"
+          }
+        />
+        <Kpi
+          label="Delivery vs plan"
+          value={fmtPct(totals.delivery_pct)}
+          hint="billable booked ÷ billable planned, both to today"
         />
       </KpiGrid>
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Pipeline</CardTitle>
+          <CardTitle className="text-base">Billable pipeline</CardTitle>
           <p className="text-xs text-muted-foreground">
-            Planned allocation (in hours) for the current month and the next
-            two, with the assumed / projected actuals at the current
-            realization rate.
+            Planned billable hours for the current month and the next two, with
+            each month&rsquo;s available capacity beneath (→ planned
+            utilization).
           </p>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-3">
-          {pipeline.map((p) => (
-            <div key={p.month} className="rounded-md border bg-background p-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {monthLabel(p.month)}
+          {pipeline.map((p) => {
+            const plannedUtil =
+              p.available > 0 ? Math.round((p.planned / p.available) * 100) : null;
+            return (
+              <div key={p.month} className="rounded-md border bg-background p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {monthLabel(p.month)}
+                </div>
+                <div className="mt-1 text-2xl font-semibold tabular-nums">
+                  {fmtH(p.planned)}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {fmtH(p.available)} available
+                  {plannedUtil !== null && ` · ${plannedUtil}% planned`}
+                </div>
               </div>
-              <div className="mt-1 text-2xl font-semibold tabular-nums">
-                {fmtH(p.planned)}
-              </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {p.projLabel}: {fmtH(p.proj)}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </CardContent>
       </Card>
 
@@ -221,7 +237,8 @@ function RollupSection({
       <CardHeader className="pb-2">
         <CardTitle className="text-base">{title}</CardTitle>
         <p className="text-xs text-muted-foreground">
-          Click a row to see its consultants.
+          Billable delivery vs available, current month. Click a row to see its
+          consultants.
         </p>
       </CardHeader>
       <CardContent>
@@ -233,15 +250,14 @@ function RollupSection({
                   {axis === "team" ? "Team" : "Role tier"}
                 </th>
                 <th className="px-3 py-2 text-right font-medium">HC</th>
-                <th className="px-3 py-2 text-right font-medium">Planned</th>
-                <th className="px-3 py-2 text-right font-medium">
-                  Worked (to date)
-                </th>
-                <th className="px-3 py-2 text-right font-medium">Real.%</th>
-                <th className="px-3 py-2 text-right font-medium">Assumed</th>
+                <th className="px-3 py-2 text-right font-medium">Avail.</th>
+                <th className="px-3 py-2 text-right font-medium">Planned·b</th>
+                <th className="px-3 py-2 text-right font-medium">Actual·b</th>
+                <th className="px-3 py-2 text-right font-medium">Util%</th>
+                <th className="px-3 py-2 text-right font-medium">Bench</th>
                 {nextMonths.map((m) => (
                   <th key={m} className="px-3 py-2 text-right font-medium">
-                    {monthLabel(m)}
+                    {monthLabel(m)}·b
                   </th>
                 ))}
               </tr>
@@ -306,40 +322,46 @@ function RollupSection({
   );
 }
 
-/** The metric cells shared by group rows and consultant sub-rows: planned,
- * worked (billable sub), realization %, assumed full month, and each future
- * month's planned hours (with the projected actual beneath). */
+/** Metric cells shared by group rows and consultant sub-rows: available,
+ * planned billable, actual billable, utilization %, bench, then each future
+ * month's planned billable. */
 function RowMetrics({ r, muted }: { r: ForecastRow; muted?: boolean }) {
   return (
     <>
+      <td className="px-3 py-2 text-right tabular-nums">{fmtH(r.available_h)}</td>
       <td className="px-3 py-2 text-right tabular-nums">
-        {fmtH(r.planned_hours)}
+        {fmtH(r.planned_billable_h)}
       </td>
       <td className="px-3 py-2 text-right tabular-nums">
-        {fmtH(r.actual_hours)}
-        <span className="ml-1 text-xs text-muted-foreground">
-          ({fmtH(r.actual_billable_hours)} b)
-        </span>
+        {fmtH(r.actual_billable_h)}
+        {r.actual_nonbillable_h > 0 && (
+          <span className="ml-1 text-xs text-muted-foreground">
+            (+{r.actual_nonbillable_h.toFixed(0)} int)
+          </span>
+        )}
       </td>
       <td
         className={cn(
           "px-3 py-2 text-right tabular-nums",
-          muted ? "text-muted-foreground" : realizationTone(r.realization_pct),
+          muted ? "text-muted-foreground" : utilTone(r.utilization_pct),
         )}
       >
-        {r.realization_pct === null ? "—" : `${r.realization_pct.toFixed(0)}%`}
+        {fmtPct(r.utilization_pct)}
       </td>
-      <td className="px-3 py-2 text-right tabular-nums">
-        {fmtH(r.assumed_full_hours)}
+      <td
+        className={cn(
+          "px-3 py-2 text-right tabular-nums",
+          muted ? "text-muted-foreground" : benchTone(r.bench_pct),
+        )}
+      >
+        {fmtH(r.bench_h)}
+        <span className="ml-1 text-xs text-muted-foreground">
+          ({fmtPct(r.bench_pct)})
+        </span>
       </td>
       {r.next.map((m) => (
         <td key={m.month} className="px-3 py-2 text-right tabular-nums">
-          {fmtH(m.planned_hours)}
-          {m.projected_actual_hours !== null && (
-            <span className="ml-1 text-xs text-muted-foreground">
-              (~{fmtH(m.projected_actual_hours)})
-            </span>
-          )}
+          {fmtH(m.planned_billable_h)}
         </td>
       ))}
     </>
@@ -348,8 +370,8 @@ function RowMetrics({ r, muted }: { r: ForecastRow; muted?: boolean }) {
 
 // ---------------------------------------------------------------------------
 // Capacity breakdown — where a team's paid capacity goes, per month.
-// Billable + Non-billable (on-project) + Bench + Vacation = 100% of total
-// capacity when not overbooked; the total exceeds 100% by Over otherwise.
+// Billable delivered + Allocated·not-billed + Bench + Vacation = capacity;
+// Over-allocation is flagged separately.
 // ---------------------------------------------------------------------------
 
 type CapUnit = "hours" | "fte" | "pct";
@@ -370,10 +392,11 @@ function capValue(
 }
 
 const CAP_COLS = [
-  { key: "onproject", label: "On-project", cls: "text-emerald-700", title: "Planned on-project allocation" },
-  { key: "bench", label: "Bench", cls: "text-amber-700", title: "Intercontract / bench — paid but idle (fixable)" },
-  { key: "vac", label: "Vac", cls: "text-sky-700", title: "Paid vacation (fixed, not fixable)" },
-  { key: "over", label: "Over", cls: "text-red-700", title: "Over-allocated — planned beyond the person's FULL capacity (e.g. >100% or double-booked). Planned vacation is NOT over." },
+  { key: "billable", label: "Billable", cls: "text-emerald-700", title: "Booked on billable projects (delivery). Month-to-date for the current month." },
+  { key: "internal", label: "Alloc·NB", cls: "text-violet-700", title: "Allocated but not billed — planned time that went to meetings, internal work, or under-delivery." },
+  { key: "bench", label: "Bench", cls: "text-amber-700", title: "Unused capacity — neither planned onto work nor spent on billable delivery." },
+  { key: "vac", label: "Vac", cls: "text-sky-700", title: "Paid vacation / absence (outside available)." },
+  { key: "over", label: "Over", cls: "text-red-700", title: "Allocated or delivered beyond FULL capacity (over-allocation / overtime)." },
 ] as const;
 
 function capCell(
@@ -384,14 +407,18 @@ function capCell(
 ): string {
   const base = b.capacity_h;
   switch (col) {
-    case "onproject":
-      return capValue(unit, b.allocation_h, base, wd);
+    case "billable":
+      return capValue(unit, b.billable_delivered_h, base, wd);
+    case "internal":
+      return b.allocated_not_billed_h > 0
+        ? capValue(unit, b.allocated_not_billed_h, base, wd)
+        : "—";
     case "bench":
-      return capValue(unit, b.intercontract_h, base, wd);
+      return capValue(unit, b.bench_h, base, wd);
     case "vac":
       return b.vacation_h > 0 ? capValue(unit, b.vacation_h, base, wd) : "—";
     case "over":
-      return b.overbook_h > 0 ? capValue(unit, b.overbook_h, base, wd) : "—";
+      return b.over_h > 0 ? capValue(unit, b.over_h, base, wd) : "—";
   }
 }
 
@@ -406,12 +433,13 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
           <div>
             <CardTitle className="text-base">Capacity breakdown</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Where each team&rsquo;s paid capacity goes. <strong>On-project +
-              Bench + Vacation = 100%</strong> of total capacity;
-              <strong> Over</strong> flags allocation beyond a person&rsquo;s
-              <em> full</em> capacity (genuine over-allocation) &mdash; planned
-              vacation is <em>not</em> over. Bench is the only <em>fixable</em>
-              idle time. Unpaid leave is excluded (no payroll load). FTE: 1.0 =
+              Where each team&rsquo;s paid capacity goes. <strong>Billable +
+              Alloc·NB + Bench + Vacation = 100%</strong> of capacity;
+              <strong> Over</strong> flags allocation/delivery beyond full
+              capacity. <strong>Bench</strong> is unused capacity;
+              <strong> Alloc·NB</strong> is allocated-but-not-billed (meetings,
+              internal, under-delivery). Current-month billable is
+              month-to-date; future months show the planned view. FTE: 1.0 =
               one full-timer (40h/wk) for the month.
             </p>
           </div>
@@ -499,11 +527,11 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
                               className={cn(
                                 "px-3 py-2 text-right tabular-nums",
                                 ci === 0 && "border-l",
-                                col.key === "over" && b.overbook_h > 0
-                                  ? "text-red-700"
-                                  : col.cls,
+                                col.cls,
                                 (col.key === "vac" && b.vacation_h === 0) ||
-                                  (col.key === "over" && b.overbook_h === 0)
+                                  (col.key === "over" && b.over_h === 0) ||
+                                  (col.key === "internal" &&
+                                    b.allocated_not_billed_h === 0)
                                   ? "text-muted-foreground"
                                   : undefined,
                               )}
@@ -530,9 +558,9 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
   );
 }
 
-/** Stacked bar per team for the current month: Billable / Non-billable / Bench
- * / Vacation as % of total capacity. Bars overrun the 100% line when a team is
- * overbooked (the overshoot is flagged). */
+/** Stacked bar per team for the current month: Billable / Alloc·NB / Bench /
+ * Vacation as % of total capacity. Over-allocation is flagged with a red ring
+ * + "+X%" rather than overflowing the track. */
 function CapacityBars({
   rows,
   monthLabelText,
@@ -554,7 +582,8 @@ function CapacityBars({
           {monthLabelText} · capacity mix
         </h4>
         <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-          <Legend cls="bg-emerald-500" label="On-project" />
+          <Legend cls="bg-emerald-500" label="Billable" />
+          <Legend cls="bg-violet-400" label="Alloc·NB" />
           <Legend cls="bg-amber-400" label="Bench" />
           <Legend cls="bg-sky-300" label="Vacation" />
         </div>
@@ -562,18 +591,14 @@ function CapacityBars({
       <div className="space-y-1.5">
         {withData.map(({ key, b }) => {
           const cap = b!.capacity_h;
-          const benchW = seg(b!.intercontract_h, cap);
+          const billW = seg(b!.billable_delivered_h, cap);
+          const internalW = seg(b!.allocated_not_billed_h, cap);
+          const benchW = seg(b!.bench_h, cap);
           const vacW = seg(b!.vacation_h, cap);
-          // Clamp on-project so the stack never exceeds the 100% track (keeps
-          // the graph on-page and vacation visible). Overbooking is shown by
-          // the red ring + the "+X%" label, not by overflowing the bar.
-          const onprojW = Math.min(
-            seg(b!.allocation_h, cap),
-            Math.max(0, 100 - benchW - vacW),
-          );
-          const overPct = Math.round(seg(b!.overbook_h, cap));
+          const overPct = Math.round(seg(b!.over_h, cap));
           const parts = [
-            { w: onprojW, cls: "bg-emerald-500" },
+            { w: billW, cls: "bg-emerald-500" },
+            { w: internalW, cls: "bg-violet-400" },
             { w: benchW, cls: "bg-amber-400" },
             { w: vacW, cls: "bg-sky-300" },
           ];
@@ -582,8 +607,6 @@ function CapacityBars({
               <div className="w-40 shrink-0 truncate text-xs" title={key}>
                 {key}
               </div>
-              {/* Track = 100% capacity. Overbooked rows get a red ring
-                  (the bar itself is clamped to the track). */}
               <div
                 className={cn(
                   "h-4 flex-1 overflow-hidden rounded-sm bg-muted/60",
@@ -602,7 +625,7 @@ function CapacityBars({
               </div>
               <div className="w-16 shrink-0 text-right text-xs tabular-nums">
                 {overPct > 0 ? (
-                  <span className="text-red-700" title="Overbooked beyond capacity">
+                  <span className="text-red-700" title="Over capacity">
                     +{overPct}%
                   </span>
                 ) : (

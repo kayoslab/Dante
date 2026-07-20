@@ -494,6 +494,60 @@ export async function employeeWeightedAllocInMonth(
   return total;
 }
 
+/** Weighted allocation for an employee in a month, split into total (all
+ * projects) and billable (projects where `project.billable` is true; NULL →
+ * billable by convention, matching the tracked-hours model). Same weighting
+ * and manual-vs-planning dedup as `employeeWeightedAllocInMonth`, plus a
+ * `project` join to classify each assignment. Returns fractions of full-time
+ * (× 8h × workdays → hours). Backs the Forecast capacity model's
+ * planned-billable figure. */
+export async function employeeAllocSplitInMonth(
+  employee_id: number,
+  month_start: string,
+  month_end: string,
+  working_days: string[],
+): Promise<{ total: Decimal; billable: Decimal }> {
+  const n_wd = working_days.length;
+  if (n_wd === 0) return { total: new Decimal(0), billable: new Decimal(0) };
+  const r = await db.execute(sql`
+    SELECT a.allocation_pct, a.start_date, a.end_date,
+           COALESCE(p.billable, TRUE) AS billable
+    FROM assignment a
+    LEFT JOIN project p ON p.project_id = a.project_id
+    WHERE a.employee_id = ${employee_id}
+      AND a.start_date <= ${month_end}::date
+      AND (a.end_date IS NULL OR a.end_date >= ${month_start}::date)
+      AND NOT (
+        a.source = 'awork-planning'
+        AND EXISTS (
+          SELECT 1 FROM assignment m
+          WHERE m.employee_id = a.employee_id
+            AND m.project_id = a.project_id
+            AND m.source = 'manual'
+        )
+      )
+  `);
+  let total = new Decimal(0);
+  let billable = new Decimal(0);
+  const wdSet = new Set(working_days);
+  for (const raw of r.rows as Array<Record<string, unknown>>) {
+    const alloc = new Decimal(raw.allocation_pct as string);
+    const a_start = raw.start_date as string;
+    const a_end = raw.end_date as string | null;
+    const ws = a_start > month_start ? a_start : month_start;
+    const we = a_end === null ? month_end : a_end < month_end ? a_end : month_end;
+    let active = 0;
+    for (const d of working_days) {
+      if (d >= ws && d <= we && wdSet.has(d)) active++;
+    }
+    if (active === 0) continue;
+    const weighted = alloc.mul(active).div(n_wd);
+    total = total.add(weighted);
+    if (raw.billable === true) billable = billable.add(weighted);
+  }
+  return { total, billable };
+}
+
 // ----------------------------------------------------------------------------
 // Σ project weighted alloc across all assignments on this project this month
 // (denominator for FP revenue attribution per consultant)

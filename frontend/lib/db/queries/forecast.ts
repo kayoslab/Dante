@@ -5,55 +5,59 @@ import { db } from "../client";
 import {
   absencesForEmployee,
   addMonths,
-  employeeWeightedAllocInMonth,
+  employeeAllocSplitInMonth,
   firstOfMonth,
   holidaysForYearOf,
   lastOfMonth,
   workingDaysInRange,
 } from "../_monthly-helpers";
+import {
+  addToCapacityAcc,
+  capacityBuckets,
+  newCapacityAcc,
+  ratioOrNull,
+  type CapacityAcc,
+  type CapacityContribution,
+} from "../_capacity-model";
 import { roleTierFromAlias } from "../_sql-fragments";
 import { getTrackedHoursForMonth } from "./tracked-hours";
-import {
-  capacitySplit,
-  plannedHours,
-  projectAssumed,
-  realizationRatio,
-} from "./_forecast-math";
 
 // ---------------------------------------------------------------------------
-// Forecast report — engine + shaped read.
+// Forecast report — engine + shaped read. Manager-only, backs /reports/forecast.
 //
-// Backs `/reports/forecast` (manager-only). Two things:
+// The WHOLE report is computed from ONE per-(employee, month) capacity model
+// (`_capacity-model.ts`), so every section tells one consistent story:
 //
-//  1. Realization: are we delivering the plan this month? Planned allocation
-//     (a fraction of FTE, from `assignment`) is converted to planned HOURS so
-//     it's comparable to actual tracked hours. Realization ratio = actual
-//     worked to-date ÷ planned to-date, computed PER rollup level, applied to
-//     the full month ("assumed") and the next two months ("projected").
+//  - Performed vs planned (per team / role / consultant): compares planned
+//    BILLABLE hours to actual BILLABLE hours against available capacity. It no
+//    longer uses total tracked (billable + internal + untagged) as "actual" —
+//    that inflated realization whenever someone booked unplanned internal time.
+//    Headline KPI = billable utilization (actual billable ÷ available).
 //
-//  2. Capacity breakdown: per team, per month, decompose PAID capacity into
-//     planned allocation + paid vacation + intercontract (bench). Unpaid
-//     leave (sabbatical / parental) is removed from capacity entirely — it
-//     doesn't load payroll. Reported in hours; the client derives FTE and %.
+//  - Capacity breakdown (per team, per month): the same buckets, so available
+//    capacity resolves into billable delivered + allocated-not-billed + bench,
+//    with paid vacation shown outside and over-allocation flagged. Future
+//    months (no bookings yet) reduce to the planned view.
 //
-// Realization absorbs absences implicitly (time off → lower actual → lower
-// ratio); the capacity breakdown makes planned time off explicit.
+// Bench = UNUSED capacity: driven by the plan, reduced by actual billable work,
+// never created by under-delivering an allocation. See `_capacity-model.ts`.
 // ---------------------------------------------------------------------------
 
 const D0 = new Decimal(0);
 const FUTURE_MONTHS = 2;
-/** A full-time day. `allocation_pct` is a fraction of full-time (40h/8h-day
- * — the awork sync divides planned hours by an 8h day), so planned HOURS =
- * allocation × 8 × working-days, independent of the employee's own daily
- * hours. Capacity/vacation, by contrast, use the employee's ACTUAL daily
- * hours (weekly_working_hours ÷ 5) — so a fully-booked part-timer's planned
- * hours equal their capacity and bench is 0. FTE denominator on the client
- * is the same (hours ÷ wd ÷ 8). */
+/** A full-time day. `allocation_pct` is a fraction of full-time (the awork sync
+ * divides planned hours by an 8h day), so planned HOURS = allocation × 8 ×
+ * working-days, independent of the employee's own daily hours. Capacity /
+ * vacation use the employee's ACTUAL daily hours (weekly_working_hours ÷ 5). */
 const FULL_TIME_DAILY = new Decimal(8);
 
-/** hours as a plain number, rounded to 2 dp (display formats to 1). */
+/** hours as a plain number, 2 dp (display formats to 1). */
 function hrs(d: Decimal): number {
   return Number(d.toFixed(2));
+}
+/** ratio → percent (1 dp) or null. */
+function pct(r: Decimal | null): number | null {
+  return r === null ? null : Number(r.mul(100).toFixed(1));
 }
 
 type EligibleEmployee = {
@@ -68,9 +72,7 @@ type EligibleEmployee = {
 };
 
 /** Active, real, project-contributing employees whose contract overlaps the
- * forecast window [current month start, +2 month end]. Same eligibility as
- * the utilization engine, plus `weekly_working_hours` (→ daily hours) and the
- * contract dates (→ capacity clipping). */
+ * forecast window. Same eligibility as the utilization engine. */
 async function listForecastEligible(
   window_start: string,
   window_end: string,
@@ -85,8 +87,6 @@ async function listForecastEligible(
     LEFT JOIN employee_annotation ann ON ann.employee_id = ec.employee_id
     WHERE COALESCE(ann.is_real_employee, TRUE) = TRUE
       AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
-      -- Include onboarding (future-start) hires so a joiner adds capacity to
-      -- the forecast months they've started; the hire_date window scopes them.
       AND ec.status IN ('active', 'onboarding')
       AND (ec.hire_date IS NULL OR ec.hire_date <= ${window_end}::date)
       AND (ec.employment_end_date IS NULL OR ec.employment_end_date >= ${window_start}::date)
@@ -122,61 +122,38 @@ function monthWindow(monthStart: string): MonthWindow {
 }
 
 // ---------------------------------------------------------------------------
-// Realization rollups (totals / team / role tier / consultant)
+// Wire types
 // ---------------------------------------------------------------------------
 
-type EmployeeForecast = {
-  planned_full: Decimal;
-  planned_to_date: Decimal;
-  actual: Decimal;
-  billable: Decimal;
-  next: Decimal[];
-};
-
-type Acc = {
-  n: number;
-  planned_full: Decimal;
-  planned_to_date: Decimal;
-  actual: Decimal;
-  billable: Decimal;
-  next: Decimal[];
-};
-
-function newAcc(): Acc {
-  return {
-    n: 0,
-    planned_full: D0,
-    planned_to_date: D0,
-    actual: D0,
-    billable: D0,
-    next: Array.from({ length: FUTURE_MONTHS }, () => D0),
-  };
-}
-
-function addToAcc(acc: Acc, e: EmployeeForecast): void {
-  acc.n += 1;
-  acc.planned_full = acc.planned_full.add(e.planned_full);
-  acc.planned_to_date = acc.planned_to_date.add(e.planned_to_date);
-  acc.actual = acc.actual.add(e.actual);
-  acc.billable = acc.billable.add(e.billable);
-  acc.next = acc.next.map((v, i) => v.add(e.next[i]));
-}
-
+/** Planned billable / available for a future month (forward view). */
 export type ForecastMonthPlan = {
   month: string;
-  planned_hours: number;
-  projected_actual_hours: number | null;
+  planned_billable_h: number;
+  available_h: number;
 };
 
+/** A performed-vs-planned rollup row (per total / team / role / consultant),
+ * current-month figures + a forward plan. Hours are current-month; where the
+ * month is still running, actuals are month-to-date. */
 export type ForecastRow = {
   key: string;
   n_employees: number;
-  planned_hours: number;
-  planned_to_date_hours: number;
-  actual_hours: number;
-  actual_billable_hours: number;
-  realization_pct: number | null;
-  assumed_full_hours: number | null;
+  capacity_h: number;
+  available_h: number;
+  vacation_h: number;
+  planned_billable_h: number;
+  actual_billable_h: number;
+  actual_nonbillable_h: number;
+  billable_delivered_h: number;
+  allocated_not_billed_h: number;
+  bench_h: number;
+  over_h: number;
+  /** actual billable ÷ available — the headline utilization (month-to-date). */
+  utilization_pct: number | null;
+  /** bench ÷ available — share of capacity with no work. */
+  bench_pct: number | null;
+  /** actual billable ÷ planned billable to-date — delivery against plan. */
+  delivery_pct: number | null;
   next: ForecastMonthPlan[];
 };
 
@@ -187,74 +164,18 @@ export type ForecastConsultantRow = ForecastRow & {
   role_tier: string | null;
 };
 
-function summarize(key: string, acc: Acc, nextMonths: string[]): ForecastRow {
-  const ratio = realizationRatio(acc.actual, acc.planned_to_date);
-  const assumed = projectAssumed(acc.planned_full, ratio);
-  return {
-    key,
-    n_employees: acc.n,
-    planned_hours: hrs(acc.planned_full),
-    planned_to_date_hours: hrs(acc.planned_to_date),
-    actual_hours: hrs(acc.actual),
-    actual_billable_hours: hrs(acc.billable),
-    realization_pct: ratio === null ? null : Number(ratio.mul(100).toFixed(1)),
-    assumed_full_hours: assumed === null ? null : hrs(assumed),
-    next: acc.next.map((planned, i) => {
-      const proj = projectAssumed(planned, ratio);
-      return {
-        month: nextMonths[i],
-        planned_hours: hrs(planned),
-        projected_actual_hours: proj === null ? null : hrs(proj),
-      };
-    }),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Capacity breakdown (per team, per month)
-// ---------------------------------------------------------------------------
-
-type CapAcc = {
-  allocation: Decimal; // on-project (planned assignment allocation, raw)
-  vacation: Decimal;
-  intercontract: Decimal; // bench = max(0, available − allocation)
-  overbook: Decimal; // planned beyond available
-  available: Decimal; // capacity − vacation
-  capacity: Decimal; // total paid capacity (the 100% base)
-};
-
-function newCapMonths(n: number): CapAcc[] {
-  return Array.from({ length: n }, () => ({
-    allocation: D0,
-    vacation: D0,
-    intercontract: D0,
-    overbook: D0,
-    available: D0,
-    capacity: D0,
-  }));
-}
-
-function addCap(accs: CapAcc[], i: number, b: CapAcc): void {
-  accs[i] = {
-    allocation: accs[i].allocation.add(b.allocation),
-    vacation: accs[i].vacation.add(b.vacation),
-    intercontract: accs[i].intercontract.add(b.intercontract),
-    overbook: accs[i].overbook.add(b.overbook),
-    available: accs[i].available.add(b.available),
-    capacity: accs[i].capacity.add(b.capacity),
-  };
-}
-
-// On-project + intercontract + vacation = capacity (the 100% base) when not
-// overbooked; the total exceeds capacity by overbook when it is. All figures
-// are hours; the client renders % of `capacity_h`.
+/** Per-month partition of a team's paid capacity. `billable_delivered +
+ * allocated_not_billed + bench + vacation = capacity` (over-allocation shown
+ * separately). Future months have no bookings → billable_delivered 0 and the
+ * split is the planned view. */
 export type CapacityBucket = {
-  allocation_h: number; // on-project (planned assignment allocation)
+  capacity_h: number;
+  available_h: number;
   vacation_h: number;
-  intercontract_h: number; // bench
-  overbook_h: number; // planned beyond available (the overshoot past 100%)
-  available_h: number; // capacity − vacation
-  capacity_h: number; // total paid capacity (the 100% base)
+  billable_delivered_h: number;
+  allocated_not_billed_h: number;
+  bench_h: number;
+  over_h: number;
 };
 
 export type CapacityTeamRow = {
@@ -263,26 +184,10 @@ export type CapacityTeamRow = {
 };
 
 export type CapacityBreakdown = {
-  /** One per forecast month; `working_days` is the full-time FTE denominator
-   * (client: hours ÷ (working_days × 8) = FTE). */
   months: { month: string; working_days: number }[];
   totals: CapacityTeamRow;
   by_team: CapacityTeamRow[];
 };
-
-function summarizeCap(key: string, accs: CapAcc[]): CapacityTeamRow {
-  return {
-    key,
-    months: accs.map((a) => ({
-      allocation_h: hrs(a.allocation),
-      vacation_h: hrs(a.vacation),
-      intercontract_h: hrs(a.intercontract),
-      overbook_h: hrs(a.overbook),
-      available_h: hrs(a.available),
-      capacity_h: hrs(a.capacity),
-    })),
-  };
-}
 
 export type ForecastReport = {
   generated_for: string; // YYYY-MM-DD
@@ -295,7 +200,59 @@ export type ForecastReport = {
   capacity: CapacityBreakdown;
 };
 
-/** Compute the whole forecast report as of `todayIso` (YYYY-MM-DD). */
+// ---------------------------------------------------------------------------
+// Shaping (accumulator → wire)
+// ---------------------------------------------------------------------------
+
+/** Current-month KPIs from that rollup's per-month accumulators. `accs[0]` is
+ * the current month; the rest are the forward plan. */
+function toForecastRow(key: string, accs: CapacityAcc[], months: string[]): ForecastRow {
+  const cur = accs[0];
+  return {
+    key,
+    n_employees: cur.n,
+    capacity_h: hrs(cur.capacity),
+    available_h: hrs(cur.available),
+    vacation_h: hrs(cur.vacation),
+    planned_billable_h: hrs(cur.planned_billable),
+    actual_billable_h: hrs(cur.actual_billable),
+    actual_nonbillable_h: hrs(cur.actual_nonbillable),
+    billable_delivered_h: hrs(cur.billable_delivered),
+    allocated_not_billed_h: hrs(cur.allocated_not_billed),
+    bench_h: hrs(cur.bench),
+    over_h: hrs(cur.over),
+    utilization_pct: pct(ratioOrNull(cur.actual_billable, cur.available)),
+    bench_pct: pct(ratioOrNull(cur.bench, cur.available)),
+    delivery_pct: pct(ratioOrNull(cur.actual_billable, cur.planned_billable_to_date)),
+    next: accs.slice(1).map((a, i) => ({
+      month: months[i + 1],
+      planned_billable_h: hrs(a.planned_billable),
+      available_h: hrs(a.available),
+    })),
+  };
+}
+
+function toCapacityBucket(a: CapacityAcc): CapacityBucket {
+  return {
+    capacity_h: hrs(a.capacity),
+    available_h: hrs(a.available),
+    vacation_h: hrs(a.vacation),
+    billable_delivered_h: hrs(a.billable_delivered),
+    allocated_not_billed_h: hrs(a.allocated_not_billed),
+    bench_h: hrs(a.bench),
+    over_h: hrs(a.over),
+  };
+}
+
+/** A rollup bucket = one CapacityAcc per forecast month. */
+function newMonthAccs(n: number): CapacityAcc[] {
+  return Array.from({ length: n }, () => newCapacityAcc());
+}
+
+// ---------------------------------------------------------------------------
+// Engine
+// ---------------------------------------------------------------------------
+
 export async function computeForecast(todayIso: string): Promise<ForecastReport> {
   const currentStart = firstOfMonth(todayIso);
   const windows: MonthWindow[] = [
@@ -305,7 +262,7 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
     ),
   ];
   const cur = windows[0];
-  const nextMonthLabels = windows.slice(1).map((w) => w.month);
+  const monthLabels = windows.map((w) => w.month);
 
   // Current-month "to date" window: month start → today (clamped in-month).
   const toDateEnd = todayIso < cur.end ? todayIso : cur.end;
@@ -316,90 +273,40 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
     windows[windows.length - 1].end,
   );
 
-  // Actual tracked hours (all buckets + billable) for the elapsed window.
+  // Actual tracked hours (billable vs non-billable/untagged), month-to-date.
   const tracked = await getTrackedHoursForMonth({
     month_start: cur.start,
     month_end: toDateEnd,
     team: null,
   });
-  const trackedByEmp = new Map<number, { actual: Decimal; billable: Decimal }>();
+  const trackedByEmp = new Map<number, { billable: Decimal; nonbillable: Decimal }>();
   for (const t of tracked) {
     trackedByEmp.set(t.employee_id, {
-      actual: new Decimal(t.b_min + t.nb_min + t.n_min).div(60),
       billable: new Decimal(t.b_min).div(60),
+      nonbillable: new Decimal(t.nb_min + t.n_min).div(60),
     });
   }
 
-  const totals = newAcc();
-  const teamMap = new Map<string, Acc>();
-  const tierMap = new Map<string, Acc>();
+  const nMonths = windows.length;
+  const totals = newMonthAccs(nMonths);
+  const teamMap = new Map<string, CapacityAcc[]>();
+  const tierMap = new Map<string, CapacityAcc[]>();
   const consultants: ForecastConsultantRow[] = [];
 
-  const capTotals = newCapMonths(windows.length);
-  const capTeamMap = new Map<string, CapAcc[]>();
-
   for (const emp of employees) {
-    // Employee's ACTUAL daily hours — capacity/vacation basis.
     const empDailyHours = new Decimal(emp.weekly_working_hours ?? 40).div(5);
+    const tr = trackedByEmp.get(emp.employee_id) ?? { billable: D0, nonbillable: D0 };
 
-    // Full-month planned allocation (hours) for every forecast month.
-    // Allocation is a fraction of full-time, so hours use the full-time day.
-    const plannedByMonth: Decimal[] = [];
-    for (const w of windows) {
-      const alloc = await employeeWeightedAllocInMonth(
-        emp.employee_id,
-        w.start,
-        w.end,
-        w.wd,
-      );
-      plannedByMonth.push(plannedHours(alloc, FULL_TIME_DAILY, w.wd.length));
-    }
-
-    // Current-month planned to-date (for the realization ratio).
-    const allocToDate =
-      wdToDate.length === 0
-        ? D0
-        : await employeeWeightedAllocInMonth(
-            emp.employee_id,
-            cur.start,
-            toDateEnd,
-            wdToDate,
-          );
-    const t = trackedByEmp.get(emp.employee_id) ?? { actual: D0, billable: D0 };
-
-    const e: EmployeeForecast = {
-      planned_full: plannedByMonth[0],
-      planned_to_date: plannedHours(allocToDate, FULL_TIME_DAILY, wdToDate.length),
-      actual: t.actual,
-      billable: t.billable,
-      next: plannedByMonth.slice(1),
-    };
-
-    addToAcc(totals, e);
     const teamKey = emp.team ?? "(no team)";
-    const tAcc = teamMap.get(teamKey) ?? newAcc();
-    addToAcc(tAcc, e);
-    teamMap.set(teamKey, tAcc);
     const tierKey = emp.role_tier ?? "(unset)";
-    const rAcc = tierMap.get(tierKey) ?? newAcc();
-    addToAcc(rAcc, e);
-    tierMap.set(tierKey, rAcc);
+    const teamAccs = teamMap.get(teamKey) ?? newMonthAccs(nMonths);
+    const tierAccs = tierMap.get(tierKey) ?? newMonthAccs(nMonths);
+    const empAccs = newMonthAccs(nMonths);
 
-    const single = newAcc();
-    addToAcc(single, e);
-    const who = `${emp.first_name ?? ""} ${emp.last_name ?? ""}`.trim() || "—";
-    consultants.push({
-      ...summarize(who, single, nextMonthLabels),
-      employee_id: emp.employee_id,
-      who_name: who,
-      team: emp.team,
-      role_tier: emp.role_tier,
-    });
-
-    // Capacity breakdown per month for this employee.
-    const empCap = capTeamMap.get(teamKey) ?? newCapMonths(windows.length);
-    for (let i = 0; i < windows.length; i++) {
+    for (let i = 0; i < nMonths; i++) {
       const w = windows[i];
+      const isCurrent = i === 0;
+
       // Contract-clip the month's working days to [hire, employment_end].
       const clipStart =
         emp.hire_date && emp.hire_date > w.start ? emp.hire_date : w.start;
@@ -421,64 +328,101 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
         if (unpaid.has(d)) unpaidDays++;
         else if (allAbs.has(d)) paidVacDays++;
       }
-      // Paid capacity excludes unpaid leave entirely (no payroll load).
-      // Capacity/vacation use the employee's ACTUAL daily hours so a
-      // part-timer's capacity matches their fully-booked allocation hours.
       const capacityDays = Math.max(contractWd.length - unpaidDays, 0);
-      const capacity_h = empDailyHours.mul(capacityDays);
-      const vacation_h = empDailyHours.mul(paidVacDays);
-      const allocation_h = plannedByMonth[i];
-      // Split total capacity into on-project (deliverable, capped at available)
-      // + bench + vacation — which always sums to capacity (100%). Overbook is
-      // allocation beyond FULL capacity (genuine over-allocation); planned
-      // vacation never counts as overbooking.
-      const available_h = capacity_h.sub(vacation_h);
-      const { on_project, bench, overbook } = capacitySplit(
-        capacity_h,
-        vacation_h,
-        allocation_h,
+      const capacity = empDailyHours.mul(capacityDays);
+      const vacation = empDailyHours.mul(paidVacDays);
+
+      // Planned allocation for the full month, split billable vs total.
+      const alloc = await employeeAllocSplitInMonth(
+        emp.employee_id,
+        w.start,
+        w.end,
+        w.wd,
       );
-      const bucket: CapAcc = {
-        allocation: on_project,
-        vacation: vacation_h,
-        intercontract: bench,
-        overbook,
-        available: available_h.gt(0) ? available_h : D0,
-        capacity: capacity_h,
+      const planned_total = alloc.total.mul(FULL_TIME_DAILY).mul(w.wd.length);
+      const planned_billable = alloc.billable.mul(FULL_TIME_DAILY).mul(w.wd.length);
+
+      // Current month: month-to-date actuals + to-date planned (for delivery).
+      let actual_billable = D0;
+      let actual_nonbillable = D0;
+      let planned_billable_to_date = D0;
+      if (isCurrent) {
+        actual_billable = tr.billable;
+        actual_nonbillable = tr.nonbillable;
+        if (wdToDate.length > 0) {
+          const allocTd = await employeeAllocSplitInMonth(
+            emp.employee_id,
+            cur.start,
+            toDateEnd,
+            wdToDate,
+          );
+          planned_billable_to_date = allocTd.billable
+            .mul(FULL_TIME_DAILY)
+            .mul(wdToDate.length);
+        }
+      }
+
+      const buckets = capacityBuckets({
+        capacity,
+        vacation,
+        planned: planned_total,
+        actual_billable,
+      });
+      const contribution: CapacityContribution = {
+        capacity,
+        vacation,
+        planned_total,
+        planned_billable,
+        planned_billable_to_date,
+        actual_billable,
+        actual_nonbillable,
+        buckets,
       };
-      addCap(capTotals, i, bucket);
-      addCap(empCap, i, bucket);
+      addToCapacityAcc(totals[i], contribution);
+      addToCapacityAcc(teamAccs[i], contribution);
+      addToCapacityAcc(tierAccs[i], contribution);
+      addToCapacityAcc(empAccs[i], contribution);
     }
-    capTeamMap.set(teamKey, empCap);
+
+    teamMap.set(teamKey, teamAccs);
+    tierMap.set(tierKey, tierAccs);
+    const who = `${emp.first_name ?? ""} ${emp.last_name ?? ""}`.trim() || "—";
+    consultants.push({
+      ...toForecastRow(who, empAccs, monthLabels),
+      employee_id: emp.employee_id,
+      who_name: who,
+      team: emp.team,
+      role_tier: emp.role_tier,
+    });
   }
 
-  const by_team = Array.from(teamMap, ([k, g]) => summarize(k, g, nextMonthLabels)).sort(
-    (a, b) => b.planned_hours - a.planned_hours,
+  const by_team = Array.from(teamMap, ([k, accs]) => toForecastRow(k, accs, monthLabels)).sort(
+    (a, b) => b.available_h - a.available_h,
   );
-  const by_role_tier = Array.from(tierMap, ([k, g]) =>
-    summarize(k, g, nextMonthLabels),
-  ).sort((a, b) => b.planned_hours - a.planned_hours);
+  const by_role_tier = Array.from(tierMap, ([k, accs]) =>
+    toForecastRow(k, accs, monthLabels),
+  ).sort((a, b) => b.available_h - a.available_h);
   consultants.sort(
-    (a, b) => b.planned_hours - a.planned_hours || a.who_name.localeCompare(b.who_name),
+    (a, b) =>
+      b.available_h - a.available_h || a.who_name.localeCompare(b.who_name),
   );
 
-  const capByTeam = Array.from(capTeamMap, ([k, accs]) =>
-    summarizeCap(k, accs),
-  ).sort(
-    (a, b) => (b.months[0]?.capacity_h ?? 0) - (a.months[0]?.capacity_h ?? 0),
-  );
+  const capByTeam: CapacityTeamRow[] = Array.from(teamMap, ([k, accs]) => ({
+    key: k,
+    months: accs.map(toCapacityBucket),
+  })).sort((a, b) => (b.months[0]?.capacity_h ?? 0) - (a.months[0]?.capacity_h ?? 0));
 
   return {
     generated_for: todayIso,
     current_month: cur.month,
-    next_months: nextMonthLabels,
-    totals: summarize("__total__", totals, nextMonthLabels),
+    next_months: monthLabels.slice(1),
+    totals: toForecastRow("__total__", totals, monthLabels),
     by_team,
     by_role_tier,
     by_consultant: consultants,
     capacity: {
       months: windows.map((w) => ({ month: w.month, working_days: w.wd.length })),
-      totals: summarizeCap("__total__", capTotals),
+      totals: { key: "__total__", months: totals.map(toCapacityBucket) },
       by_team: capByTeam,
     },
   };

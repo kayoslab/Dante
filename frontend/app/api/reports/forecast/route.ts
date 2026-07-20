@@ -3,9 +3,10 @@ import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { audit } from "@/lib/auth/audit";
 import { computeForecast } from "@/lib/db/queries/forecast";
 
-/** Forecast report (manager-only): planned vs actual for the current month,
- * assumed utilization at the current realization ratio, and the planned
- * pipeline for the next two months. Always "current + 2" — no month param. */
+/** Forecast report (manager-only): billable delivery vs available capacity for
+ * the current month (utilization, bench, delivery-vs-plan) plus the planned
+ * billable pipeline for the next two months. All sections derive from one
+ * per-employee capacity model. Always "current + 2" — no month param. */
 export async function GET() {
   return handle(async () => {
     const ctx = await requireApiSession({ minRole: "manager" });
