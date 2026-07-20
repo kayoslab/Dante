@@ -4,16 +4,18 @@
  * by *effective billability* (project-level, uniform across sources):
  *   - billable      — tracked on a billable project.
  *   - non_billable  — tracked on a project marked non-billable (internal work,
- *                     e.g. "Interne Tätigkeit"). Counts as bench.
- *   - untagged      — Personio-only; no project picked. Counts as bench.
- * Bench = non_billable + untagged.
+ *                     e.g. "Interne Tätigkeit").
+ *   - untagged      — Personio-only; no project picked.
+ * `non_billable + untagged` = internal (non-billed) tracked time. NB: this is
+ * NOT "bench" — bench is unused *capacity* (available − allocation), a Forecast-
+ * report concept. This report is purely actual tracked hours.
  *
  * Effective billability of a project (same rule both sources):
  *   - source project LINKED to a Dante project → `project.billable`.
  *   - UNLINKED → the source flag (`personio_project.billable` /
  *     `awork_project.is_billable_by_default`), null → billable (interim,
  *     until the source data is curated).
- *   - Personio untagged (no project) → bench.
+ *   - Personio untagged (no project) → untagged (internal).
  * Sub-projects are flat: each leaf is its own row, linked individually — a
  * parent link does not cascade (see the sub-project decision).
  *
@@ -22,7 +24,7 @@
  * untagged). For any (employee, day) that has ≥1 awork entry, that day's
  * Personio attendance is dropped as a duplicate — awork is the truth. Non-awork
  * users have no awork days, so all their Personio attendance is kept (untagged
- * = genuine bench).
+ * = genuine internal / unaccounted time).
  *
  * Roster: every active, real, project-contributing employee appears — even
  * with no tracked time this month (zeros; the gap is the signal). Non-project-

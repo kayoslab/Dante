@@ -29,10 +29,11 @@ export function TimeClient() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Time tracking</h1>
           <p className="text-sm text-muted-foreground">
-            Tracked time per consultant (Personio + awork), split into
-            billable vs. bench (non-billable projects + untagged). For people
-            who track in awork, awork wins and their duplicate Personio
-            placeholder time is excluded.
+            Actual tracked time per consultant (Personio + awork), split into
+            billable vs. non-billable / untagged internal time. For people who
+            track in awork, awork wins and their duplicate Personio placeholder
+            time is excluded. (This is booked time; unused capacity &mdash;
+            bench &mdash; lives in the Forecast report.)
           </p>
         </div>
         <div className="flex items-center gap-1">
@@ -124,21 +125,21 @@ function KpiRow({ data }: { data: ReturnType<typeof useTrackedHours>["data"] & o
       <Kpi
         label="Billable"
         value={`${data.total_billable_hours.toLocaleString()}h`}
-        sub={`${billablePct.toFixed(0)}% of total`}
+        sub={`${billablePct.toFixed(0)}% of tracked`}
         tone="positive"
         emphasize
       />
       <Kpi
         label="Non-billable"
         value={`${data.total_non_billable_hours.toLocaleString()}h`}
-        sub="Internal / non-billable projects (bench)"
+        sub="Internal / non-billable projects"
         tone="amber"
         emphasize
       />
       <Kpi
         label="Untagged"
         value={`${data.total_untagged_hours.toLocaleString()}h`}
-        sub="No project on entry (bench)"
+        sub="No project on entry"
         tone="muted"
         emphasize
       />
@@ -170,13 +171,13 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
             </th>
             <th
               className="px-3 py-2 text-right font-medium"
-              title="Tracked on a non-billable / internal project (e.g. Interne Tätigkeit). Counts as bench."
+              title="Tracked on a non-billable / internal project (e.g. Interne Tätigkeit) — internal time, not billed."
             >
               Non-billable
             </th>
             <th
               className="px-3 py-2 text-right font-medium"
-              title="Personio attendance without a project. Counts as bench (awork-tracked days are excluded)."
+              title="Personio attendance without a project — untagged internal time (awork-tracked days are excluded)."
             >
               Untagged
             </th>
@@ -226,9 +227,9 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
 }
 
 function MixBar({ billable, unmapped }: { billable: number; unmapped: number }) {
-  // `unmapped` = the non-billable (bench) share; kept the prop name to avoid
-  // churn. Emerald = billable, amber = non-billable, remainder (untagged) shows
-  // as the muted track behind.
+  // `unmapped` = the non-billable share; kept the prop name to avoid churn.
+  // Emerald = billable, amber = non-billable, remainder (untagged) shows as the
+  // muted track behind.
   return (
     <div className="flex h-2 w-24 overflow-hidden rounded-full bg-muted">
       <div
