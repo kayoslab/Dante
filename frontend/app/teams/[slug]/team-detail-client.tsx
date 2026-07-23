@@ -200,7 +200,7 @@ function KpiBlock({ kpis }: { kpis: TeamMonthKpis }) {
           }
         />
         <Kpi
-          label="Utilization"
+          label="Booked"
           value={avgUtil === null ? "—" : `${(avgUtil * 100).toFixed(0)}%`}
           tone={
             avgUtil === null
@@ -225,7 +225,7 @@ function KpiBlock({ kpis }: { kpis: TeamMonthKpis }) {
           }
         />
         <Kpi
-          label="Fully utilized"
+          label="Fully booked"
           value={
             <>
               {kpis.n_fully_utilized}{" "}
@@ -326,15 +326,15 @@ function RosterBlock({
               </th>
               <th
                 className="px-3 py-2 text-right font-medium"
-                title="From assignment allocations (manual + awork-planning) — what we COMMITTED to."
+                title="From assignment allocations (manual + awork-planning) vs. FTE — what we COMMITTED to."
               >
-                Util % (alloc)
+                Booked %
               </th>
               <th
                 className="px-3 py-2 text-right font-medium"
-                title="From billable project tracked hours / available contract hours — what actually got LOGGED on projects."
+                title="ALL tracked hours (billable + internal) ÷ available contract hours — how much of their time got logged at all. Billable utilization lives in the Forecast report."
               >
-                Util % (tracked)
+                Tracking coverage %
               </th>
               <th className="px-3 py-2 text-right font-medium">Cost</th>
               <th className="px-3 py-2 text-right font-medium">Margin</th>
@@ -386,7 +386,7 @@ function RosterBlock({
                     {showDrift && (
                       <span
                         className="ml-2 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800"
-                        title={`Tracked utilization differs from allocated by ${driftPp!.toFixed(0)}pp (${driftDirection}). Either assignments are missing/under-allocated or tracked hours aren't on billable projects.`}
+                        title={`Tracking coverage differs from booked by ${driftPp!.toFixed(0)}pp (${driftDirection}). Either assignments are missing/under-allocated or time isn't being logged.`}
                       >
                         Δ {driftPp!.toFixed(0)}pp
                       </span>

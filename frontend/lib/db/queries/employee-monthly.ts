@@ -13,6 +13,7 @@ import {
   stateCodeForOffice,
 } from "../_de-holidays";
 import {
+  absenceWeightOverDays,
   absencesForEmployee,
   burdenFactor,
   employeeFte,
@@ -157,20 +158,23 @@ export async function computeEmployeeMonthly(
     holidays,
   );
 
-  const unpaid_in_contract = contract_workdays.filter((d) =>
-    unpaid_absences.has(d),
+  // Weighted count — half-day absences contribute 0.5 (see absencesForEmployee).
+  const unpaid_in_contract = absenceWeightOverDays(
+    unpaid_absences,
+    contract_workdays,
   );
   if (
-    unpaid_in_contract.length > 0 &&
+    unpaid_in_contract > 0 &&
     monthly_cost_prorated !== null &&
     contract_workdays.length > 0
   ) {
     const unpaid_share = new Decimal(
-      contract_workdays.length - unpaid_in_contract.length,
+      contract_workdays.length - unpaid_in_contract,
     ).div(contract_workdays.length);
     monthly_cost_prorated = monthly_cost_prorated.mul(unpaid_share);
-    const plural = unpaid_in_contract.length === 1 ? "" : "s";
-    cost_basis_prorated = `${cost_basis_prorated} · ${unpaid_in_contract.length} unpaid leave day${plural} excluded`;
+    const days_label = Number(unpaid_in_contract.toFixed(1));
+    const plural = days_label === 1 ? "" : "s";
+    cost_basis_prorated = `${cost_basis_prorated} · ${days_label} unpaid leave day${plural} excluded`;
   }
 
   const asnRes = await db.execute(sql`
@@ -231,12 +235,13 @@ export async function computeEmployeeMonthly(
     const active_days = working_days.filter(
       (d) => d >= a_window_start && d <= a_window_end,
     );
-    const absent_active = active_days.filter((d) => absences.has(d));
+    // Weighted absent days — half-days count 0.5.
+    const absent_active = absenceWeightOverDays(absences, active_days);
     // Billable day-equivalents = calendar billable days × FTE (an 88%-FTE
     // consultant works 7h not 8h/day, so 21 calendar days = 18.48 8h-day
     // units). This is a measure of actual output in 8h-days and is
     // independent of allocation.
-    const billable_count_calendar = active_days.length - absent_active.length;
+    const billable_count_calendar = active_days.length - absent_active;
     const billable_day_equivs = new Decimal(billable_count_calendar).mul(fte);
     const weighted_alloc_i =
       n_wd > 0 ? alloc.mul(active_days.length).div(n_wd) : new Decimal(0);
@@ -310,7 +315,7 @@ export async function computeEmployeeMonthly(
       profile: effective_profile,
       allocation_pct: alloc.toFixed(4),
       active_working_days: active_days.length,
-      absence_days: absent_active.length,
+      absence_days: Number(absent_active.toFixed(1)),
       billable_days: Number(billable_day_equivs.toFixed(2)),
       rate_unresolved_days,
       assignment_start_date: a_start,

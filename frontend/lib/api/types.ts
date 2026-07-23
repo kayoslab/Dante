@@ -1439,6 +1439,8 @@ export type PortfolioMonthly = {
          */
         fp_n_over_budget: number;
         bench: BenchSummary;
+        /** Freelancer Cost — entered hours × daily rate ÷ 8 for the month */
+        freelancer_cost?: string | null;
         /** Projects */
         projects: PortfolioProjectRow[];
     };

@@ -1,5 +1,7 @@
 import Decimal from "decimal.js";
+import { sql } from "drizzle-orm";
 
+import { db } from "../client";
 import {
   absencesForEmployee,
   burdenFactor,
@@ -91,8 +93,8 @@ export async function computeMonthlyBenchTotals(
       holidays,
     );
     let unpaid_in_contract = 0;
-    for (const d of unpaid_in_month) {
-      if (d >= clip_start && d <= clip_end) unpaid_in_contract++;
+    for (const [d, w] of unpaid_in_month) {
+      if (d >= clip_start && d <= clip_end) unpaid_in_contract += w;
     }
     if (unpaid_in_contract > 0 && contract_workdays > 0) {
       const paid_share = new Decimal(
@@ -128,6 +130,28 @@ export async function computeMonthlyBenchTotals(
   };
 }
 
+/** Total freelancer cost for a month: entered hours × (daily cost ÷ 8), the
+ * same pay-as-they-work basis every project view uses. The portfolio cost
+ * side is otherwise loaded EMPLOYEE payroll only — without this term the org
+ * margin silently excluded freelancer spend while revenue included the work
+ * they delivered. */
+export async function monthlyFreelancerCost(monthYm: string): Promise<Decimal> {
+  const r = await db.execute(sql`
+    SELECT COALESCE(SUM(
+      fte.hours_decimal::numeric
+        * COALESCE(a.daily_cost_override_eur, f.daily_cost_eur)::numeric / 8
+    ), 0) AS cost
+    FROM freelancer_time_entry fte
+    JOIN assignment a ON a.assignment_id = fte.assignment_id
+    JOIN freelancer f ON f.freelancer_id = a.freelancer_id
+    WHERE fte.year_month = ${monthYm}
+  `);
+  const raw = (r.rows[0] as Record<string, unknown> | undefined)?.cost;
+  return raw === null || raw === undefined
+    ? new Decimal(0)
+    : new Decimal(raw as string);
+}
+
 async function sumProjectRevenue(
   projects: ActiveProjectRow[],
   monthYm: string,
@@ -158,13 +182,17 @@ export async function computePortfolioMonthlyTotals(
 ): Promise<PortfolioMonthlyTotals> {
   const projects = await listActiveProjectsForPortfolio();
 
-  // Revenue and loaded-payroll cost don't share state — run them in
-  // parallel so each month's two inner loops overlap.
-  const [revenue, bench] = await Promise.all([
+  // Revenue, loaded-payroll cost, and freelancer cost don't share state —
+  // run them in parallel so each month's inner loops overlap.
+  const [revenue, bench, freelancer_cost] = await Promise.all([
     sumProjectRevenue(projects, monthYm),
     computeMonthlyBenchTotals(monthYm),
+    monthlyFreelancerCost(monthYm),
   ]);
-  const cost = bench.loaded;
+  // Cost = full loaded employee payroll (incl. bench) + freelancer spend for
+  // the month. Revenue includes freelancer-delivered work, so the cost side
+  // must carry their invoices too or the margin overstates.
+  const cost = bench.loaded.add(freelancer_cost);
 
   const margin = revenue.sub(cost);
   const margin_pct = revenue.gt(0) ? margin.div(revenue).mul(100) : null;

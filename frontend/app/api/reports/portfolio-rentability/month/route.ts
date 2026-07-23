@@ -12,6 +12,7 @@ import { fmt } from "@/lib/db/_monthly-helpers";
 import {
   computeMonthlyBenchTotals,
   computeProjectMonthlyRows,
+  monthlyFreelancerCost,
 } from "@/lib/db/queries/portfolio";
 
 /** Per-month detail for the portfolio-rentability report's selected
@@ -37,10 +38,12 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [{ rows: project_rows, agg }, bench] = await Promise.all([
-      computeProjectMonthlyRows(monthRaw),
-      computeMonthlyBenchTotals(monthRaw, { includeAllocation: true }),
-    ]);
+    const [{ rows: project_rows, agg }, bench, freelancer_cost] =
+      await Promise.all([
+        computeProjectMonthlyRows(monthRaw),
+        computeMonthlyBenchTotals(monthRaw, { includeAllocation: true }),
+        monthlyFreelancerCost(monthRaw),
+      ]);
 
     const {
       n_tm,
@@ -99,6 +102,10 @@ export async function GET(req: NextRequest) {
         total_unallocated_cost:
           bench.unallocated === null ? "0.00" : fmt(bench.unallocated, 2),
       },
+      // Freelancer spend for the month (entered hours × daily/8). The income
+      // statement must add this to loaded payroll — revenue includes
+      // freelancer-delivered work, so cost must carry their invoices.
+      freelancer_cost: fmt(freelancer_cost, 2),
       projects: project_rows,
     };
   });

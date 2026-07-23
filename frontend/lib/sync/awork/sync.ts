@@ -26,6 +26,7 @@ import {
   aworkUser,
   aworkUserLink,
 } from "@/lib/db/schema";
+import { germanFederalHolidays } from "@/lib/db/_de-holidays";
 import { syncDrizzle } from "@/lib/sync/db";
 import { excludedSet } from "@/lib/sync/_upsert";
 import { log } from "@/lib/logger";
@@ -494,6 +495,31 @@ export async function syncAworkTimeBookings(
  * Orphaned bookings (awork user / project not linked into Dante) are
  * skipped silently — they'll start materializing once the auto-linker
  * picks them up. */
+// Holiday-aware working days for the Planner rollup. German federal holidays
+// only (bookings carry no office/state); cached per year range. Pure — no DB.
+const plannerHolidayCache = new Map<string, Map<string, string>>();
+function plannerWorkdays(start: string, end: string): string[] {
+  const yKey = `${start.slice(0, 4)}-${end.slice(0, 4)}`;
+  let holidays = plannerHolidayCache.get(yKey);
+  if (holidays === undefined) {
+    holidays = germanFederalHolidays(
+      Number(start.slice(0, 4)),
+      Number(end.slice(0, 4)),
+    );
+    plannerHolidayCache.set(yKey, holidays);
+  }
+  const out: string[] = [];
+  const cur = new Date(start + "T00:00:00Z");
+  const stop = new Date(end + "T00:00:00Z");
+  while (cur <= stop) {
+    const iso = cur.toISOString().slice(0, 10);
+    const dow = cur.getUTCDay();
+    if (dow !== 0 && dow !== 6 && !holidays.has(iso)) out.push(iso);
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
+
 export async function rollupAworkPlanningsToAssignments(
   conn: Client,
 ): Promise<{
@@ -505,15 +531,15 @@ export async function rollupAworkPlanningsToAssignments(
   const deleted = await conn.query(
     `DELETE FROM assignment WHERE source = 'awork-planning'`,
   );
-  // Group bookings by the AWORK keys (not the Dante keys) so an
-  // unmapped (user, project) bucket counts as one — grouping by the
-  // resolved IDs would collapse every unmapped pair into a single
-  // (NULL, NULL) row and the skip counters would lie.
+  // Raw bookings with their link resolution. Routing: prefer the employee
+  // link; fall back to freelancer link (matches the rest of the awork sync).
   //
-  // Each (awork_user, awork_project) pair becomes one assignment row.
-  // Routing: prefer the employee link; fall back to freelancer link
-  // (matches the rest of the awork sync — multi-org Dante employees
-  // are the primary case, freelancers a secondary one).
+  // Bookings are bucketed per (user, project, MONTH) rather than collapsed
+  // into one MIN–MAX span per (user, project): the old single-span rollup
+  // smeared lumpy plans evenly across their whole range (one week in June +
+  // one week in August became a thin June–August film), distorting every
+  // month's planned hours. Per-month buckets keep each month's planned load
+  // where the Planner actually put it.
   const rows = await conn.query<{
     awork_user_id: string;
     awork_project_id: string;
@@ -522,7 +548,7 @@ export async function rollupAworkPlanningsToAssignments(
     project_id: number | null;
     start_date: string;
     end_date: string;
-    total_seconds: string;
+    duration_seconds: string;
   }>(`
     SELECT
       tb.awork_user_id,
@@ -530,46 +556,79 @@ export async function rollupAworkPlanningsToAssignments(
       ul.employee_id,
       fl.freelancer_id,
       pl.project_id,
-      MIN(tb.start_date)::text AS start_date,
-      MAX(tb.end_date)::text   AS end_date,
-      SUM(tb.duration_seconds)::text AS total_seconds
+      tb.start_date::text AS start_date,
+      tb.end_date::text   AS end_date,
+      tb.duration_seconds::text AS duration_seconds
     FROM awork_time_booking tb
     LEFT JOIN awork_user_link ul ON ul.awork_user_id = tb.awork_user_id
     LEFT JOIN awork_freelancer_link fl ON fl.awork_user_id = tb.awork_user_id
     LEFT JOIN awork_project_link pl ON pl.awork_project_id = tb.awork_project_id
-    GROUP BY tb.awork_user_id, tb.awork_project_id,
-             ul.employee_id, fl.freelancer_id, pl.project_id
   `);
 
   const now = new Date();
   let inserted = 0;
-  let skipped_unlinked_user = 0;
-  let skipped_unlinked_project = 0;
+  // Skip counters stay per distinct (user, project) pair — the unit the old
+  // grouped rollup counted — so the log numbers keep their meaning.
+  const skippedUserPairs = new Set<string>();
+  const skippedProjectPairs = new Set<string>();
+
+  // Bucket: one planned-assignment row per (entity, project, month).
+  type Bucket = {
+    employee_id: number | null;
+    freelancer_id: number | null;
+    project_id: number;
+    min_day: string;
+    max_day: string;
+    seconds: number;
+  };
+  const buckets = new Map<string, Bucket>();
 
   for (const r of rows.rows) {
+    const pairKey = `${r.awork_user_id}|${r.awork_project_id}`;
     const has_employee = r.employee_id !== null;
     const has_freelancer = r.freelancer_id !== null;
     if (!has_employee && !has_freelancer) {
-      skipped_unlinked_user += 1;
+      skippedUserPairs.add(pairKey);
       continue;
     }
     if (r.project_id === null) {
-      skipped_unlinked_project += 1;
+      skippedProjectPairs.add(pairKey);
       continue;
     }
-    // Working days in [start, end] (weekends excluded). At least 1 so
-    // a single-day booking still divides cleanly.
-    const wd = await conn.query<{ wd: string }>(
-      `
-      SELECT COUNT(*)::text AS wd
-      FROM generate_series($1::date, $2::date, '1 day'::interval) d
-      WHERE EXTRACT(DOW FROM d) NOT IN (0, 6)
-    `,
-      [r.start_date, r.end_date],
-    );
-    const workdays = Math.max(Number(wd.rows[0]?.wd ?? 0), 1);
-    const totalSeconds = Number(r.total_seconds);
-    const rawAlloc = totalSeconds / (workdays * 8 * 3600);
+    // Holiday-aware working days of the booking span (the old SQL count was
+    // weekday-only, silently counting German holidays as plannable days).
+    // A booking with no working day at all (weekend/holiday-only span) keeps
+    // its hours on the start day rather than vanishing.
+    const days = plannerWorkdays(r.start_date, r.end_date);
+    const spreadDays = days.length > 0 ? days : [r.start_date];
+    const perDay = Number(r.duration_seconds) / spreadDays.length;
+    for (const day of spreadDays) {
+      const month = day.slice(0, 7);
+      const key = `${has_employee ? "e" + r.employee_id : "f" + r.freelancer_id}|${r.project_id}|${month}`;
+      const b = buckets.get(key);
+      if (b === undefined) {
+        buckets.set(key, {
+          employee_id: has_employee ? r.employee_id : null,
+          freelancer_id: has_employee ? null : r.freelancer_id,
+          project_id: r.project_id,
+          min_day: day,
+          max_day: day,
+          seconds: perDay,
+        });
+      } else {
+        if (day < b.min_day) b.min_day = day;
+        if (day > b.max_day) b.max_day = day;
+        b.seconds += perDay;
+      }
+    }
+  }
+
+  for (const b of buckets.values()) {
+    // Allocation over the bucket's own span: consumers integrate
+    // `alloc × working days in span`, so seconds ÷ (span workdays × 8h)
+    // reproduces the booked hours exactly (up to the 1.5 sanity cap).
+    const spanWd = Math.max(plannerWorkdays(b.min_day, b.max_day).length, 1);
+    const rawAlloc = b.seconds / (spanWd * 8 * 3600);
     const alloc = Math.min(rawAlloc, 1.5);
 
     await conn.query(
@@ -580,9 +639,9 @@ export async function rollupAworkPlanningsToAssignments(
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'awork-planning', $9, $9)
     `,
       [
-        has_employee ? r.employee_id : null,
-        has_employee ? null : r.freelancer_id,
-        r.project_id,
+        b.employee_id,
+        b.freelancer_id,
+        b.project_id,
         // Set profile = 'default' rather than NULL. awork doesn't have a
         // role-tier concept on its bookings, but every Dante rate sheet
         // currently entered for an awork-linked project uses the single
@@ -593,14 +652,16 @@ export async function rollupAworkPlanningsToAssignments(
         // makes synced rows match the rate sheet by construction.
         "default",
         alloc.toFixed(4),
-        r.start_date,
-        r.end_date,
+        b.min_day,
+        b.max_day,
         "Synced from awork Planner; edit there to change.",
         now,
       ],
     );
     inserted += 1;
   }
+  const skipped_unlinked_user = skippedUserPairs.size;
+  const skipped_unlinked_project = skippedProjectPairs.size;
 
   return {
     deleted_previous: deleted.rowCount ?? 0,

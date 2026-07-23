@@ -50,11 +50,16 @@ export function UtilizationClient() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Utilization</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Booked capacity
+        </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          How well are we using the people we&rsquo;re paying for? Trailing
-          12 months plus 3-month forecast on top; pick a month for the
-          per-segment breakdown, benched and overbooked consultants below.
+          How much of the people we&rsquo;re paying for is <em>booked</em> onto
+          projects (assignment allocations vs. FTE — the commitment view, not
+          tracked time). Trailing 12 months plus 3-month forecast on top; pick
+          a month for the per-segment breakdown, benched and overbooked
+          consultants below. Billable utilization from tracked time lives in
+          the Forecast report.
         </p>
       </div>
 
@@ -169,12 +174,12 @@ function MonthKpis({
   return (
     <KpiGrid>
       <Kpi
-        label="Util % (€)"
+        label="Booked % (€)"
         value={eur === null ? "—" : `${Number(eur).toFixed(1)}%`}
         tone={eurTone}
       />
       <Kpi
-        label="Util % (headcount)"
+        label="Booked % (headcount)"
         value={head === null ? "—" : `${Number(head).toFixed(1)}%`}
         tone={headTone}
       />
@@ -260,8 +265,8 @@ function GroupRollup({
               <th className="px-3 py-2 text-left font-medium">{headerKey}</th>
               <th className="px-3 py-2 text-right font-medium">Headcount</th>
               <th className="px-3 py-2 text-right font-medium">Loaded cost</th>
-              <th className="px-3 py-2 text-right font-medium">Util % (€)</th>
-              <th className="px-3 py-2 text-right font-medium">Util % (HC)</th>
+              <th className="px-3 py-2 text-right font-medium">Booked % (€)</th>
+              <th className="px-3 py-2 text-right font-medium">Booked % (HC)</th>
               <th className="px-3 py-2 text-right font-medium">Bench cost</th>
               <th
                 className="px-3 py-2 text-left font-medium"

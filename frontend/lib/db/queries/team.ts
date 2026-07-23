@@ -178,7 +178,7 @@ export async function getTeamMembers(
     WHERE ann.team_user = ${team_name}
       AND COALESCE(ann.is_real_employee, TRUE) = TRUE
       AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
-      AND ec.status = 'active'
+      AND ec.status IN ('active', 'onboarding')
       AND (ec.hire_date IS NULL OR ec.hire_date <= ${as_of}::date)
       AND (ec.employment_end_date IS NULL OR ec.employment_end_date >= ${as_of}::date)
     ORDER BY ec.last_name, ec.first_name
@@ -232,7 +232,7 @@ export async function getTeamMemberIds(
     WHERE ann.team_user = ${team_name}
       AND COALESCE(ann.is_real_employee, TRUE) = TRUE
       AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
-      AND ec.status = 'active'
+      AND ec.status IN ('active', 'onboarding')
       AND (ec.hire_date IS NULL OR ec.hire_date <= ${to_month_end}::date)
       AND (ec.employment_end_date IS NULL OR ec.employment_end_date >= ${from_month_start}::date)
   `);
@@ -261,7 +261,7 @@ export async function getTeamUpcomingAssignments(
     WHERE ann.team_user = ${team_name}
       AND COALESCE(ann.is_real_employee, TRUE) = TRUE
       AND COALESCE(ann.is_project_contributing, TRUE) = TRUE
-      AND ec.status = 'active'
+      AND ec.status IN ('active', 'onboarding')
       AND (a.end_date IS NULL OR a.end_date >= ${from}::date)
       AND (a.start_date IS NULL OR a.start_date <= ${to}::date)
     ORDER BY a.end_date NULLS LAST, ec.last_name

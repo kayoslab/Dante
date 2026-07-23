@@ -159,8 +159,8 @@ async function computeEmployeeLoad(
     ctx.holidays,
   );
   let unpaid_in_contract = 0;
-  for (const d of unpaid_in_month) {
-    if (d >= clip_start && d <= clip_end) unpaid_in_contract++;
+  for (const [d, w] of unpaid_in_month) {
+    if (d >= clip_start && d <= clip_end) unpaid_in_contract += w;
   }
   if (unpaid_in_contract > 0 && contract_workdays > 0) {
     const paid_share = new Decimal(

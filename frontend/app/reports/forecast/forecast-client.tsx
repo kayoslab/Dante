@@ -113,7 +113,7 @@ function ForecastBody({ data }: { data: ForecastReport }) {
                 ? "positive"
                 : "negative"
           }
-          hint="billable hours booked ÷ available capacity (month-to-date)"
+          hint="billable hours ÷ available capacity, both month-to-date — comparable on any day of the month"
         />
         <Kpi
           label="Bench"

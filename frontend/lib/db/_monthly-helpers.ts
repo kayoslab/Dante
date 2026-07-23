@@ -407,18 +407,45 @@ export function isUnpaidTimeOffType(name: string | null): boolean {
   return UNPAID_TIME_OFF_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
-/** Returns [all_absences, unpaid_absences] — Sets of YYYY-MM-DD weekday strings
- * inside [month_start, month_end] excluding holidays. */
+/** Absent fraction per day: `Map<YYYY-MM-DD, weight>` where weight is 1 for a
+ * full absent day and 0.5 for a Personio half-day (via `half_day_start` /
+ * `half_day_end` on the absence record). */
+export type AbsenceWeights = Map<string, number>;
+
+/** Sum the absent-day weight over a window of days (weighted day count). */
+export function absenceWeightOverDays(
+  weights: AbsenceWeights,
+  days: Iterable<string>,
+): number {
+  let sum = 0;
+  for (const d of days) sum += weights.get(d) ?? 0;
+  return sum;
+}
+
+/** Total absent-day weight across the whole map. */
+export function totalAbsenceWeight(weights: AbsenceWeights): number {
+  let sum = 0;
+  for (const w of weights.values()) sum += w;
+  return sum;
+}
+
+/** Returns [all_absences, unpaid_absences] — weighted day maps (YYYY-MM-DD →
+ * absent fraction) over weekdays inside [month_start, month_end], excluding
+ * holidays. Personio half-days weigh 0.5: the first day of a span when
+ * `half_day_start` is set, the last when `half_day_end` is set (a single-day
+ * absence with either flag is half a day — never zero). Overlapping records
+ * take the max weight per day. */
 export async function absencesForEmployee(
   employee_id: number,
   month_start: string,
   month_end: string,
   holidays: Map<string, string>,
-): Promise<[Set<string>, Set<string>]> {
-  const all_abs = new Set<string>();
-  const unpaid = new Set<string>();
+): Promise<[AbsenceWeights, AbsenceWeights]> {
+  const all_abs: AbsenceWeights = new Map();
+  const unpaid: AbsenceWeights = new Map();
   const r = await db.execute(sql`
-    SELECT start_date, end_date, time_off_type FROM absence
+    SELECT start_date, end_date, time_off_type, half_day_start, half_day_end
+    FROM absence
     WHERE employee_id = ${employee_id}
       AND start_date <= ${month_end}::date
       AND end_date >= ${month_start}::date
@@ -427,14 +454,21 @@ export async function absencesForEmployee(
     const s = raw.start_date as string;
     const e = raw.end_date as string;
     const type_name = raw.time_off_type as string | null;
+    const half_start = raw.half_day_start === true;
+    const half_end = raw.half_day_end === true;
     const is_unpaid = isUnpaidTimeOffType(type_name);
     let cur = s > month_start ? s : month_start;
     const end = e < month_end ? e : month_end;
     while (cur <= end) {
       const d = new Date(cur + "T00:00:00Z").getUTCDay();
       if (d !== 0 && d !== 6 && !holidays.has(cur)) {
-        all_abs.add(cur);
-        if (is_unpaid) unpaid.add(cur);
+        let w = 1;
+        if (cur === s && half_start) w -= 0.5;
+        if (cur === e && half_end) w -= 0.5;
+        // Single-day record with both flags: still half a day, not zero.
+        if (w <= 0) w = 0.5;
+        if (w > (all_abs.get(cur) ?? 0)) all_abs.set(cur, w);
+        if (is_unpaid && w > (unpaid.get(cur) ?? 0)) unpaid.set(cur, w);
       }
       cur = shiftDay(cur, 1);
     }
@@ -818,14 +852,15 @@ export async function employeeTrackedUtilizationInMonth(
   month_start: string,
   month_end: string,
   contract_workdays: string[],
-  absences: Set<string>,
+  absences: AbsenceWeights,
   standard_daily_hours: number,
 ): Promise<Decimal | null> {
   if (contract_workdays.length === 0) return null;
-  const available_workdays = contract_workdays.filter(
-    (d) => !absences.has(d),
-  ).length;
-  if (available_workdays === 0) return null;
+  // Weighted: a half-day absence leaves half the day available.
+  const available_workdays =
+    contract_workdays.length -
+    absenceWeightOverDays(absences, contract_workdays);
+  if (available_workdays <= 0) return null;
   const available_minutes = new Decimal(available_workdays)
     .mul(standard_daily_hours)
     .mul(60);
@@ -1483,7 +1518,7 @@ export async function cumulativeProjectCost(
           window_end,
           holidayFor(empStateCode, y),
         );
-        const paid_active_wd = active_wd - unpaid.size;
+        const paid_active_wd = active_wd - totalAbsenceWeight(unpaid);
         if (paid_active_wd > 0) {
           total = total.add(
             monthly_cost.mul(alloc).mul(paid_active_wd).div(full_month_wd),
@@ -1650,9 +1685,9 @@ export async function cumulativeProjectBurdenedCost(
             m_end,
             holidayFor(empStateCode, y),
           );
-          const paid_share = new Decimal(full_month_wd - unpaid.size).div(
-            full_month_wd,
-          );
+          const paid_share = new Decimal(
+            full_month_wd - totalAbsenceWeight(unpaid),
+          ).div(full_month_wd);
           const effective_monthly_cost = monthly_cost.mul(paid_share);
           total = total.add(
             effective_monthly_cost.mul(weighted_alloc_i).div(total_W),

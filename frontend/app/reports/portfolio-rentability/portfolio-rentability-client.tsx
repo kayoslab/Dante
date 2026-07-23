@@ -160,8 +160,13 @@ function MonthlyPL({
   const total_loaded = Number(data.bench.total_loaded_cost);
   const bench_cost = Number(data.bench.total_unallocated_cost);
   const allocated_cost = total_loaded - bench_cost;
+  // Freelancer spend (entered hours × daily rate÷8). Revenue includes the
+  // work they delivered, so the cost side must carry their invoices too —
+  // matches the trend-series margin, which uses the same total.
+  const freelancer_cost = Number(data.freelancer_cost ?? "0");
+  const total_cost = total_loaded + freelancer_cost;
 
-  const operating_result = total_revenue - total_loaded;
+  const operating_result = total_revenue - total_cost;
   const operating_margin_pct =
     total_revenue > 0 ? (operating_result / total_revenue) * 100 : null;
 
@@ -210,14 +215,20 @@ function MonthlyPL({
               value: total_revenue,
             },
             { kind: "gap" },
-            { kind: "section", label: "Loaded payroll" },
+            { kind: "section", label: "Cost" },
             {
               kind: "line",
-              label: "Allocated to projects",
+              label: "Payroll allocated to projects",
               value: allocated_cost,
             },
-            { kind: "line", label: "Bench", value: bench_cost },
-            { kind: "subtotal", label: "Total cost", value: total_loaded },
+            { kind: "line", label: "Payroll bench", value: bench_cost },
+            {
+              kind: "line",
+              label: "Freelancers",
+              value: freelancer_cost,
+              dim: freelancer_cost === 0,
+            },
+            { kind: "subtotal", label: "Total cost", value: total_cost },
             { kind: "gap" },
             {
               kind: "total",

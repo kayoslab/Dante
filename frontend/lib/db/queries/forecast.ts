@@ -219,7 +219,9 @@ function toForecastRow(key: string, accs: CapacityAcc[], months: string[]): Fore
     actual_nonbillable_h: hrs(cur.actual_nonbillable),
     bench_h: hrs(cur.bench),
     over_h: hrs(cur.over),
-    utilization_pct: pct(ratioOrNull(cur.actual_billable, cur.available)),
+    // Denominator is available-to-date so the KPI is trend-comparable on any
+    // day of the month (both sides month-to-date).
+    utilization_pct: pct(ratioOrNull(cur.actual_billable, cur.available_to_date)),
     bench_pct: pct(ratioOrNull(cur.bench, cur.available)),
     delivery_pct: pct(ratioOrNull(cur.actual_billable, cur.planned_billable_to_date)),
     next: accs.slice(1).map((a, i) => ({
@@ -319,15 +321,39 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
         w.end,
         w.holidays,
       );
+      // Weighted absence days: Personio half-days count 0.5 (see
+      // absencesForEmployee). Paid vacation weight = all-absence minus the
+      // unpaid share of the same day.
       let unpaidDays = 0;
       let paidVacDays = 0;
       for (const d of contractWd) {
-        if (unpaid.has(d)) unpaidDays++;
-        else if (allAbs.has(d)) paidVacDays++;
+        const uw = unpaid.get(d) ?? 0;
+        const aw = allAbs.get(d) ?? 0;
+        unpaidDays += uw;
+        paidVacDays += Math.max(aw - uw, 0);
       }
       const capacityDays = Math.max(contractWd.length - unpaidDays, 0);
       const capacity = empDailyHours.mul(capacityDays);
       const vacation = empDailyHours.mul(paidVacDays);
+
+      // Available capacity TO DATE (current month only): same construction
+      // clipped to elapsed working days. This is the utilization denominator —
+      // month-to-date billable over month-to-date available — so the KPI is
+      // comparable on any day of the month instead of climbing from ~0%.
+      let available_to_date: Decimal | null = null;
+      if (isCurrent) {
+        const contractWdTd = contractWd.filter((d) => d <= toDateEnd);
+        let unpaidTd = 0;
+        let vacTd = 0;
+        for (const d of contractWdTd) {
+          const uw = unpaid.get(d) ?? 0;
+          const aw = allAbs.get(d) ?? 0;
+          unpaidTd += uw;
+          vacTd += Math.max(aw - uw, 0);
+        }
+        const availTdDays = Math.max(contractWdTd.length - unpaidTd - vacTd, 0);
+        available_to_date = empDailyHours.mul(availTdDays);
+      }
 
       // Planned allocation for the full month, split billable vs total.
       const alloc = await employeeAllocSplitInMonth(
@@ -374,6 +400,9 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
         planned_billable_to_date,
         actual_billable,
         actual_nonbillable,
+        // Future months have no "to date" concept — use full available so the
+        // accumulator field is always meaningful.
+        available_to_date: available_to_date ?? buckets.available,
         buckets,
       };
       addToCapacityAcc(totals[i], contribution);

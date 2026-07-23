@@ -30,7 +30,7 @@ const REPORTS: ReportTile[] = [
     href: "/reports/forecast",
     title: "Forecast",
     description:
-      "Planned vs. actual for the current month, assumed utilization at the current realization rate, and the planned allocation pipeline for the next two months. Per-team / per-role-tier with a consultant drill-down.",
+      "Billable utilization vs. available capacity, bench, and the planned billable pipeline for the next two months. Per-team / per-role-tier with a consultant drill-down.",
     minRole: "manager",
   },
   {
@@ -56,9 +56,9 @@ const REPORTS: ReportTile[] = [
   },
   {
     href: "/reports/utilization",
-    title: "Utilization",
+    title: "Booked capacity",
     description:
-      "Are we using the people we pay for? Trend + per-team and per-role-tier rollups, currently-benched and overbooked consultants, and what's driving the forecast.",
+      "How much of the people we pay for is booked onto projects (allocations vs. FTE). Trend + per-team and per-role-tier rollups, currently-benched and overbooked consultants, and what's driving the forecast.",
     minRole: "manager",
   },
   {

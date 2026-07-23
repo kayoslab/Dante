@@ -106,6 +106,9 @@ export type CapacityAcc = {
   capacity: Decimal;
   vacation: Decimal;
   available: Decimal;
+  /** Available capacity over ELAPSED working days (current month); equals
+   * `available` for complete/future months. Utilization denominator. */
+  available_to_date: Decimal;
   planned_total: Decimal;
   planned_billable: Decimal;
   planned_billable_to_date: Decimal;
@@ -123,6 +126,7 @@ export function newCapacityAcc(): CapacityAcc {
     capacity: D0,
     vacation: D0,
     available: D0,
+    available_to_date: D0,
     planned_total: D0,
     planned_billable: D0,
     planned_billable_to_date: D0,
@@ -139,6 +143,7 @@ export function newCapacityAcc(): CapacityAcc {
 export type CapacityContribution = {
   capacity: Decimal;
   vacation: Decimal;
+  available_to_date: Decimal;
   planned_total: Decimal;
   planned_billable: Decimal;
   planned_billable_to_date: Decimal;
@@ -156,6 +161,7 @@ export function addToCapacityAcc(
   acc.capacity = acc.capacity.add(c.capacity);
   acc.vacation = acc.vacation.add(c.vacation);
   acc.available = acc.available.add(c.buckets.available);
+  acc.available_to_date = acc.available_to_date.add(c.available_to_date);
   acc.planned_total = acc.planned_total.add(c.planned_total);
   acc.planned_billable = acc.planned_billable.add(c.planned_billable);
   acc.planned_billable_to_date = acc.planned_billable_to_date.add(

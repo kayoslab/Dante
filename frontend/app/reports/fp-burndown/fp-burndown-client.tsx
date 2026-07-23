@@ -41,7 +41,9 @@ export function FpBurndownClient() {
           always as-of-today — the month picker only filters which
           projects appear, never the burn state. Status combines
           margin (cost vs recognized) and projected end position
-          (tracked + planned future vs time budget).
+          (tracked + planned future vs time budget). Recognized revenue
+          derives live from each project&rsquo;s current agreed amount, time
+          budget, and planned dates — editing those restates past months.
         </p>
       </div>
 

@@ -220,7 +220,9 @@ function TmLifetimeBlock({
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Lifetime (project to date)
         </h3>
-        <span className="text-xs text-muted-foreground">all months combined</span>
+        <span className="text-xs text-muted-foreground">
+          all months combined · costs priced at current salaries
+        </span>
       </div>
       <div className="rounded-md border bg-background">
         <div className="flex flex-wrap gap-x-8 gap-y-1 border-b bg-muted/20 px-4 py-2 text-sm">
@@ -858,6 +860,12 @@ function FpMoneyBlock({
             tooltip="Burdened cost: each consultant's full salary share for the months they were on this project. Bench drag they incurred while assigned here is absorbed onto this project. Reflects what the firm actually spent."
           />
         </div>
+        <p className="border-t px-4 py-2 text-xs text-muted-foreground">
+          Lifetime costs are priced at <em>current</em> salaries (historical
+          months are approximated, not as-of). Recognized revenue derives live
+          from the current agreed amount, time budget, and planned dates —
+          editing those restates past months.
+        </p>
       </div>
     </section>
   );

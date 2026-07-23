@@ -20,7 +20,10 @@ import {
   stateCodeForOffice,
 } from "../_de-holidays";
 import {
+  type AbsenceWeights,
+  absenceWeightOverDays,
   absencesForEmployee,
+  totalAbsenceWeight,
   burdenFactor,
   cumulativeProjectBurdenedCost,
   cumulativeProjectCost,
@@ -179,6 +182,15 @@ export async function computeProjectMonthly(
       : n_wd === 0
         ? new Decimal(0)
         : new Decimal(working_days_elapsed).div(n_wd);
+  // Accrual factor applied to BOTH salary-derived cost paths (allocation-based
+  // direct cost AND burdened cost) so the two P&L views stay comparable within
+  // a running month: a half-elapsed month accrues half the salary basis on
+  // both sides. Complete months accrue fully; FUTURE months also accrue fully
+  // — a future month is a planned view ("what this month would absorb"), and
+  // showing full planned cost on one side but zero on the other was the old
+  // asymmetry. Tracked-based cost needs no factor (its numerator is actuals).
+  const accrual_share =
+    month_status === "future" ? new Decimal(1) : elapsed_share;
 
   const has_time_mapping = await projectHasTimeMapping(project_id);
   const tracked_minutes_per_emp = await trackedMinutesPerEmployeeInMonth(
@@ -296,8 +308,8 @@ export async function computeProjectMonthly(
         d >= a_window_start && d <= a_window_end && !empHolidays.has(d),
     );
 
-    let absence_set = new Set<string>();
-    let unpaid_set = new Set<string>();
+    let absence_map: AbsenceWeights = new Map();
+    let unpaid_map: AbsenceWeights = new Map();
     if (emp_id !== null) {
       const [a, u] = await absencesForEmployee(
         emp_id,
@@ -305,12 +317,13 @@ export async function computeProjectMonthly(
         month_end,
         empHolidays,
       );
-      absence_set = a;
-      unpaid_set = u;
+      absence_map = a;
+      unpaid_map = u;
     }
-    const absent_active = active_days.filter((d) => absence_set.has(d));
-    const unpaid_active = active_days.filter((d) => unpaid_set.has(d));
-    const billable_count_calendar = active_days.length - absent_active.length;
+    // Weighted absent-day counts — Personio half-days contribute 0.5.
+    const absent_active = absenceWeightOverDays(absence_map, active_days);
+    const unpaid_active = absenceWeightOverDays(unpaid_map, active_days);
+    const billable_count_calendar = active_days.length - absent_active;
     // FTE-prorated billable day equivalents = the actual output in 8h-day
     // units. An 88%-FTE employee (e.g. Christian Szofer at 35h/week) over
     // 21 calendar days works 21 × 0.88 = 18.48 day-units (7h/day, not 8h)
@@ -319,7 +332,7 @@ export async function computeProjectMonthly(
     // fraction of full-time, so committed revenue is `rate × alloc` with
     // no extra × fte — see `allocation_revenue` below.)
     const billable_day_equivs = new Decimal(billable_count_calendar).mul(fte);
-    const paid_active_days = active_days.length - unpaid_active.length;
+    const paid_active_days = active_days.length - unpaid_active;
 
     // Two parallel revenue concepts on T&M:
     //   `allocation_revenue` — `rate × alloc × fte` summed per billable
@@ -343,7 +356,10 @@ export async function computeProjectMonthly(
     let resolved_rate_days = 0;
     if (billing === "time_and_material") {
       for (const day of active_days) {
-        if (absence_set.has(day)) continue;
+        // Fraction of the day actually workable — a half-day absence still
+        // bills half the committed allocation for that day.
+        const workable = 1 - (absence_map.get(day) ?? 0);
+        if (workable <= 0) continue;
         const r = await resolveRateForDay(
           project_id,
           framework_id,
@@ -356,7 +372,9 @@ export async function computeProjectMonthly(
           // billing = rate × alloc (a fully-booked 88% consultant → alloc
           // 0.875 → bills 7h of an 8h day). No extra × fte, which would
           // double-discount part-timers.
-          allocation_revenue = allocation_revenue.add(r.mul(alloc));
+          allocation_revenue = allocation_revenue.add(
+            r.mul(alloc).mul(workable),
+          );
           resolved_rate_sum = resolved_rate_sum.add(r);
           resolved_rate_days++;
         } else {
@@ -423,7 +441,10 @@ export async function computeProjectMonthly(
           .mul(paid_active_days)
           .div(n_wd)
           .div(fte);
-        cost_share = monthly_cost.mul(paid_weighted_alloc_i);
+        // Accrue linearly through the month (see `accrual_share`) so this
+        // projection-based path stays comparable with the burdened view
+        // mid-month instead of charging the full month on day one.
+        cost_share = monthly_cost.mul(paid_weighted_alloc_i).mul(accrual_share);
         if (cost_share.gt(monthly_cost)) cost_share = monthly_cost;
       }
       // Freelancer with NO entered_hours row: cost_share stays 0.
@@ -458,7 +479,7 @@ export async function computeProjectMonthly(
             month_end,
             holidays,
           );
-          unpaid_in_month = u.size;
+          unpaid_in_month = totalAbsenceWeight(u);
           unpaid_in_month_cache.set(emp_id, unpaid_in_month);
         }
         const paid_share = new Decimal(n_wd - unpaid_in_month).div(n_wd);
@@ -466,7 +487,7 @@ export async function computeProjectMonthly(
         burdened_share = effective_monthly_cost
           .mul(weighted_alloc_i)
           .div(total_weighted)
-          .mul(elapsed_share);
+          .mul(accrual_share);
       }
     } else if (emp_id === null) {
       burdened_share = cost_share;
@@ -520,7 +541,7 @@ export async function computeProjectMonthly(
       profile: effective_profile,
       allocation_pct: alloc.toFixed(4),
       active_working_days: active_days.length,
-      absence_days: absent_active.length,
+      absence_days: Number(absent_active.toFixed(1)),
       billable_days: Number(billable_day_equivs.toFixed(2)),
       rate_unresolved_days,
       kind: emp_id !== null ? "employee" : "freelancer",
@@ -530,7 +551,7 @@ export async function computeProjectMonthly(
       assignment_end_date: a_end,
       who_name,
       fte: emp_id !== null ? fmt(fte, 3) : null,
-      unpaid_absence_days: unpaid_active.length,
+      unpaid_absence_days: Number(unpaid_active.toFixed(1)),
       monthly_cost_full: monthly_cost === null ? null : fmt(monthly_cost, 2),
       revenue:
         billing === "time_and_material" ? fmt(effective_revenue, 2) : null,
