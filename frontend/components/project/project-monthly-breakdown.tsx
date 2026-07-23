@@ -98,11 +98,94 @@ function TmBreakdown({
     <div className="space-y-5">
       <TmStatusBanner data={data} />
       <TmMoneyBlock data={data} />
+      <TmBudgetStrip data={data} />
       <TmLifetimeBlock data={data} />
       <TmEffortBlock data={data} />
       <AssignmentTable data={data} mode="tm" />
       <UnassignedTrackedTable data={data} />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// T&M budget — consumed (lifetime billable revenue) vs. the agreed budget.
+// Only rendered when an agreed amount is set. "Consumed" is deliberately
+// billable revenue (tracked hours × rate), NOT loaded cost, because the budget
+// is agreed with the customer on the daily rate, not on our internal cost.
+// ---------------------------------------------------------------------------
+
+function TmBudgetStrip({
+  data,
+}: {
+  data: NonNullable<ReturnType<typeof useProjectMonthly>["data"]>;
+}) {
+  const agreed = data.agreed_amount_eur ? Number(data.agreed_amount_eur) : null;
+  // Show only when a budget is provided on the project.
+  if (agreed === null || agreed <= 0) return null;
+  const consumed = Number(data.cumulative_revenue ?? "0");
+  const remaining = agreed - consumed;
+  const pct = (consumed / agreed) * 100;
+  const over = consumed > agreed;
+
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Budget
+        </h3>
+        <span className="text-xs text-muted-foreground">
+          billable revenue vs. agreed amount
+        </span>
+      </div>
+      <div className="space-y-2 rounded-md border bg-background p-3">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+          <span className="tabular-nums">
+            <span className={cn("font-medium", over && "text-red-700")}>
+              {formatEUR(consumed.toFixed(2))}
+            </span>{" "}
+            <span className="text-muted-foreground">consumed</span>
+          </span>
+          <span className="tabular-nums">
+            <span className="text-muted-foreground">of </span>
+            <span className="font-medium">
+              {formatEUR(agreed.toFixed(2))} budget
+            </span>
+          </span>
+          <span className="tabular-nums">
+            <span className="text-muted-foreground">
+              {over ? "over by " : "remaining "}
+            </span>
+            <span className={cn("font-medium", over && "text-red-700")}>
+              {formatEUR(Math.abs(remaining).toFixed(2))}
+            </span>
+          </span>
+          <span className="tabular-nums">
+            <span className="font-medium">{pct.toFixed(0)}%</span>{" "}
+            <span className="text-muted-foreground">consumed</span>
+          </span>
+        </div>
+        {/* Burn-down bar: consumed vs. the agreed budget (100% track). */}
+        <div
+          className={cn(
+            "h-2.5 w-full overflow-hidden rounded-full bg-muted",
+            over && "ring-1 ring-red-500",
+          )}
+        >
+          <div
+            className={cn(
+              "h-full rounded-full",
+              over ? "bg-red-500" : "bg-emerald-500",
+            )}
+            style={{ width: `${Math.min(pct, 100)}%` }}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Consumed = lifetime billable revenue (tracked hours × rate). The bar
+          fills toward the agreed budget and turns red when consumption exceeds
+          it.
+        </p>
+      </div>
+    </section>
   );
 }
 
