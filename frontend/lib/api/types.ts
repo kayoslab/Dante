@@ -398,6 +398,8 @@ export type ConsultantTrackedHoursRow = {
         last_name?: string | null;
         /** Team */
         team?: string | null;
+        /** Available Hours — contract working days × daily hours − absences (office-state holidays) */
+        available_hours?: number;
         /** Billable Hours */
         billable_hours: number;
         /** Non Billable Hours */

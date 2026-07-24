@@ -1,7 +1,10 @@
 import type { NextRequest } from "next/server";
 
 import { germanFederalHolidays } from "@/lib/db/_de-holidays";
-import { getTrackedHoursForMonth } from "@/lib/db/queries/tracked-hours";
+import {
+  getAvailableHoursForEmployees,
+  getTrackedHoursForMonth,
+} from "@/lib/db/queries/tracked-hours";
 import { Validation, handle, requireApiSession } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 
@@ -48,6 +51,13 @@ export async function GET(req: NextRequest) {
       month_end,
       team,
     });
+    // Available hours per consultant (contract + office-state holidays −
+    // absences) — the "how much could they have worked" reference.
+    const available = await getAvailableHoursForEmployees(
+      rows.map((r) => r.employee_id),
+      month_start,
+      month_end,
+    );
 
     let total_b = 0;
     let total_nb = 0;
@@ -64,8 +74,9 @@ export async function GET(req: NextRequest) {
         first_name: r.first_name,
         last_name: r.last_name,
         team: r.team,
+        available_hours: available.get(r.employee_id) ?? 0,
         billable_hours: b_h,
-        // Non-billable (internal projects) + untagged = bench.
+        // Non-billable (internal projects) + untagged = internal time.
         non_billable_hours: nb_h,
         untagged_hours: n_h,
         total_hours: b_h + nb_h + n_h,

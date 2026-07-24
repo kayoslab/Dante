@@ -37,6 +37,16 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "../client";
+import {
+  absenceWeightOverDays,
+  absencesForEmployee,
+  holidaysForYearOf,
+  workingDaysInRange,
+} from "../_monthly-helpers";
+import {
+  germanHolidaysForStateCached,
+  stateCodeForOffice,
+} from "../_de-holidays";
 
 export type TrackedHoursConsultantRow = {
   employee_id: number;
@@ -153,4 +163,68 @@ export async function getTrackedHoursForMonth(opts: {
     nb_min: Number(r.nb_min ?? 0),
     n_min: Number(r.n_min ?? 0),
   }));
+}
+
+/** Available hours per employee for the month, per contract and location:
+ * contract-clipped working days (weekends + holidays excluded, holidays
+ * state-specific via the employee's office, NRW-agnostic federal fallback)
+ * × standard daily hours (weekly_working_hours ÷ 5, default 8), minus
+ * weighted absence days (paid + unpaid; Personio half-days count 0.5).
+ *
+ * This is the "how much could they have worked" reference the time-tracking
+ * report shows next to tracked hours — same construction as the Forecast
+ * capacity model's `available`. Full-month figure regardless of today. */
+export async function getAvailableHoursForEmployees(
+  employee_ids: number[],
+  month_start: string,
+  month_end: string,
+): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  if (employee_ids.length === 0) return out;
+  const idList = sql.join(
+    employee_ids.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const r = await db.execute(sql`
+    SELECT employee_id, weekly_working_hours, hire_date,
+           employment_end_date, office
+    FROM employee_current
+    WHERE employee_id IN (${idList})
+  `);
+  const year = Number(month_start.slice(0, 4));
+  const federalHolidays = holidaysForYearOf(month_start);
+  for (const raw of r.rows as Array<Record<string, unknown>>) {
+    const emp_id = raw.employee_id as number;
+    const wkh =
+      raw.weekly_working_hours === null ||
+      raw.weekly_working_hours === undefined
+        ? null
+        : Number(raw.weekly_working_hours);
+    const hire = (raw.hire_date as string | null) ?? null;
+    const end = (raw.employment_end_date as string | null) ?? null;
+    const state = stateCodeForOffice((raw.office as string | null) ?? null);
+    const holidays =
+      state === null
+        ? federalHolidays
+        : germanHolidaysForStateCached(state, year, year);
+    const wd = workingDaysInRange(month_start, month_end, holidays);
+    const contractWd = wd.filter(
+      (d) => (hire === null || d >= hire) && (end === null || d <= end),
+    );
+    if (contractWd.length === 0) {
+      out.set(emp_id, 0);
+      continue;
+    }
+    const [allAbs] = await absencesForEmployee(
+      emp_id,
+      month_start,
+      month_end,
+      holidays,
+    );
+    const absentW = absenceWeightOverDays(allAbs, contractWd);
+    const daily = wkh !== null && wkh > 0 ? wkh / 5 : 8;
+    const available = Math.max(contractWd.length - absentW, 0) * daily;
+    out.set(emp_id, Number(available.toFixed(1)));
+  }
+  return out;
 }

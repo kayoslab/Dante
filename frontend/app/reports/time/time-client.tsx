@@ -162,6 +162,12 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
           <tr>
             <th className="px-3 py-2 text-left font-medium">Consultant</th>
             <th className="px-3 py-2 text-left font-medium">Team</th>
+            <th
+              className="px-3 py-2 text-right font-medium"
+              title="Hours this person could work this month: contract working days × daily hours (weekly hours ÷ 5), minus absences. Holidays per office state; Personio half-days count 0.5. Full month, regardless of today."
+            >
+              Available
+            </th>
             <th className="px-3 py-2 text-right font-medium">Total</th>
             <th
               className="px-3 py-2 text-right font-medium"
@@ -201,6 +207,11 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
                 </td>
                 <td className="px-3 py-2 text-muted-foreground">
                   {c.team ?? "—"}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                  {c.available_hours !== undefined && c.available_hours > 0
+                    ? `${c.available_hours}h`
+                    : "—"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums font-medium">
                   {c.total_hours}h
