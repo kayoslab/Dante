@@ -116,8 +116,11 @@ function KpiRow({ data }: { data: ReturnType<typeof useTrackedHours>["data"] & o
       ? (data.total_billable_hours / data.total_hours) * 100
       : 0;
   const avail = data.total_available_hours ?? 0;
+  // Server-computed from unrounded minutes so it matches the utilization
+  // report exactly; fall back to the display-rounded derivation.
   const billableUtilPct =
-    avail > 0 ? (data.total_billable_hours / avail) * 100 : null;
+    data.billable_util_pct ??
+    (avail > 0 ? (data.total_billable_hours / avail) * 100 : null);
   return (
     <KpiGrid>
       <Kpi

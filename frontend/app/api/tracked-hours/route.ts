@@ -85,6 +85,15 @@ export async function GET(req: NextRequest) {
 
     let total_available = 0;
     for (const r of rows) total_available += available.get(r.employee_id) ?? 0;
+    // Billable utilization from UNROUNDED minutes — the per-consultant hour
+    // figures above are display-rounded, and summing those drifts the KPI by
+    // a few tenths of a percent vs. the utilization report's exact math.
+    const exact_billable_h =
+      rows.reduce((acc, r) => acc + r.b_min, 0) / 60;
+    const billable_util_pct =
+      total_available > 0
+        ? Number(((exact_billable_h / total_available) * 100).toFixed(1))
+        : null;
 
     return {
       month: monthParam,
@@ -93,6 +102,7 @@ export async function GET(req: NextRequest) {
       working_days_in_month: n_working,
       n_consultants: consultants.length,
       total_available_hours: Number(total_available.toFixed(0)),
+      billable_util_pct,
       total_billable_hours: total_b,
       total_non_billable_hours: total_nb,
       total_untagged_hours: total_n,

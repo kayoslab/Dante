@@ -1807,6 +1807,8 @@ export type TrackedHoursMonth = {
         n_consultants: number;
         /** Total Available Hours — Σ per-consultant available (contract − absences) */
         total_available_hours?: number;
+        /** Billable Util Pct — exact (unrounded) billable ÷ available × 100 */
+        billable_util_pct?: number | null;
         /** Total Billable Hours */
         total_billable_hours: number;
         /** Total Non Billable Hours */
