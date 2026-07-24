@@ -115,8 +115,30 @@ function KpiRow({ data }: { data: ReturnType<typeof useTrackedHours>["data"] & o
     data.total_hours > 0
       ? (data.total_billable_hours / data.total_hours) * 100
       : 0;
+  const avail = data.total_available_hours ?? 0;
+  const billableUtilPct =
+    avail > 0 ? (data.total_billable_hours / avail) * 100 : null;
   return (
     <KpiGrid>
+      <Kpi
+        label="Available"
+        value={avail > 0 ? `${avail.toLocaleString()}h` : "—"}
+        sub="contract − absences, full month"
+        emphasize
+      />
+      <Kpi
+        label="Billable util"
+        value={billableUtilPct === null ? "—" : `${billableUtilPct.toFixed(1)}%`}
+        sub="billable ÷ available"
+        tone={
+          billableUtilPct === null
+            ? undefined
+            : billableUtilPct >= 70
+              ? "positive"
+              : "negative"
+        }
+        emphasize
+      />
       <Kpi
         label="Total hours"
         value={`${data.total_hours.toLocaleString()}h`}
@@ -177,6 +199,12 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
             </th>
             <th
               className="px-3 py-2 text-right font-medium"
+              title="Realized billable utilization: billable tracked hours ÷ available hours."
+            >
+              Util %
+            </th>
+            <th
+              className="px-3 py-2 text-right font-medium"
               title="Tracked on a non-billable / internal project (e.g. Interne Tätigkeit) — internal time, not billed."
             >
               Non-billable
@@ -218,6 +246,11 @@ function ConsultantTable({ rows }: { rows: import("@/lib/api/tracked-hours").Con
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-emerald-700">
                   {c.billable_hours > 0 ? `${c.billable_hours}h` : "—"}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {c.available_hours !== undefined && c.available_hours > 0
+                    ? `${((c.billable_hours / c.available_hours) * 100).toFixed(0)}%`
+                    : "—"}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-amber-700">
                   {c.non_billable_hours > 0 ? `${c.non_billable_hours}h` : "—"}

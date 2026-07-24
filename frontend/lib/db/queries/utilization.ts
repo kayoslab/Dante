@@ -3,6 +3,10 @@ import { sql } from "drizzle-orm";
 
 import { db } from "../client";
 import {
+  getAvailableHoursForEmployees,
+  getTrackedHoursForMonth,
+} from "./tracked-hours";
+import {
   absencesForEmployee,
   burdenFactor,
   employeeAllocSplitInMonth,
@@ -328,6 +332,81 @@ export async function computeUtilizationForMonth(
     },
     by_team,
     by_role_tier,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Public API: realized billable utilization for a single month
+// ---------------------------------------------------------------------------
+
+/** Tracked-side sibling of the booked aggregates: billable TRACKED hours ÷
+ * available hours (contract − absences, office-state holidays). This is what
+ * actually happened, vs. Booked % which is what was committed. */
+export type BillableUtilGroup = {
+  key: string; // "__total__" | team | role tier
+  available_h: number;
+  billable_h: number;
+  /** billable ÷ available × 100, 1 dp; null when no available hours. */
+  billable_util_pct: number | null;
+};
+
+export type RealizedBillableUtil = {
+  totals: BillableUtilGroup;
+  by_team: BillableUtilGroup[];
+  by_role_tier: BillableUtilGroup[];
+};
+
+export async function computeRealizedBillableUtilForMonth(
+  monthYm: string,
+): Promise<RealizedBillableUtil> {
+  const ctx = await loadMonthContext(monthYm);
+  const employees = await listEligibleEmployees(ctx.month_start, ctx.month_end);
+  const available = await getAvailableHoursForEmployees(
+    employees.map((e) => e.employee_id),
+    ctx.month_start,
+    ctx.month_end,
+  );
+  const tracked = await getTrackedHoursForMonth({
+    month_start: ctx.month_start,
+    month_end: ctx.month_end,
+    team: null,
+  });
+  const billableByEmp = new Map(
+    tracked.map((t) => [t.employee_id, t.b_min / 60]),
+  );
+
+  type Acc = { a: number; b: number };
+  const mk = (): Acc => ({ a: 0, b: 0 });
+  const totals = mk();
+  const teamMap = new Map<string, Acc>();
+  const tierMap = new Map<string, Acc>();
+  for (const emp of employees) {
+    const a = available.get(emp.employee_id) ?? 0;
+    const b = billableByEmp.get(emp.employee_id) ?? 0;
+    totals.a += a;
+    totals.b += b;
+    const teamKey = emp.team ?? "(no team)";
+    const t = teamMap.get(teamKey) ?? mk();
+    t.a += a;
+    t.b += b;
+    teamMap.set(teamKey, t);
+    const tierKey = emp.role_tier ?? "(unset)";
+    const r = tierMap.get(tierKey) ?? mk();
+    r.a += a;
+    r.b += b;
+    tierMap.set(tierKey, r);
+  }
+  const toGroup = (key: string, acc: Acc): BillableUtilGroup => ({
+    key,
+    available_h: Number(acc.a.toFixed(1)),
+    billable_h: Number(acc.b.toFixed(1)),
+    billable_util_pct:
+      acc.a > 0 ? Number(((acc.b / acc.a) * 100).toFixed(1)) : null,
+  });
+  return {
+    totals: toGroup("__total__", totals),
+    by_team: Array.from(teamMap, ([k, g]) => toGroup(k, g)),
+    by_role_tier: Array.from(tierMap, ([k, g]) => toGroup(k, g)),
   };
 }
 

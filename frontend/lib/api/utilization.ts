@@ -66,8 +66,22 @@ export function useUtilizationSeries(from_month: string, to_month: string) {
   });
 }
 
+export type BillableUtilGroup = {
+  key: string;
+  available_h: number;
+  billable_h: number;
+  billable_util_pct: number | null;
+};
+
 export type UtilizationMonthDetail = {
   month: string;
+  /** Realized billable utilization (tracked ÷ available) for the selected
+   * month; null for future months. */
+  billable_util?: {
+    totals: BillableUtilGroup;
+    by_team: BillableUtilGroup[];
+    by_role_tier: BillableUtilGroup[];
+  } | null;
   benched: Array<{
     employee_id: number;
     who_name: string;

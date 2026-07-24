@@ -83,12 +83,16 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    let total_available = 0;
+    for (const r of rows) total_available += available.get(r.employee_id) ?? 0;
+
     return {
       month: monthParam,
       month_start,
       month_end,
       working_days_in_month: n_working,
       n_consultants: consultants.length,
+      total_available_hours: Number(total_available.toFixed(0)),
       total_billable_hours: total_b,
       total_non_billable_hours: total_nb,
       total_untagged_hours: total_n,

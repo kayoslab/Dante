@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { UtilizationSparkline } from "@/components/utilization/utilization-sparkline";
 import { UtilizationTrendChart } from "@/components/utilization/utilization-trend-chart";
 import {
+  type BillableUtilGroup,
   type UtilizationGroupAggregate,
   type UtilizationMonthPoint,
   type UtilizationSeries,
@@ -59,8 +60,10 @@ export function UtilizationClient() {
           the commitment view, not tracked time). Allocations on non-billable /
           internal projects count as bench, not booked. Trailing 12 months plus
           3-month forecast on top; pick a month for the per-segment breakdown,
-          benched and overbooked consultants below. Billable utilization from
-          tracked time lives in the Forecast report.
+          benched and overbooked consultants below. For the selected month the
+          tables also show <strong>Billable util %</strong> — realized billable
+          utilization (tracked billable hours ÷ available hours) — so plan
+          (Booked) and actuals sit side by side.
         </p>
       </div>
 
@@ -111,7 +114,11 @@ export function UtilizationClient() {
           )}
         </CardHeader>
         <CardContent className="space-y-6">
-          <MonthKpis point={selectedPoint} loading={seriesQuery.isLoading} />
+          <MonthKpis
+            point={selectedPoint}
+            loading={seriesQuery.isLoading}
+            billableUtil={monthQuery.data?.billable_util?.totals ?? null}
+          />
           <GroupRollup
             title="Per team"
             headerKey="Team"
@@ -119,6 +126,7 @@ export function UtilizationClient() {
             rows={selectedPoint?.by_team ?? []}
             series={seriesQuery.data}
             groupAxis="team"
+            billableUtil={monthQuery.data?.billable_util?.by_team ?? null}
           />
           <GroupRollup
             title="Per role tier"
@@ -126,6 +134,7 @@ export function UtilizationClient() {
             rows={selectedPoint?.by_role_tier ?? []}
             series={seriesQuery.data}
             groupAxis="role_tier"
+            billableUtil={monthQuery.data?.billable_util?.by_role_tier ?? null}
           />
           <BenchedList
             data={monthQuery.data?.benched ?? []}
@@ -150,8 +159,10 @@ export function UtilizationClient() {
 function MonthKpis({
   point,
   loading,
+  billableUtil,
 }: {
   point: UtilizationMonthPoint | null;
+  billableUtil: BillableUtilGroup | null;
   loading: boolean;
 }) {
   if (loading && !point) {
@@ -193,6 +204,26 @@ function MonthKpis({
         value={`${point.totals.n_overbook}`}
         tone={overbookTone}
       />
+      <Kpi
+        label="Billable util (tracked)"
+        value={
+          billableUtil === null || billableUtil.billable_util_pct === null
+            ? "—"
+            : `${billableUtil.billable_util_pct.toFixed(1)}%`
+        }
+        sub={
+          billableUtil === null
+            ? "actuals — n/a for future months"
+            : `${billableUtil.billable_h.toFixed(0)}h billable of ${billableUtil.available_h.toFixed(0)}h available`
+        }
+        tone={
+          billableUtil === null || billableUtil.billable_util_pct === null
+            ? null
+            : billableUtil.billable_util_pct >= 70
+              ? "positive"
+              : "negative"
+        }
+      />
     </KpiGrid>
   );
 }
@@ -208,6 +239,7 @@ function GroupRollup({
   series,
   groupAxis,
   keyHref,
+  billableUtil,
 }: {
   title: string;
   headerKey: string;
@@ -216,7 +248,14 @@ function GroupRollup({
   groupAxis: "team" | "role_tier";
   /** Optional href builder — used by per-team to deep-link to /teams/[slug]. */
   keyHref?: (key: string) => string;
+  /** Realized billable utilization per group for the selected month
+   * (tracked ÷ available); null while loading / for future months. */
+  billableUtil?: BillableUtilGroup[] | null;
 }) {
+  const buByKey = useMemo(
+    () => new Map((billableUtil ?? []).map((g) => [g.key, g])),
+    [billableUtil],
+  );
   const sparkData = useMemo(() => {
     if (!series) return new Map<string, Array<number | null>>();
     // Only actuals (not forecast) on the sparkline — keeps the drift
@@ -268,6 +307,12 @@ function GroupRollup({
               <th className="px-3 py-2 text-right font-medium">Loaded cost</th>
               <th className="px-3 py-2 text-right font-medium">Booked % (€)</th>
               <th className="px-3 py-2 text-right font-medium">Booked % (HC)</th>
+              <th
+                className="px-3 py-2 text-right font-medium"
+                title="Realized billable utilization for the selected month: tracked billable hours ÷ available hours (contract − absences). Actuals — compare against Booked % (the plan)."
+              >
+                Billable util %
+              </th>
               <th className="px-3 py-2 text-right font-medium">Bench cost</th>
               <th
                 className="px-3 py-2 text-left font-medium"
@@ -334,6 +379,17 @@ function GroupRollup({
                     )}
                   >
                     {head === null ? "—" : `${head.toFixed(0)}%`}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {(() => {
+                      const bu = buByKey.get(r.key);
+                      return bu === undefined ||
+                        bu.billable_util_pct === null ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        `${bu.billable_util_pct.toFixed(0)}%`
+                      );
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {formatEUR(r.unallocated_cost)}
