@@ -15,6 +15,8 @@ import {
   fteFromWeeklyHours,
   holidaysForYearOf,
   lastOfMonth,
+  type MonthCalendar,
+  monthCalendarByState,
   workingDaysInRange,
 } from "../_monthly-helpers";
 import { roleTierFromAlias } from "../_sql-fragments";
@@ -45,6 +47,9 @@ type MonthContext = {
   working_days: string[];
   n_wd: number;
   burden: number;
+  /** Per-office state-aware calendar — the per-employee working-day basis.
+   * The federal fields above remain only for month-global context. */
+  calFor: (office: string | null) => MonthCalendar;
 };
 
 async function loadMonthContext(monthYm: string): Promise<MonthContext> {
@@ -60,6 +65,7 @@ async function loadMonthContext(monthYm: string): Promise<MonthContext> {
     working_days,
     n_wd: working_days.length,
     burden: await burdenFactor(),
+    calFor: monthCalendarByState(month_start, month_end),
   };
 }
 
@@ -70,6 +76,7 @@ type EligibleEmployee = {
   weekly_working_hours: number | null;
   hire_date: string | null;
   employment_end_date: string | null;
+  office: string | null;
   team: string | null;
   role_tier: string | null;
 };
@@ -85,7 +92,7 @@ async function listEligibleEmployees(
   const r = await db.execute(sql`
     SELECT ec.employee_id, ec.first_name, ec.last_name,
            ec.weekly_working_hours,
-           ec.hire_date, ec.employment_end_date,
+           ec.hire_date, ec.employment_end_date, ec.office,
            COALESCE(ann.team_user, ec.department) AS team,
            ${roleTier} AS role_tier
     FROM employee_current ec
@@ -107,6 +114,7 @@ async function listEligibleEmployees(
       row.weekly_working_hours == null ? null : Number(row.weekly_working_hours),
     hire_date: (row.hire_date as string | null) ?? null,
     employment_end_date: (row.employment_end_date as string | null) ?? null,
+    office: (row.office as string | null) ?? null,
     team: (row.team as string | null) ?? null,
     role_tier: (row.role_tier as string | null) ?? null,
   }));
@@ -138,6 +146,12 @@ async function computeEmployeeLoad(
   );
   if (monthly_cost === null) return null;
 
+  // State-aware calendar for THIS employee's office (NRW fallback; federal
+  // when office is null) — same basis as available-hours everywhere else.
+  const cal = ctx.calFor(emp.office);
+  const wd = cal.working_days;
+  const n_wd = wd.length;
+
   const clip_start =
     emp.hire_date !== null && emp.hire_date > ctx.month_start
       ? emp.hire_date
@@ -147,20 +161,20 @@ async function computeEmployeeLoad(
       ? emp.employment_end_date
       : ctx.month_end;
   const contract_workdays =
-    ctx.n_wd > 0
-      ? ctx.working_days.filter((d) => d >= clip_start && d <= clip_end).length
+    n_wd > 0
+      ? wd.filter((d) => d >= clip_start && d <= clip_end).length
       : 0;
   if (contract_workdays === 0) return null;
 
   const contract_share =
-    ctx.n_wd > 0 ? new Decimal(contract_workdays).div(ctx.n_wd) : ONE;
+    n_wd > 0 ? new Decimal(contract_workdays).div(n_wd) : ONE;
   let loaded_cost = monthly_cost.mul(contract_share);
 
   const [, unpaid_in_month] = await absencesForEmployee(
     emp.employee_id,
     ctx.month_start,
     ctx.month_end,
-    ctx.holidays,
+    cal.holidays,
   );
   let unpaid_in_contract = 0;
   for (const [d, w] of unpaid_in_month) {
@@ -181,7 +195,7 @@ async function computeEmployeeLoad(
     emp.employee_id,
     ctx.month_start,
     ctx.month_end,
-    ctx.working_days,
+    wd,
   );
   const weighted_alloc = alloc_split.billable;
   // `allocation_pct` is a fraction of full-time (40h), so a fully-booked

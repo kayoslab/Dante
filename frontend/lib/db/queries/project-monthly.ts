@@ -84,6 +84,7 @@ export type UnallocatedPayrollEmployeeRow = {
   weekly_working_hours: number | null;
   hire_date: string | null;
   employment_end_date: string | null;
+  office: string | null;
   team: string | null;
   is_real: boolean;
 };
@@ -97,7 +98,7 @@ export async function listUnallocatedPayrollEmployees(
   const r = await db.execute(sql`
     SELECT ec.employee_id, ec.first_name, ec.last_name,
            ec.weekly_working_hours,
-           ec.hire_date, ec.employment_end_date,
+           ec.hire_date, ec.employment_end_date, ec.office,
            COALESCE(ann.team_user, ec.department) AS team,
            COALESCE(ann.is_real_employee, TRUE) AS is_real
     FROM employee_current ec
@@ -119,6 +120,7 @@ export async function listUnallocatedPayrollEmployees(
       row.weekly_working_hours == null ? null : Number(row.weekly_working_hours),
     hire_date: (row.hire_date as string | null) ?? null,
     employment_end_date: (row.employment_end_date as string | null) ?? null,
+    office: (row.office as string | null) ?? null,
     team: (row.team as string | null) ?? null,
     is_real: Boolean(row.is_real),
   }));
@@ -299,6 +301,16 @@ export async function computeProjectMonthly(
             Number(month_start.slice(0, 4)),
             Number(month_end.slice(0, 4)),
           );
+    // The employee's OWN working-day basis (federal list minus their state
+    // holidays) — numerators (active_days) are state-filtered below, so
+    // denominators must be too: dividing state-filtered active days by the
+    // federal month count silently discounted every full-month assignment
+    // in a state-holiday month (21/22 ≈ 0.955 instead of 1.0).
+    const empWd =
+      empStateCode === null
+        ? working_days
+        : working_days.filter((d) => !empHolidays.has(d));
+    const emp_n_wd = empWd.length;
 
     const a_window_start = a_start > month_start ? a_start : month_start;
     const a_window_end =
@@ -388,8 +400,8 @@ export async function computeProjectMonthly(
         : null;
 
     const weighted_alloc_i =
-      n_wd > 0 && active_days.length > 0
-        ? alloc.mul(active_days.length).div(n_wd)
+      emp_n_wd > 0 && active_days.length > 0
+        ? alloc.mul(active_days.length).div(emp_n_wd)
         : new Decimal(0);
 
     let cost_share = new Decimal(0);
@@ -415,7 +427,7 @@ export async function computeProjectMonthly(
           );
           employee_total_tracked_cache.set(emp_id, total_tracked_min);
         }
-        const standard_monthly_hours = new Decimal(n_wd).mul(
+        const standard_monthly_hours = new Decimal(emp_n_wd).mul(
           standard_daily_hours,
         );
         const total_tracked_hours = new Decimal(total_tracked_min).div(60);
@@ -439,7 +451,7 @@ export async function computeProjectMonthly(
         // of their salary and the remainder reads as spurious bench.
         const paid_weighted_alloc_i = alloc
           .mul(paid_active_days)
-          .div(n_wd)
+          .div(emp_n_wd > 0 ? emp_n_wd : 1)
           .div(fte);
         // Accrue linearly through the month (see `accrual_share`) so this
         // projection-based path stays comparable with the burdened view
@@ -462,11 +474,13 @@ export async function computeProjectMonthly(
     ) {
       let total_weighted = weighted_alloc_cache.get(emp_id);
       if (total_weighted === undefined) {
+        // Same state-aware day basis as weighted_alloc_i so the share
+        // (weighted_alloc_i / total_weighted) is calendar-consistent.
         total_weighted = await employeeWeightedAllocInMonth(
           emp_id,
           month_start,
           month_end,
-          working_days,
+          empWd,
         );
         weighted_alloc_cache.set(emp_id, total_weighted);
       }
@@ -477,12 +491,14 @@ export async function computeProjectMonthly(
             emp_id,
             month_start,
             month_end,
-            holidays,
+            empHolidays,
           );
           unpaid_in_month = totalAbsenceWeight(u);
           unpaid_in_month_cache.set(emp_id, unpaid_in_month);
         }
-        const paid_share = new Decimal(n_wd - unpaid_in_month).div(n_wd);
+        const paid_share = new Decimal(emp_n_wd - unpaid_in_month).div(
+          emp_n_wd > 0 ? emp_n_wd : 1,
+        );
         const effective_monthly_cost = monthly_cost.mul(paid_share);
         burdened_share = effective_monthly_cost
           .mul(weighted_alloc_i)

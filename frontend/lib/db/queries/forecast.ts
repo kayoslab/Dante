@@ -9,6 +9,7 @@ import {
   firstOfMonth,
   holidaysForYearOf,
   lastOfMonth,
+  monthCalendarByState,
   workingDaysInRange,
 } from "../_monthly-helpers";
 import {
@@ -67,6 +68,7 @@ type EligibleEmployee = {
   weekly_working_hours: number | null;
   hire_date: string | null;
   employment_end_date: string | null;
+  office: string | null;
   team: string | null;
   role_tier: string | null;
 };
@@ -81,6 +83,7 @@ async function listForecastEligible(
   const r = await db.execute(sql`
     SELECT ec.employee_id, ec.first_name, ec.last_name,
            ec.weekly_working_hours, ec.hire_date, ec.employment_end_date,
+           ec.office,
            COALESCE(ann.team_user, ec.department) AS team,
            ${roleTier} AS role_tier
     FROM employee_current ec
@@ -101,6 +104,7 @@ async function listForecastEligible(
         : Number(row.weekly_working_hours),
     hire_date: (row.hire_date as string | null) ?? null,
     employment_end_date: (row.employment_end_date as string | null) ?? null,
+    office: (row.office as string | null) ?? null,
     team: (row.team as string | null) ?? null,
     role_tier: (row.role_tier as string | null) ?? null,
   }));
@@ -265,7 +269,11 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
 
   // Current-month "to date" window: month start → today (clamped in-month).
   const toDateEnd = todayIso < cur.end ? todayIso : cur.end;
-  const wdToDate = workingDaysInRange(cur.start, toDateEnd, cur.holidays);
+
+  // Per-office state-aware calendars, one factory per forecast month. The
+  // window's own `wd` (federal) remains only as the display denominator
+  // (months[].working_days → client FTE conversion).
+  const calFors = windows.map((w) => monthCalendarByState(w.start, w.end));
 
   const employees = await listForecastEligible(
     cur.start,
@@ -305,6 +313,11 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
     for (let i = 0; i < nMonths; i++) {
       const w = windows[i];
       const isCurrent = i === 0;
+      // State-aware calendar for this employee's office (NRW fallback;
+      // federal when office is null) — capacity must not count state
+      // holidays as workable days.
+      const cal = calFors[i](emp.office);
+      const stateWd = cal.working_days;
 
       // Contract-clip the month's working days to [hire, employment_end].
       const clipStart =
@@ -313,13 +326,13 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
         emp.employment_end_date && emp.employment_end_date < w.end
           ? emp.employment_end_date
           : w.end;
-      const contractWd = w.wd.filter((d) => d >= clipStart && d <= clipEnd);
+      const contractWd = stateWd.filter((d) => d >= clipStart && d <= clipEnd);
 
       const [allAbs, unpaid] = await absencesForEmployee(
         emp.employee_id,
         w.start,
         w.end,
-        w.holidays,
+        cal.holidays,
       );
       // Weighted absence days: Personio half-days count 0.5 (see
       // absencesForEmployee). Paid vacation weight = all-absence minus the
@@ -355,15 +368,20 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
         available_to_date = empDailyHours.mul(availTdDays);
       }
 
-      // Planned allocation for the full month, split billable vs total.
+      // Planned allocation for the full month, split billable vs total —
+      // weighted and converted to hours on the employee's own calendar.
       const alloc = await employeeAllocSplitInMonth(
         emp.employee_id,
         w.start,
         w.end,
-        w.wd,
+        stateWd,
       );
-      const planned_total = alloc.total.mul(FULL_TIME_DAILY).mul(w.wd.length);
-      const planned_billable = alloc.billable.mul(FULL_TIME_DAILY).mul(w.wd.length);
+      const planned_total = alloc.total
+        .mul(FULL_TIME_DAILY)
+        .mul(stateWd.length);
+      const planned_billable = alloc.billable
+        .mul(FULL_TIME_DAILY)
+        .mul(stateWd.length);
 
       // Current month: month-to-date actuals + to-date planned (for delivery).
       let actual_billable = D0;
@@ -372,16 +390,17 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
       if (isCurrent) {
         actual_billable = tr.billable;
         actual_nonbillable = tr.nonbillable;
-        if (wdToDate.length > 0) {
+        const stateWdToDate = stateWd.filter((d) => d <= toDateEnd);
+        if (stateWdToDate.length > 0) {
           const allocTd = await employeeAllocSplitInMonth(
             emp.employee_id,
             cur.start,
             toDateEnd,
-            wdToDate,
+            stateWdToDate,
           );
           planned_billable_to_date = allocTd.billable
             .mul(FULL_TIME_DAILY)
-            .mul(wdToDate.length);
+            .mul(stateWdToDate.length);
         }
       }
 

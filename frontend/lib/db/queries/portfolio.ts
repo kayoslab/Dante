@@ -9,9 +9,8 @@ import {
   entityMonthlyCost,
   fmt,
   fteFromWeeklyHours,
-  holidaysForYearOf,
   lastOfMonth,
-  workingDaysInRange,
+  monthCalendarByState,
 } from "../_monthly-helpers";
 import {
   type ActiveProjectRow,
@@ -48,9 +47,9 @@ export async function computeMonthlyBenchTotals(
 ): Promise<{ loaded: Decimal; unallocated: Decimal | null }> {
   const month_start = `${monthYm}-01`;
   const month_end = lastOfMonth(month_start);
-  const holidays = holidaysForYearOf(month_start);
-  const working_days = workingDaysInRange(month_start, month_end, holidays);
-  const n_wd = working_days.length;
+  // Per-office state-aware calendars — same basis as available-hours and the
+  // booked-capacity engine, so the bench line and the reports reconcile.
+  const calFor = monthCalendarByState(month_start, month_end);
   const burden = await burdenFactor();
 
   const employees = await listUnallocatedPayrollEmployees(
@@ -73,6 +72,10 @@ export async function computeMonthlyBenchTotals(
     );
     if (monthly_cost === null) continue;
 
+    const cal = calFor(raw.office);
+    const working_days = cal.working_days;
+    const n_wd = working_days.length;
+
     const clip_start =
       hire_date !== null && hire_date > month_start ? hire_date : month_start;
     const clip_end =
@@ -90,7 +93,7 @@ export async function computeMonthlyBenchTotals(
       emp_id,
       month_start,
       month_end,
-      holidays,
+      cal.holidays,
     );
     let unpaid_in_contract = 0;
     for (const [d, w] of unpaid_in_month) {

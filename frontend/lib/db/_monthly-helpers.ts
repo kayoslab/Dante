@@ -107,6 +107,44 @@ export function workingDaysInRange(
 }
 
 /** Convenience: build the German federal holidays set for the year of `iso`. */
+/** Per-office month calendar factory — THE way to get working days for a
+ * specific employee. Resolves the employee's office to a German state
+ * (NRW fallback for unknown non-null offices, federal-only when the office
+ * is null — e.g. freelancers) and returns state-aware holidays + working
+ * days, cached per state so a 30-employee loop builds at most a handful of
+ * calendars. Using the federal calendar for employee-level availability
+ * understates holidays by up to 3 days/year per person (e.g. Fronleichnam
+ * for NRW/BY/BW/HE/RP/SL) — the June-2026 slide incident. */
+export type MonthCalendar = {
+  holidays: Map<string, string>;
+  working_days: string[];
+};
+
+export function monthCalendarByState(
+  month_start: string,
+  month_end: string,
+): (office: string | null) => MonthCalendar {
+  const year = Number(month_start.slice(0, 4));
+  const cache = new Map<string, MonthCalendar>();
+  return (office) => {
+    const state = stateCodeForOffice(office);
+    const key = state ?? "__federal__";
+    let cal = cache.get(key);
+    if (cal === undefined) {
+      const holidays =
+        state === null
+          ? holidaysForYearOf(month_start)
+          : germanHolidaysForStateCached(state, year, year);
+      cal = {
+        holidays,
+        working_days: workingDaysInRange(month_start, month_end, holidays),
+      };
+      cache.set(key, cal);
+    }
+    return cal;
+  };
+}
+
 export function holidaysForYearOf(iso: string): Map<string, string> {
   const y = Number(iso.slice(0, 4));
   return germanFederalHolidays(y, y);
