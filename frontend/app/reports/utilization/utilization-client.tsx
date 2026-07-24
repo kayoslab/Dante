@@ -55,11 +55,12 @@ export function UtilizationClient() {
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           How much of the people we&rsquo;re paying for is <em>booked</em> onto
-          projects (assignment allocations vs. FTE — the commitment view, not
-          tracked time). Trailing 12 months plus 3-month forecast on top; pick
-          a month for the per-segment breakdown, benched and overbooked
-          consultants below. Billable utilization from tracked time lives in
-          the Forecast report.
+          <strong> billable</strong> projects (assignment allocations vs. FTE —
+          the commitment view, not tracked time). Allocations on non-billable /
+          internal projects count as bench, not booked. Trailing 12 months plus
+          3-month forecast on top; pick a month for the per-segment breakdown,
+          benched and overbooked consultants below. Billable utilization from
+          tracked time lives in the Forecast report.
         </p>
       </div>
 

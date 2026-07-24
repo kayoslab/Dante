@@ -5,7 +5,7 @@ import { db } from "../client";
 import {
   absencesForEmployee,
   burdenFactor,
-  employeeWeightedAllocInMonth,
+  employeeAllocSplitInMonth,
   entityMonthlyCost,
   fmt,
   fteFromWeeklyHours,
@@ -169,12 +169,17 @@ async function computeEmployeeLoad(
     loaded_cost = loaded_cost.mul(paid_share);
   }
 
-  const weighted_alloc = await employeeWeightedAllocInMonth(
+  // BILLABLE allocations only: booked capacity means booked on billable
+  // work. An assignment on a non-billable/internal project (e.g. an awork
+  // Planner booking on an internal project) does not count as booked —
+  // that person is bench from a revenue point of view.
+  const alloc_split = await employeeAllocSplitInMonth(
     emp.employee_id,
     ctx.month_start,
     ctx.month_end,
     ctx.working_days,
   );
+  const weighted_alloc = alloc_split.billable;
   // `allocation_pct` is a fraction of full-time (40h), so a fully-booked
   // part-timer's `weighted_alloc` equals their FTE. Measure utilization
   // against FTE, not a hardcoded 1.0 — otherwise an 88%-contract employee

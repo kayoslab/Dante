@@ -58,7 +58,7 @@ const REPORTS: ReportTile[] = [
     href: "/reports/utilization",
     title: "Booked capacity",
     description:
-      "How much of the people we pay for is booked onto projects (allocations vs. FTE). Trend + per-team and per-role-tier rollups, currently-benched and overbooked consultants, and what's driving the forecast.",
+      "How much of the people we pay for is booked onto billable projects (allocations vs. FTE). Trend + per-team and per-role-tier rollups, currently-benched and overbooked consultants, and what's driving the forecast.",
     minRole: "manager",
   },
   {

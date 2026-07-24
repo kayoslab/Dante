@@ -5,7 +5,7 @@ import { db } from "../client";
 import {
   absencesForEmployee,
   burdenFactor,
-  employeeWeightedAllocInMonth,
+  employeeAllocSplitInMonth,
   entityMonthlyCost,
   fmt,
   fteFromWeeklyHours,
@@ -106,7 +106,10 @@ export async function computeMonthlyBenchTotals(
     loaded = loaded.add(cost_prorated);
 
     if (opts.includeAllocation) {
-      const weighted_alloc = await employeeWeightedAllocInMonth(
+      // BILLABLE allocations only — matches computeEmployeeLoad in
+      // utilization.ts, so the rentability bench line and the booked-capacity
+      // report stay on one definition: booked = booked on billable work.
+      const { billable: weighted_alloc } = await employeeAllocSplitInMonth(
         emp_id,
         month_start,
         month_end,
