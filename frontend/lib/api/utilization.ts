@@ -71,6 +71,10 @@ export type BillableUtilGroup = {
   available_h: number;
   billable_h: number;
   billable_util_pct: number | null;
+  /** Σ loaded cost (same proration as the booking-based Bench cost). */
+  loaded_cost?: string;
+  /** Cost of capacity that produced no billable output (retrospective). */
+  realized_bench_cost?: string;
 };
 
 export type UtilizationMonthDetail = {

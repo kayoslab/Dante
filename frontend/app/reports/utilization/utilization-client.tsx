@@ -61,9 +61,11 @@ export function UtilizationClient() {
           internal projects count as bench, not booked. Trailing 12 months plus
           3-month forecast on top; pick a month for the per-segment breakdown,
           benched and overbooked consultants below. For the selected month the
-          tables also show <strong>Billable util %</strong> — realized billable
-          utilization (tracked billable hours ÷ available hours) — so plan
-          (Booked) and actuals sit side by side.
+          tables also show the actuals side: <strong>Billable util %</strong>
+          (tracked billable ÷ available) and <strong>Realized bench</strong>
+          (cost of capacity that produced no billable output). Bench cost is
+          booking-based — capacity we failed to allocate; the gap between the
+          two EUR figures is unplanned billable work, i.e. allocation hygiene.
         </p>
       </div>
 
@@ -224,6 +226,16 @@ function MonthKpis({
               : "negative"
         }
       />
+      <Kpi
+        label="Realized bench cost"
+        value={
+          billableUtil?.realized_bench_cost === undefined ||
+          billableUtil === null
+            ? "—"
+            : formatEUR(billableUtil.realized_bench_cost)
+        }
+        sub="capacity that produced no billable output — compare with Bench cost (unbooked capacity)"
+      />
     </KpiGrid>
   );
 }
@@ -313,7 +325,18 @@ function GroupRollup({
               >
                 Billable util %
               </th>
-              <th className="px-3 py-2 text-right font-medium">Bench cost</th>
+              <th
+                className="px-3 py-2 text-right font-medium"
+                title="Booking-based: loaded cost × unbooked share of FTE. The cost of capacity we failed to allocate — forward-manageable."
+              >
+                Bench cost
+              </th>
+              <th
+                className="px-3 py-2 text-right font-medium"
+                title="Realized: loaded cost × share of available hours with no billable output (tracked). What idle capacity actually cost — retrospective. Gap vs. Bench cost = unplanned billable work / allocation hygiene."
+              >
+                Realized bench
+              </th>
               <th
                 className="px-3 py-2 text-left font-medium"
                 title="Bench % over the last 12 months"
@@ -393,6 +416,16 @@ function GroupRollup({
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {formatEUR(r.unallocated_cost)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {(() => {
+                      const bu = buByKey.get(r.key);
+                      return bu?.realized_bench_cost === undefined ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        formatEUR(bu.realized_bench_cost)
+                      );
+                    })()}
                   </td>
                   <td className="px-3 py-2">
                     <UtilizationSparkline

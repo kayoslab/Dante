@@ -362,6 +362,12 @@ export type BillableUtilGroup = {
   billable_h: number;
   /** billable ÷ available × 100, 1 dp; null when no available hours. */
   billable_util_pct: number | null;
+  /** Σ loaded cost of the group's employees (same proration as Bench cost). */
+  loaded_cost: string;
+  /** Realized bench cost: Σ loaded_cost × (1 − min(billable ÷ available, 1))
+   * per employee — the cost of capacity that actually produced no billable
+   * output. Retrospective sibling of the booking-based Bench cost. */
+  realized_bench_cost: string;
 };
 
 export type RealizedBillableUtil = {
@@ -389,25 +395,45 @@ export async function computeRealizedBillableUtilForMonth(
     tracked.map((t) => [t.employee_id, t.b_min / 60]),
   );
 
-  type Acc = { a: number; b: number };
-  const mk = (): Acc => ({ a: 0, b: 0 });
+  type Acc = { a: number; b: number; loaded: Decimal; rbench: Decimal };
+  const mk = (): Acc => ({
+    a: 0,
+    b: 0,
+    loaded: new Decimal(0),
+    rbench: new Decimal(0),
+  });
   const totals = mk();
   const teamMap = new Map<string, Acc>();
   const tierMap = new Map<string, Acc>();
   for (const emp of employees) {
     const a = available.get(emp.employee_id) ?? 0;
     const b = billableByEmp.get(emp.employee_id) ?? 0;
-    totals.a += a;
-    totals.b += b;
+    // Same prorated loaded cost the booking-based Bench cost uses, so the
+    // two EUR figures differ only in their utilization basis. Employees
+    // without a salary on file contribute hours but no cost — matching the
+    // booked side, which skips them entirely.
+    const load = await computeEmployeeLoad(emp, ctx);
+    let loaded = new Decimal(0);
+    let rbench = new Decimal(0);
+    if (load !== null) {
+      loaded = load.loaded_cost;
+      const realizedShare = a > 0 ? Math.min(b / a, 1) : 0;
+      rbench = loaded.mul(1 - realizedShare);
+    }
+    const fold = (acc: Acc) => {
+      acc.a += a;
+      acc.b += b;
+      acc.loaded = acc.loaded.add(loaded);
+      acc.rbench = acc.rbench.add(rbench);
+    };
+    fold(totals);
     const teamKey = emp.team ?? "(no team)";
     const t = teamMap.get(teamKey) ?? mk();
-    t.a += a;
-    t.b += b;
+    fold(t);
     teamMap.set(teamKey, t);
     const tierKey = emp.role_tier ?? "(unset)";
     const r = tierMap.get(tierKey) ?? mk();
-    r.a += a;
-    r.b += b;
+    fold(r);
     tierMap.set(tierKey, r);
   }
   const toGroup = (key: string, acc: Acc): BillableUtilGroup => ({
@@ -416,6 +442,8 @@ export async function computeRealizedBillableUtilForMonth(
     billable_h: Number(acc.b.toFixed(1)),
     billable_util_pct:
       acc.a > 0 ? Number(((acc.b / acc.a) * 100).toFixed(1)) : null,
+    loaded_cost: fmt(acc.loaded, 2),
+    realized_bench_cost: fmt(acc.rbench, 2),
   });
   return {
     totals: toGroup("__total__", totals),
