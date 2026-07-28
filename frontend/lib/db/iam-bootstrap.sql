@@ -29,8 +29,19 @@ EXCEPTION
 END
 $$;
 
--- 2. Enable IAM auth for this user.
-GRANT rds_iam TO dante_app;
+-- 2. Enable IAM auth for this user. The `rds_iam` role only exists on
+--    RDS — on a vanilla Postgres (local docker compose dev) the grant is
+--    skipped so the identical bootstrap runs in both contexts instead of
+--    aborting every local migration.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rds_iam') THEN
+    EXECUTE 'GRANT rds_iam TO dante_app';
+  ELSE
+    RAISE NOTICE 'rds_iam role not present (non-RDS Postgres), skipping GRANT';
+  END IF;
+END
+$$;
 
 -- 3. Database connect — required to open any session.
 DO $$

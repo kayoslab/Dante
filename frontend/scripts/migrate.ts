@@ -35,13 +35,35 @@
  * partly-migrated schema — deliberately don't.
  */
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Client } from "pg";
 
-// Bundled inline via esbuild's text loader (`.sql` → string). Avoids
-// a runtime filesystem read + makes the binary self-contained.
-import iamBootstrapSql from "../lib/db/iam-bootstrap.sql";
+// Dual-context load of the IAM bootstrap SQL:
+//  - Container bundle: esbuild's text loader inlines the file via the
+//    require() below (single-file binary, no runtime filesystem read).
+//  - Local CLI (`npx tsx scripts/migrate.ts`): tsx has no `.sql` loader —
+//    the require throws a SyntaxError — so fall back to reading the file
+//    from the repo. The previous static ESM import broke the local path
+//    entirely (the runner crashed before connecting, leaving dev DBs
+//    silently unmigrated).
+function loadIamBootstrapSql(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("../lib/db/iam-bootstrap.sql") as unknown;
+    if (typeof mod === "string") return mod;
+    const dflt = (mod as { default?: unknown }).default;
+    if (typeof dflt === "string") return dflt;
+    throw new Error("unexpected .sql module shape");
+  } catch {
+    return readFileSync(
+      path.resolve(__dirname, "..", "lib", "db", "iam-bootstrap.sql"),
+      "utf-8",
+    );
+  }
+}
+const iamBootstrapSql = loadIamBootstrapSql();
 
 const MIGRATIONS_FOLDER =
   process.env.DANTE_MIGRATIONS_FOLDER ??
