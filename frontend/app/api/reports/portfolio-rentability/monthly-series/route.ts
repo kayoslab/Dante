@@ -7,7 +7,11 @@ import {
 } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { audit } from "@/lib/auth/audit";
-import { addMonths, firstOfMonth } from "@/lib/db/_monthly-helpers";
+import {
+  addMonths,
+  firstOfMonth,
+  mapWithConcurrency,
+} from "@/lib/db/_monthly-helpers";
 import { computePortfolioMonthlyTotals } from "@/lib/db/queries/portfolio";
 
 /** Portfolio P&L series across a month range (trailing actuals + forecast).
@@ -44,14 +48,14 @@ export async function GET(req: NextRequest) {
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    const points = await Promise.all(
-      months.map(async (monthYm) => {
-        const totals = await computePortfolioMonthlyTotals(monthYm);
-        const month_start = `${monthYm}-01`;
-        const is_forecast = month_start > today;
-        return { ...totals, is_forecast };
-      }),
-    );
+    // Bounded month fan-out: each month is internally parallel already;
+    // running all 16 at once would just flood the pg pool queue.
+    const points = await mapWithConcurrency(months, 4, async (monthYm) => {
+      const totals = await computePortfolioMonthlyTotals(monthYm);
+      const month_start = `${monthYm}-01`;
+      const is_forecast = month_start > today;
+      return { ...totals, is_forecast };
+    });
 
     await audit(ctx, {
       action: "view_portfolio_rentability_series",

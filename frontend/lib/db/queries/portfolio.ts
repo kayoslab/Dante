@@ -20,6 +20,7 @@ import {
   listUnallocatedPayrollEmployees,
 } from "./project-monthly";
 import { getMissingFreelancerHoursMonthsByProject } from "./sdm-home";
+import { cachePastMonth } from "../_report-cache";
 
 /** Top-line portfolio P&L for a single month: revenue (T&M + FP recognized),
  * cost (loaded payroll — full company salary burden including bench),
@@ -201,6 +202,16 @@ async function sumProjectRevenue(
 export async function computePortfolioMonthlyTotals(
   monthYm: string,
 ): Promise<PortfolioMonthlyTotals> {
+  // Historical months are near-immutable — cache them so the 16-month
+  // trend series doesn't recompute the whole portfolio on every request.
+  return cachePastMonth("portfolio_totals", monthYm, () =>
+    computePortfolioMonthlyTotalsUncached(monthYm),
+  );
+}
+
+async function computePortfolioMonthlyTotalsUncached(
+  monthYm: string,
+): Promise<PortfolioMonthlyTotals> {
   const projects = await listActiveProjectsForPortfolio();
 
   // Revenue, loaded-payroll cost, and freelancer cost don't share state —
@@ -306,6 +317,22 @@ export type ProjectMonthlyRowsResult = {
  * month. Sorts rows by cost descending — matches the portfolio route's
  * previous ordering. */
 export async function computeProjectMonthlyRows(
+  monthYm: string,
+  opts: { project_ids?: number[] } = {},
+): Promise<ProjectMonthlyRowsResult> {
+  // Cache only the unfiltered (whole-portfolio) shape for past months —
+  // it's what the customer-rentability series and the rentability month
+  // route request repeatedly. Filtered calls (Home's project list) stay
+  // live. Callers must not mutate the shared result.
+  if (opts.project_ids === undefined) {
+    return cachePastMonth("project_rows", monthYm, () =>
+      computeProjectMonthlyRowsUncached(monthYm, {}),
+    );
+  }
+  return computeProjectMonthlyRowsUncached(monthYm, opts);
+}
+
+async function computeProjectMonthlyRowsUncached(
   monthYm: string,
   opts: { project_ids?: number[] } = {},
 ): Promise<ProjectMonthlyRowsResult> {

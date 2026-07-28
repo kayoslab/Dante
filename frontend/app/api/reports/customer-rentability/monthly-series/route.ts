@@ -7,7 +7,11 @@ import {
 } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { audit } from "@/lib/auth/audit";
-import { addMonths, firstOfMonth } from "@/lib/db/_monthly-helpers";
+import {
+  addMonths,
+  firstOfMonth,
+  mapWithConcurrency,
+} from "@/lib/db/_monthly-helpers";
 import { computeCustomerMonthlyAggregates } from "@/lib/db/queries/customer-rentability";
 
 /** Trend series for the customer-rentability report.
@@ -42,13 +46,13 @@ export async function GET(req: NextRequest) {
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    const perMonth = await Promise.all(
-      months.map(async (monthYm) => ({
-        month: monthYm,
-        is_forecast: `${monthYm}-01` > today,
-        aggregates: await computeCustomerMonthlyAggregates(monthYm),
-      })),
-    );
+    // Bounded month fan-out: each month is internally parallel already;
+    // running all 16 at once would just flood the pg pool queue.
+    const perMonth = await mapWithConcurrency(months, 4, async (monthYm) => ({
+      month: monthYm,
+      is_forecast: `${monthYm}-01` > today,
+      aggregates: await computeCustomerMonthlyAggregates(monthYm),
+    }));
 
     // Stable top-5 across the window — sum each customer's margin over
     // the ACTUAL months only (forecasts are projections; including them

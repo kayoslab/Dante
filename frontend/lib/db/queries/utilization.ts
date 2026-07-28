@@ -20,6 +20,7 @@ import {
   monthCalendarByState,
   workingDaysInRange,
 } from "../_monthly-helpers";
+import { cachePastMonth } from "../_report-cache";
 import { roleTierFromAlias } from "../_sql-fragments";
 
 const EMPLOYEE_CONCURRENCY = 6;
@@ -304,6 +305,18 @@ function summarizeGroup(
  * month. Iterates every eligible employee once, then groups twice
  * (one pass for team, one pass for role tier). */
 export async function computeUtilizationForMonth(
+  monthYm: string,
+  todayIso: string,
+): Promise<UtilizationMonthAggregates> {
+  // Past months are near-immutable — cache them so the 16-month trend
+  // series doesn't recompute every employee on every request. todayIso is
+  // part of the scope in case any downstream math ever reads it.
+  return cachePastMonth(`util_month:${todayIso}`, monthYm, () =>
+    computeUtilizationForMonthUncached(monthYm, todayIso),
+  );
+}
+
+async function computeUtilizationForMonthUncached(
   monthYm: string,
   todayIso: string,
 ): Promise<UtilizationMonthAggregates> {

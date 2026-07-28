@@ -7,7 +7,11 @@ import {
 } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { audit } from "@/lib/auth/audit";
-import { addMonths, firstOfMonth } from "@/lib/db/_monthly-helpers";
+import {
+  addMonths,
+  firstOfMonth,
+  mapWithConcurrency,
+} from "@/lib/db/_monthly-helpers";
 import {
   computeUtilizationForMonth,
   listForecastDrivers,
@@ -71,8 +75,10 @@ export async function GET(req: NextRequest) {
     }
 
     const [points, forecast_drivers] = await Promise.all([
-      Promise.all(
-        months.map((monthYm) => computeUtilizationForMonth(monthYm, today)),
+      // Bounded month fan-out: each month is internally parallel already;
+      // running all 16 at once would just flood the pg pool queue.
+      mapWithConcurrency(months, 4, (monthYm) =>
+        computeUtilizationForMonth(monthYm, today),
       ),
       future_months.length > 0
         ? listForecastDrivers(from_drv, to_drv)

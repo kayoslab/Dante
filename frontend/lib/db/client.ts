@@ -58,10 +58,7 @@ function resolveConnectionString(): string {
  * per new connection, so `getRdsAuthToken()` gets a chance to refresh
  * the 15-minute token whenever the pool grows. SSL uses the bundled
  * RDS Global CA for proper verify-full chain validation. */
-function buildIamPool(opts: {
-  max: number;
-  stmt_timeout_ms: number;
-}): Pool {
+function buildIamPool(opts: { max: number; stmt_timeout_ms: number }): Pool {
   const username = process.env.DANTE_APP_DB_USERNAME;
   const endpoint = process.env.DANTE_DATABASE_ENDPOINT;
   const dbname = process.env.DANTE_DATABASE_NAME;
@@ -82,7 +79,10 @@ function buildIamPool(opts: {
     ssl: { ca: getRdsCaBundle() },
     max: opts.max,
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
+    // Acquire timeout covers pool-queue waits, not just TCP connects. The
+    // report engines deliberately queue bursts of short queries, so a low
+    // value misreads "waiting for a free connection" as a dead database.
+    connectionTimeoutMillis: 30_000,
     ...(opts.stmt_timeout_ms > 0
       ? { options: `-c statement_timeout=${opts.stmt_timeout_ms}` }
       : {}),
@@ -92,11 +92,12 @@ function buildIamPool(opts: {
 function getPool(): Pool {
   if (!global.__pgPool) {
     // `max` is bounded so a traffic spike can't exhaust RDS connections.
-    // 40-user workload: at most ~5 concurrent server-rendered requests
-    // hitting the DB at once. RDS t4g.micro defaults to ~80 max
-    // connections — keep room for sync Lambda + admin tools.
+    // The report engines fan out per-project / per-employee queries, so a
+    // single trend request wants well over 5 concurrent queries; 20 per
+    // task × 2 tasks + sync Lambda stays comfortably under the RDS
+    // t4g.micro ~80-connection ceiling.
     // Override with PGPOOL_MAX if scaling assumptions change.
-    const max = Number.parseInt(process.env.PGPOOL_MAX ?? "5", 10);
+    const max = Number.parseInt(process.env.PGPOOL_MAX ?? "20", 10);
     // Per-connection `statement_timeout`. Caps any single query so a
     // pathological N+1 or a runaway calendar window can't pin a pool
     // connection forever. Applies to the API pool only — the sync
@@ -108,14 +109,15 @@ function getPool(): Pool {
       process.env.PG_STATEMENT_TIMEOUT_MS ?? "15000",
       10,
     );
-    const poolMax = Number.isFinite(max) && max > 0 ? max : 5;
+    const poolMax = Number.isFinite(max) && max > 0 ? max : 20;
     global.__pgPool = useIamDbAuth()
       ? buildIamPool({ max: poolMax, stmt_timeout_ms })
       : new Pool({
           connectionString: resolveConnectionString(),
           max: poolMax,
           idleTimeoutMillis: 30_000,
-          connectionTimeoutMillis: 5_000,
+          // See buildIamPool — acquire timeout includes pool-queue waits.
+          connectionTimeoutMillis: 30_000,
           ...(stmt_timeout_ms > 0
             ? { options: `-c statement_timeout=${stmt_timeout_ms}` }
             : {}),
