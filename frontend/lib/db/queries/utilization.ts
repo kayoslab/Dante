@@ -102,7 +102,16 @@ async function listEligibleEmployees(
       -- Include onboarding (future-start) hires; the hire_date window below
       -- scopes them to months they've actually started. Personio flips
       -- onboarding -> active on the start date.
-      AND ec.status IN ('active', 'onboarding')
+      --
+      -- ALSO include employees who have since LEFT but whose contract covered
+      -- this month (status is today's state; a past month's roster is who was
+      -- employed THEN). Without this, scrubbing to a past month showed only
+      -- today's roster — departed consultants' bench/cost silently vanished.
+      AND (
+        ec.status IN ('active', 'onboarding')
+        OR (ec.employment_end_date IS NOT NULL
+            AND ec.employment_end_date >= ${month_start}::date)
+      )
       AND (ec.hire_date IS NULL OR ec.hire_date <= ${month_end}::date)
       AND (ec.employment_end_date IS NULL OR ec.employment_end_date >= ${month_start}::date)
   `);
@@ -535,12 +544,13 @@ export async function listUtilizationConsultantsForMonth(
         overbook_pct: fmt(load.util_ratio.sub(ONE).mul(100), 2),
       });
     } else if (load.util_ratio.lt(ONE)) {
-      // Bench-since only makes sense for FULL bench. Partial bench
-      // (0 < util < 1) means they're allocated to something now;
-      // surfacing a "since" date there is misleading.
+      // Bench-since only makes sense for FULL bench, and only when looking
+      // at the CURRENT month — it counts days against today, which is
+      // meaningless for a historical month.
+      const is_current_month = monthYm === todayIso.slice(0, 7);
       let bench_since_date: string | null = null;
       let bench_since_days: number | null = null;
-      if (load.weighted_alloc.eq(0)) {
+      if (load.weighted_alloc.eq(0) && is_current_month) {
         bench_since_date = await lastAssignmentEndBefore(
           emp.employee_id,
           todayIso,

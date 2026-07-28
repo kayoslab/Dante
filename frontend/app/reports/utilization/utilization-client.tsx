@@ -141,10 +141,12 @@ export function UtilizationClient() {
           <BenchedList
             data={monthQuery.data?.benched ?? []}
             loading={monthQuery.isLoading}
+            monthText={month === todayMonth ? null : monthLabel(month)}
           />
           <OverbookedList
             data={monthQuery.data?.overbooked ?? []}
             loading={monthQuery.isLoading}
+            monthText={month === todayMonth ? null : monthLabel(month)}
           />
         </CardContent>
       </Card>
@@ -449,19 +451,23 @@ function GroupRollup({
 function BenchedList({
   data,
   loading,
+  monthText,
 }: {
   data: NonNullable<ReturnType<typeof useUtilizationMonth>["data"]>["benched"];
   loading: boolean;
+  /** null = current month ("Currently benched"); else the month label. */
+  monthText: string | null;
 }) {
+  const title = monthText === null ? "Currently benched" : `Benched in ${monthText}`;
   if (loading) return <Skeleton className="h-32 w-full" />;
   if (data.length === 0) {
     return (
       <section>
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Currently benched
+          {title}
         </h3>
         <p className="text-sm text-muted-foreground">
-          Nobody is fully or partially benched this month.
+          Nobody was fully or partially benched this month.
         </p>
       </section>
     );
@@ -469,7 +475,7 @@ function BenchedList({
   return (
     <section>
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Currently benched · {data.length} consultant{data.length === 1 ? "" : "s"}
+        {title} · {data.length} consultant{data.length === 1 ? "" : "s"}
       </h3>
       <div className="overflow-x-auto rounded-md border bg-background">
         <table className="w-full text-sm">
@@ -558,21 +564,26 @@ function BenchedList({
 function OverbookedList({
   data,
   loading,
+  monthText,
 }: {
   data: NonNullable<
     ReturnType<typeof useUtilizationMonth>["data"]
   >["overbooked"];
   loading: boolean;
+  /** null = current month ("Currently overbooked"); else the month label. */
+  monthText: string | null;
 }) {
+  const title =
+    monthText === null ? "Currently overbooked" : `Overbooked in ${monthText}`;
   if (loading) return null;
   if (data.length === 0) {
     return (
       <section>
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Currently overbooked
+          {title}
         </h3>
         <p className="text-sm text-muted-foreground">
-          Nobody is allocated above 100% this month.
+          Nobody was allocated above 100% this month.
         </p>
       </section>
     );
@@ -580,7 +591,7 @@ function OverbookedList({
   return (
     <section>
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Currently overbooked · {data.length} consultant
+        {title} · {data.length} consultant
         {data.length === 1 ? "" : "s"}
       </h3>
       <div className="overflow-x-auto rounded-md border bg-background">

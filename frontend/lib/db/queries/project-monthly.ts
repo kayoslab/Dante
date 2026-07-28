@@ -108,7 +108,16 @@ export async function listUnallocatedPayrollEmployees(
       -- Include onboarding (future-start) hires; the hire_date window scopes
       -- them to months they've started (a future hire only appears from their
       -- start month, not the current one).
-      AND ec.status IN ('active', 'onboarding')
+      --
+      -- ALSO include since-departed employees whose contract covered this
+      -- month — otherwise a past month's loaded payroll excludes leavers'
+      -- salaries while revenue still includes the work they delivered,
+      -- overstating that month's margin.
+      AND (
+        ec.status IN ('active', 'onboarding')
+        OR (ec.employment_end_date IS NOT NULL
+            AND ec.employment_end_date >= ${month_start}::date)
+      )
       AND (ec.hire_date IS NULL OR ec.hire_date <= ${month_end}::date)
       AND (ec.employment_end_date IS NULL OR ec.employment_end_date >= ${month_start}::date)
   `);
