@@ -24,7 +24,7 @@ import {
   holidaysForYearOf,
   lastOfMonth,
   projectTotalWeightedAllocInMonth,
-  resolveRateForDay,
+  loadRateResolver,
   trackedMinutesByProjectForEmployee,
   workingDaysInRange,
 } from "../_monthly-helpers";
@@ -259,21 +259,22 @@ export async function computeEmployeeMonthly(
     let resolved_rate_sum = new Decimal(0);
     let resolved_rate_days = 0;
     if (billing === "time_and_material") {
+      // Rates preloaded once per assignment instead of 1–2 queries per day.
+      const resolveRate = await loadRateResolver(project_id, framework_id);
       for (const day of active_days) {
-        if (absences.has(day)) continue;
-        const r = await resolveRateForDay(
-          project_id,
-          framework_id,
-          effective_profile,
-          day,
-          rate_ov,
-        );
+        // Fraction of the day actually workable — a half-day absence still
+        // bills half the committed allocation (mirrors project-monthly).
+        const workable = 1 - (absences.get(day) ?? 0);
+        if (workable <= 0) continue;
+        const r = resolveRate(effective_profile, day, rate_ov);
         if (r !== null) {
           // `allocation_pct` is a fraction of full-time, so a day's
           // committed billing = rate × alloc (an 88%-contract consultant
           // fully booked → alloc 0.875 → bills 7h of an 8h day). No extra
           // × fte — that would double-discount part-timers.
-          allocation_revenue = allocation_revenue.add(r.mul(alloc));
+          allocation_revenue = allocation_revenue.add(
+            r.mul(alloc).mul(workable),
+          );
           resolved_rate_sum = resolved_rate_sum.add(r);
           resolved_rate_days++;
         } else {

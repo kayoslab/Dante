@@ -3,6 +3,7 @@ import {
   boolean,
   date,
   doublePrecision,
+  index,
   integer,
   pgTable,
   text,
@@ -13,19 +14,30 @@ import { project } from "./billing";
 
 // Time-off / absence records from Personio /company/time-offs. Sync replaces
 // rows within the synced date window (no soft delete).
-export const absence = pgTable("absence", {
-  absence_id: bigint({ mode: "number" }).primaryKey(),
-  employee_id: integer().notNull(),
-  time_off_type: text(),
-  start_date: date({ mode: "string" }).notNull(),
-  end_date: date({ mode: "string" }).notNull(),
-  half_day_start: boolean(),
-  half_day_end: boolean(),
-  days_count: doublePrecision(),
-  status: text(),
-  comment: text(),
-  last_seen_sync_run_id: integer().notNull(),
-});
+export const absence = pgTable(
+  "absence",
+  {
+    absence_id: bigint({ mode: "number" }).primaryKey(),
+    employee_id: integer().notNull(),
+    time_off_type: text(),
+    start_date: date({ mode: "string" }).notNull(),
+    end_date: date({ mode: "string" }).notNull(),
+    half_day_start: boolean(),
+    half_day_end: boolean(),
+    days_count: doublePrecision(),
+    status: text(),
+    comment: text(),
+    last_seen_sync_run_id: integer().notNull(),
+  },
+  (t) => [
+    // Every report engine looks up absences per (employee, date window).
+    index("absence_employee_dates_idx").on(
+      t.employee_id,
+      t.start_date,
+      t.end_date,
+    ),
+  ],
+);
 
 // Booked hours from Personio v2 /attendance-periods. project_id refers to
 // personio_project, not our internal project table.
@@ -39,26 +51,37 @@ export const absence = pgTable("absence", {
 // all `SUM(duration_minutes) GROUP BY employee_id, work_date[, project_id]`.
 // `start_time`/`end_time` now hold RFC3339 datetimes (not "HH:MM");
 // `break_minutes` is retained but unused (null) in v2.
-export const attendance = pgTable("attendance", {
-  attendance_id: text().primaryKey(),
-  employee_id: integer().notNull(),
-  work_date: date({ mode: "string" }).notNull(),
-  start_time: text(),
-  end_time: text(),
-  break_minutes: integer(),
-  duration_minutes: integer(),
-  project_id: text(),
-  // v2 approval.status: PENDING / CONFIRMED / REJECTED. Captured for
-  // future use, NOT yet consumed — this tenant auto-grants approval, so
-  // every period is CONFIRMED today and the hour rollups deliberately
-  // ignore status (count everything). Kept persisted so a later
-  // "confirmed-only" or "drop rejected" view has the data without a
-  // backfill. Do not prune as an unused column.
-  status: text(),
-  // v2 updated_at — drives the incremental (updated_at.gte) delta sync.
-  updated_at: timestamp({ mode: "date" }),
-  last_seen_sync_run_id: integer().notNull(),
-});
+export const attendance = pgTable(
+  "attendance",
+  {
+    attendance_id: text().primaryKey(),
+    employee_id: integer().notNull(),
+    work_date: date({ mode: "string" }).notNull(),
+    start_time: text(),
+    end_time: text(),
+    break_minutes: integer(),
+    duration_minutes: integer(),
+    project_id: text(),
+    // v2 approval.status: PENDING / CONFIRMED / REJECTED. Captured for
+    // future use, NOT yet consumed — this tenant auto-grants approval, so
+    // every period is CONFIRMED today and the hour rollups deliberately
+    // ignore status (count everything). Kept persisted so a later
+    // "confirmed-only" or "drop rejected" view has the data without a
+    // backfill. Do not prune as an unused column.
+    status: text(),
+    // v2 updated_at — drives the incremental (updated_at.gte) delta sync.
+    updated_at: timestamp({ mode: "date" }),
+    last_seen_sync_run_id: integer().notNull(),
+  },
+  (t) => [
+    // The largest, hottest report table (grows daily): every tracked-hours
+    // rollup filters by date window, per-employee lookups add employee_id,
+    // and the picker/linking views count by project.
+    index("attendance_employee_date_idx").on(t.employee_id, t.work_date),
+    index("attendance_date_idx").on(t.work_date),
+    index("attendance_project_idx").on(t.project_id),
+  ],
+);
 
 // Personio's own "Projects" dropdown that consultants pick when logging time.
 // v2 /projects ids are strings (e.g. "1234"), so the PK is text — matching

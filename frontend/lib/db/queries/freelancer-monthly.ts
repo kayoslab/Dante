@@ -26,7 +26,7 @@ import {
   holidaysForYearOf,
   lastOfMonth,
   projectTotalWeightedAllocInMonth,
-  resolveRateForDay,
+  loadRateResolver,
   workingDaysInRange,
 } from "../_monthly-helpers";
 
@@ -146,14 +146,10 @@ export async function computeFreelancerMonthly(
     let revenue = new Decimal(0);
     let rate_unresolved_days = 0;
     if (billing === "time_and_material") {
+      // Rates preloaded once per assignment instead of 1–2 queries per day.
+      const resolveRate = await loadRateResolver(project_id, framework_id);
       for (const day of active_days) {
-        const r2 = await resolveRateForDay(
-          project_id,
-          framework_id,
-          profile,
-          day,
-          rate_ov,
-        );
+        const r2 = resolveRate(profile, day, rate_ov);
         if (r2 !== null) {
           revenue = revenue.add(r2.mul(alloc));
         } else {

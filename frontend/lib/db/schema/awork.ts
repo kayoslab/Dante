@@ -2,6 +2,7 @@ import {
   bigint,
   boolean,
   date,
+  index,
   integer,
   numeric,
   pgTable,
@@ -73,23 +74,34 @@ export const aworkProject = pgTable("awork_project", {
 
 // One row per logged time entry. duration_minutes derived from
 // duration_seconds for compatibility with Personio attendance semantics.
-export const aworkTimeEntry = pgTable("awork_time_entry", {
-  awork_time_entry_id: text().primaryKey(),
-  awork_user_id: text(),
-  awork_project_id: text(),
-  awork_task_id: text(),
-  work_date: date({ mode: "string" }),
-  duration_seconds: integer(),
-  duration_minutes: integer(),
-  is_billable: boolean(),
-  is_billed: boolean(),
-  note: text(),
-  type_of_work_id: text(),
-  type_of_work_name: text(),
-  start_date_utc: timestamp({ mode: "date" }),
-  end_date_utc: timestamp({ mode: "date" }),
-  last_seen_sync_run_id: integer(),
-});
+export const aworkTimeEntry = pgTable(
+  "awork_time_entry",
+  {
+    awork_time_entry_id: text().primaryKey(),
+    awork_user_id: text(),
+    awork_project_id: text(),
+    awork_task_id: text(),
+    work_date: date({ mode: "string" }),
+    duration_seconds: integer(),
+    duration_minutes: integer(),
+    is_billable: boolean(),
+    is_billed: boolean(),
+    note: text(),
+    type_of_work_id: text(),
+    type_of_work_name: text(),
+    start_date_utc: timestamp({ mode: "date" }),
+    end_date_utc: timestamp({ mode: "date" }),
+    last_seen_sync_run_id: integer(),
+  },
+  (t) => [
+    // Sibling of the attendance indexes: tracked-hours rollups filter by
+    // date window, the awork-day dedup probes (user, date), project views
+    // aggregate by project.
+    index("awork_time_entry_user_date_idx").on(t.awork_user_id, t.work_date),
+    index("awork_time_entry_date_idx").on(t.work_date),
+    index("awork_time_entry_project_idx").on(t.awork_project_id),
+  ],
+);
 
 // awork "time bookings" — the entries rendered on awork's Planner page.
 // One row per (user, project, date range) planning entry. Project-only

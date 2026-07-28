@@ -39,7 +39,7 @@ import {
   projectFuturePlannedHours,
   projectHasTimeMapping,
   projectTrackedHoursThrough,
-  resolveRateForDay,
+  loadRateResolver,
   shiftDay,
   trackedMinutesPerEmployeeInMonth,
   unassignedTrackedForProject,
@@ -169,6 +169,9 @@ export async function computeProjectMonthly(
       ? null
       : new Decimal(projRow.agreed_amount_eur as string);
   const framework_id = (projRow.framework_id as number | null) ?? null;
+  // Rates preloaded once per project — the per-day resolver cost 1–2 queries
+  // per assignment per working day, dominating portfolio/rentability latency.
+  const resolveRate = await loadRateResolver(project_id, framework_id);
   const planned_start = (projRow.planned_start_date as string | null) ?? null;
   const planned_end = (projRow.planned_end_date as string | null) ?? null;
   const time_budget_hours =
@@ -381,13 +384,7 @@ export async function computeProjectMonthly(
         // bills half the committed allocation for that day.
         const workable = 1 - (absence_map.get(day) ?? 0);
         if (workable <= 0) continue;
-        const r = await resolveRateForDay(
-          project_id,
-          framework_id,
-          effective_profile,
-          day,
-          rate_ov,
-        );
+        const r = resolveRate(effective_profile, day, rate_ov);
         if (r !== null) {
           // `allocation_pct` is a fraction of full-time, so committed
           // billing = rate × alloc (a fully-booked 88% consultant → alloc

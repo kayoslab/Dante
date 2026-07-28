@@ -133,7 +133,12 @@ export const assignment = pgTable("assignment", {
   source: text().notNull().default("manual"),
   created_at: timestamp({ mode: "date" }).notNull(),
   updated_at: timestamp({ mode: "date" }).notNull(),
-});
+},
+(t) => [
+  // Every allocation helper filters per employee; project views per project.
+  index("assignment_employee_idx").on(t.employee_id),
+  index("assignment_project_idx").on(t.project_id),
+]);
 
 // Monthly hours actually worked by a freelancer on a project, for
 // profitability calc. SDM enters the number from the freelancer's

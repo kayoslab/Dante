@@ -2,6 +2,7 @@ import {
   boolean,
   date,
   doublePrecision,
+  index,
   integer,
   jsonb,
   numeric,
@@ -66,21 +67,31 @@ export const team = pgTable("team", {
 // Per-component compensation from Personio v2 Compensations API. Current
 // state per component, not change history. See db.py for full notes on
 // categories (FIXED_SALARY / RECURRING / HOURLY_SALARY / ONE_TIME).
-export const compensationEvent = pgTable("compensation_event", {
-  compensation_id: text().primaryKey(),
-  employee_id: integer().notNull(),
-  effective_from: date({ mode: "string" }),
-  amount_value: numeric({ precision: 12, scale: 2 }),
-  amount_currency: text(),
-  interval: text(),
-  category: text(),
-  type_name: text(),
-  legal_entity_id: text(),
-  weekly_working_hours: doublePrecision(),
-  full_time_weekly_working_hours: doublePrecision(),
-  last_seen_sync_run_id: integer().notNull(),
-  last_updated_at: timestamp({ mode: "date" }).notNull(),
-});
+export const compensationEvent = pgTable(
+  "compensation_event",
+  {
+    compensation_id: text().primaryKey(),
+    employee_id: integer().notNull(),
+    effective_from: date({ mode: "string" }),
+    amount_value: numeric({ precision: 12, scale: 2 }),
+    amount_currency: text(),
+    interval: text(),
+    category: text(),
+    type_name: text(),
+    legal_entity_id: text(),
+    weekly_working_hours: doublePrecision(),
+    full_time_weekly_working_hours: doublePrecision(),
+    last_seen_sync_run_id: integer().notNull(),
+    last_updated_at: timestamp({ mode: "date" }).notNull(),
+  },
+  (t) => [
+    // The as-of salary LATERAL runs once per employee per report month.
+    index("compensation_event_employee_from_idx").on(
+      t.employee_id,
+      t.effective_from,
+    ),
+  ],
+);
 
 // Forward-built salary change log: sync_compensations appends a row each
 // time the (effective_from, amount) pair changes vs the prior snapshot.

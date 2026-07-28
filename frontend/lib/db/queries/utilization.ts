@@ -385,81 +385,8 @@ export type RealizedBillableUtil = {
   by_role_tier: BillableUtilGroup[];
 };
 
-export async function computeRealizedBillableUtilForMonth(
-  monthYm: string,
-): Promise<RealizedBillableUtil> {
-  const ctx = await loadMonthContext(monthYm);
-  const employees = await listEligibleEmployees(ctx.month_start, ctx.month_end);
-  const available = await getAvailableHoursForEmployees(
-    employees.map((e) => e.employee_id),
-    ctx.month_start,
-    ctx.month_end,
-  );
-  const tracked = await getTrackedHoursForMonth({
-    month_start: ctx.month_start,
-    month_end: ctx.month_end,
-    team: null,
-  });
-  const billableByEmp = new Map(
-    tracked.map((t) => [t.employee_id, t.b_min / 60]),
-  );
-
-  type Acc = { a: number; b: number; loaded: Decimal; rbench: Decimal };
-  const mk = (): Acc => ({
-    a: 0,
-    b: 0,
-    loaded: new Decimal(0),
-    rbench: new Decimal(0),
-  });
-  const totals = mk();
-  const teamMap = new Map<string, Acc>();
-  const tierMap = new Map<string, Acc>();
-  for (const emp of employees) {
-    const a = available.get(emp.employee_id) ?? 0;
-    const b = billableByEmp.get(emp.employee_id) ?? 0;
-    // Same prorated loaded cost the booking-based Bench cost uses, so the
-    // two EUR figures differ only in their utilization basis. Employees
-    // without a salary on file contribute hours but no cost — matching the
-    // booked side, which skips them entirely.
-    const load = await computeEmployeeLoad(emp, ctx);
-    let loaded = new Decimal(0);
-    let rbench = new Decimal(0);
-    if (load !== null) {
-      loaded = load.loaded_cost;
-      const realizedShare = a > 0 ? Math.min(b / a, 1) : 0;
-      rbench = loaded.mul(1 - realizedShare);
-    }
-    const fold = (acc: Acc) => {
-      acc.a += a;
-      acc.b += b;
-      acc.loaded = acc.loaded.add(loaded);
-      acc.rbench = acc.rbench.add(rbench);
-    };
-    fold(totals);
-    const teamKey = emp.team ?? "(no team)";
-    const t = teamMap.get(teamKey) ?? mk();
-    fold(t);
-    teamMap.set(teamKey, t);
-    const tierKey = emp.role_tier ?? "(unset)";
-    const r = tierMap.get(tierKey) ?? mk();
-    fold(r);
-    tierMap.set(tierKey, r);
-  }
-  const toGroup = (key: string, acc: Acc): BillableUtilGroup => ({
-    key,
-    available_h: Number(acc.a.toFixed(1)),
-    billable_h: Number(acc.b.toFixed(1)),
-    billable_util_pct:
-      acc.a > 0 ? Number(((acc.b / acc.a) * 100).toFixed(1)) : null,
-    loaded_cost: fmt(acc.loaded, 2),
-    realized_bench_cost: fmt(acc.rbench, 2),
-  });
-  return {
-    totals: toGroup("__total__", totals),
-    by_team: Array.from(teamMap, ([k, g]) => toGroup(k, g)),
-    by_role_tier: Array.from(tierMap, ([k, g]) => toGroup(k, g)),
-  };
-}
+// (Computed inside `computeUtilizationMonthDetail` below — one employee pass
+// produces both the consultant lists and these aggregates.)
 
 // ---------------------------------------------------------------------------
 // Public API: selected-month consultant lists (benched + overbooked)
@@ -514,20 +441,90 @@ function daysBetween(fromIso: string, toIso: string): number {
 export type UtilizationMonthDetail = {
   benched: BenchedConsultant[];
   overbooked: OverbookedConsultant[];
+  /** Realized billable utilization + realized bench cost aggregates; null
+   * for fully-future months (nothing tracked yet). */
+  billable_util: RealizedBillableUtil | null;
 };
 
-export async function listUtilizationConsultantsForMonth(
+/** Single-pass month detail: benched/overbooked lists AND the realized
+ * billable-util aggregates from ONE per-employee load computation. These
+ * used to be two separate functions that each ran computeEmployeeLoad
+ * (salary + absences + allocation queries) per employee per request —
+ * doubling the month route's query count. */
+export async function computeUtilizationMonthDetail(
   monthYm: string,
   todayIso: string,
 ): Promise<UtilizationMonthDetail> {
   const ctx = await loadMonthContext(monthYm);
   const employees = await listEligibleEmployees(ctx.month_start, ctx.month_end);
+  const is_future = ctx.month_start > todayIso;
+  // Tracked-side inputs — skipped entirely for future months.
+  const available = is_future
+    ? new Map<number, number>()
+    : await getAvailableHoursForEmployees(
+        employees.map((e) => e.employee_id),
+        ctx.month_start,
+        ctx.month_end,
+      );
+  const tracked = is_future
+    ? []
+    : await getTrackedHoursForMonth({
+        month_start: ctx.month_start,
+        month_end: ctx.month_end,
+        team: null,
+      });
+  const billableByEmp = new Map(
+    tracked.map((t) => [t.employee_id, t.b_min / 60]),
+  );
 
   const benched: BenchedConsultant[] = [];
   const overbooked: OverbookedConsultant[] = [];
 
+  type Acc = { a: number; b: number; loaded: Decimal; rbench: Decimal };
+  const mk = (): Acc => ({
+    a: 0,
+    b: 0,
+    loaded: new Decimal(0),
+    rbench: new Decimal(0),
+  });
+  const totals = mk();
+  const teamMap = new Map<string, Acc>();
+  const tierMap = new Map<string, Acc>();
+
   for (const emp of employees) {
     const load = await computeEmployeeLoad(emp, ctx);
+
+    if (!is_future) {
+      const a = available.get(emp.employee_id) ?? 0;
+      const b = billableByEmp.get(emp.employee_id) ?? 0;
+      // Same prorated loaded cost the booking-based Bench cost uses, so the
+      // two EUR figures differ only in their utilization basis. Employees
+      // without a salary on file contribute hours but no cost — matching
+      // the booked side, which skips them entirely.
+      let loaded = new Decimal(0);
+      let rbench = new Decimal(0);
+      if (load !== null) {
+        loaded = load.loaded_cost;
+        const realizedShare = a > 0 ? Math.min(b / a, 1) : 0;
+        rbench = loaded.mul(1 - realizedShare);
+      }
+      const fold = (acc: Acc) => {
+        acc.a += a;
+        acc.b += b;
+        acc.loaded = acc.loaded.add(loaded);
+        acc.rbench = acc.rbench.add(rbench);
+      };
+      fold(totals);
+      const teamKey = emp.team ?? "(no team)";
+      const t = teamMap.get(teamKey) ?? mk();
+      fold(t);
+      teamMap.set(teamKey, t);
+      const tierKey = emp.role_tier ?? "(unset)";
+      const r = tierMap.get(tierKey) ?? mk();
+      fold(r);
+      tierMap.set(tierKey, r);
+    }
+
     if (load === null) continue;
 
     const who_name = `${emp.first_name ?? ""} ${emp.last_name ?? ""}`.trim();
@@ -579,7 +576,24 @@ export async function listUtilizationConsultantsForMonth(
   benched.sort((a, b) => Number(b.unallocated_cost) - Number(a.unallocated_cost));
   overbooked.sort((a, b) => Number(b.overbook_pct) - Number(a.overbook_pct));
 
-  return { benched, overbooked };
+  const toGroup = (key: string, acc: Acc): BillableUtilGroup => ({
+    key,
+    available_h: Number(acc.a.toFixed(1)),
+    billable_h: Number(acc.b.toFixed(1)),
+    billable_util_pct:
+      acc.a > 0 ? Number(((acc.b / acc.a) * 100).toFixed(1)) : null,
+    loaded_cost: fmt(acc.loaded, 2),
+    realized_bench_cost: fmt(acc.rbench, 2),
+  });
+  const billable_util: RealizedBillableUtil | null = is_future
+    ? null
+    : {
+        totals: toGroup("__total__", totals),
+        by_team: Array.from(teamMap, ([k, g]) => toGroup(k, g)),
+        by_role_tier: Array.from(tierMap, ([k, g]) => toGroup(k, g)),
+      };
+
+  return { benched, overbooked, billable_util };
 }
 
 // ---------------------------------------------------------------------------

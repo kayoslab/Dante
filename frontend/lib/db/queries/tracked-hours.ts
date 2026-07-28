@@ -38,8 +38,9 @@ import { sql } from "drizzle-orm";
 
 import { db } from "../client";
 import {
+  absenceRowsForEmployees,
   absenceWeightOverDays,
-  absencesForEmployee,
+  expandAbsenceRows,
   holidaysForYearOf,
   workingDaysInRange,
 } from "../_monthly-helpers";
@@ -193,6 +194,12 @@ export async function getAvailableHoursForEmployees(
   `);
   const year = Number(month_start.slice(0, 4));
   const federalHolidays = holidaysForYearOf(month_start);
+  // One query for every employee's absences instead of one per employee.
+  const absenceRows = await absenceRowsForEmployees(
+    employee_ids,
+    month_start,
+    month_end,
+  );
   for (const raw of r.rows as Array<Record<string, unknown>>) {
     const emp_id = raw.employee_id as number;
     const wkh =
@@ -215,8 +222,8 @@ export async function getAvailableHoursForEmployees(
       out.set(emp_id, 0);
       continue;
     }
-    const [allAbs] = await absencesForEmployee(
-      emp_id,
+    const [allAbs] = expandAbsenceRows(
+      absenceRows.get(emp_id) ?? [],
       month_start,
       month_end,
       holidays,

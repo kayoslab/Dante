@@ -426,6 +426,70 @@ export async function resolveRateForDay(
   return null;
 }
 
+export type RateResolver = (
+  profile: string | null,
+  day: string,
+  rate_override: Decimal | null,
+) => Decimal | null;
+
+/** Preloaded, in-memory variant of `resolveRateForDay`. The per-day variant
+ * costs one or two queries PER DAY per assignment — the single biggest
+ * query-count driver in the project engines (portfolio, customer
+ * rentability, and home run them for every active project). The rate tables
+ * hold a handful of rows per project, so load them once and resolve in
+ * memory with identical precedence: override > project rate (latest
+ * valid_from ≤ day) > framework rate. */
+export async function loadRateResolver(
+  project_id: number,
+  framework_id: number | null,
+): Promise<RateResolver> {
+  const pr = await db.execute(sql`
+    SELECT profile, valid_from::text AS vf, daily_rate_eur
+    FROM project_rate WHERE project_id = ${project_id}
+  `);
+  const fr =
+    framework_id === null
+      ? { rows: [] as Array<Record<string, unknown>> }
+      : await db.execute(sql`
+          SELECT profile, valid_from::text AS vf, daily_rate_eur
+          FROM framework_rate WHERE framework_id = ${framework_id}
+        `);
+  type R = { vf: string; rate: Decimal };
+  const group = (rows: Array<Record<string, unknown>>): Map<string, R[]> => {
+    const m = new Map<string, R[]>();
+    for (const r of rows) {
+      const key = r.profile as string;
+      const arr = m.get(key) ?? [];
+      arr.push({
+        vf: r.vf as string,
+        rate: new Decimal(r.daily_rate_eur as string),
+      });
+      m.set(key, arr);
+    }
+    // Sort valid_from DESC so the first entry ≤ day is the latest one —
+    // mirrors the ORDER BY valid_from DESC LIMIT 1 in resolveRateForDay.
+    for (const arr of m.values()) arr.sort((a, b) => (a.vf < b.vf ? 1 : -1));
+    return m;
+  };
+  const prMap = group(pr.rows as Array<Record<string, unknown>>);
+  const frMap = group(fr.rows as Array<Record<string, unknown>>);
+  const pick = (
+    m: Map<string, R[]>,
+    profile: string,
+    day: string,
+  ): Decimal | null => {
+    const arr = m.get(profile);
+    if (!arr) return null;
+    for (const r of arr) if (r.vf <= day) return r.rate;
+    return null;
+  };
+  return (profile, day, rate_override) => {
+    if (rate_override !== null) return rate_override;
+    if (!profile) return null;
+    return pick(prMap, profile, day) ?? pick(frMap, profile, day);
+  };
+}
+
 // ----------------------------------------------------------------------------
 // Absences (paid + unpaid sets of workdays)
 // ----------------------------------------------------------------------------
@@ -467,6 +531,85 @@ export function totalAbsenceWeight(weights: AbsenceWeights): number {
   return sum;
 }
 
+export type AbsenceRow = {
+  start_date: string;
+  end_date: string;
+  time_off_type: string | null;
+  half_day_start: boolean;
+  half_day_end: boolean;
+};
+
+/** Pure expansion of absence records into weighted day maps — see
+ * `absencesForEmployee` for the semantics. Split out so bulk callers can
+ * fetch all employees' rows in ONE query and expand per employee. */
+export function expandAbsenceRows(
+  rows: AbsenceRow[],
+  month_start: string,
+  month_end: string,
+  holidays: Map<string, string>,
+): [AbsenceWeights, AbsenceWeights] {
+  const all_abs: AbsenceWeights = new Map();
+  const unpaid: AbsenceWeights = new Map();
+  for (const row of rows) {
+    const s = row.start_date;
+    const e = row.end_date;
+    const is_unpaid = isUnpaidTimeOffType(row.time_off_type);
+    let cur = s > month_start ? s : month_start;
+    const end = e < month_end ? e : month_end;
+    while (cur <= end) {
+      const d = new Date(cur + "T00:00:00Z").getUTCDay();
+      if (d !== 0 && d !== 6 && !holidays.has(cur)) {
+        let w = 1;
+        if (cur === s && row.half_day_start) w -= 0.5;
+        if (cur === e && row.half_day_end) w -= 0.5;
+        // Single-day record with both flags: still half a day, not zero.
+        if (w <= 0) w = 0.5;
+        if (w > (all_abs.get(cur) ?? 0)) all_abs.set(cur, w);
+        if (is_unpaid && w > (unpaid.get(cur) ?? 0)) unpaid.set(cur, w);
+      }
+      cur = shiftDay(cur, 1);
+    }
+  }
+  return [all_abs, unpaid];
+}
+
+/** All absence records overlapping the window for a SET of employees, in one
+ * query, grouped by employee. Pair with `expandAbsenceRows` — replaces the
+ * per-employee N+1 in bulk paths (availability, month rosters). */
+export async function absenceRowsForEmployees(
+  employee_ids: number[],
+  month_start: string,
+  month_end: string,
+): Promise<Map<number, AbsenceRow[]>> {
+  const out = new Map<number, AbsenceRow[]>();
+  if (employee_ids.length === 0) return out;
+  const idList = sql.join(
+    employee_ids.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const r = await db.execute(sql`
+    SELECT employee_id, start_date, end_date, time_off_type,
+           half_day_start, half_day_end
+    FROM absence
+    WHERE employee_id IN (${idList})
+      AND start_date <= ${month_end}::date
+      AND end_date >= ${month_start}::date
+  `);
+  for (const raw of r.rows as Array<Record<string, unknown>>) {
+    const id = raw.employee_id as number;
+    const arr = out.get(id) ?? [];
+    arr.push({
+      start_date: raw.start_date as string,
+      end_date: raw.end_date as string,
+      time_off_type: (raw.time_off_type as string | null) ?? null,
+      half_day_start: raw.half_day_start === true,
+      half_day_end: raw.half_day_end === true,
+    });
+    out.set(id, arr);
+  }
+  return out;
+}
+
 /** Returns [all_absences, unpaid_absences] — weighted day maps (YYYY-MM-DD →
  * absent fraction) over weekdays inside [month_start, month_end], excluding
  * holidays. Personio half-days weigh 0.5: the first day of a span when
@@ -479,39 +622,17 @@ export async function absencesForEmployee(
   month_end: string,
   holidays: Map<string, string>,
 ): Promise<[AbsenceWeights, AbsenceWeights]> {
-  const all_abs: AbsenceWeights = new Map();
-  const unpaid: AbsenceWeights = new Map();
-  const r = await db.execute(sql`
-    SELECT start_date, end_date, time_off_type, half_day_start, half_day_end
-    FROM absence
-    WHERE employee_id = ${employee_id}
-      AND start_date <= ${month_end}::date
-      AND end_date >= ${month_start}::date
-  `);
-  for (const raw of r.rows as Array<Record<string, unknown>>) {
-    const s = raw.start_date as string;
-    const e = raw.end_date as string;
-    const type_name = raw.time_off_type as string | null;
-    const half_start = raw.half_day_start === true;
-    const half_end = raw.half_day_end === true;
-    const is_unpaid = isUnpaidTimeOffType(type_name);
-    let cur = s > month_start ? s : month_start;
-    const end = e < month_end ? e : month_end;
-    while (cur <= end) {
-      const d = new Date(cur + "T00:00:00Z").getUTCDay();
-      if (d !== 0 && d !== 6 && !holidays.has(cur)) {
-        let w = 1;
-        if (cur === s && half_start) w -= 0.5;
-        if (cur === e && half_end) w -= 0.5;
-        // Single-day record with both flags: still half a day, not zero.
-        if (w <= 0) w = 0.5;
-        if (w > (all_abs.get(cur) ?? 0)) all_abs.set(cur, w);
-        if (is_unpaid && w > (unpaid.get(cur) ?? 0)) unpaid.set(cur, w);
-      }
-      cur = shiftDay(cur, 1);
-    }
-  }
-  return [all_abs, unpaid];
+  const rows = await absenceRowsForEmployees(
+    [employee_id],
+    month_start,
+    month_end,
+  );
+  return expandAbsenceRows(
+    rows.get(employee_id) ?? [],
+    month_start,
+    month_end,
+    holidays,
+  );
 }
 
 // ----------------------------------------------------------------------------
