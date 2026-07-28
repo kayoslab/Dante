@@ -158,13 +158,44 @@ export async function monthlyFreelancerCost(monthYm: string): Promise<Decimal> {
     : new Decimal(raw as string);
 }
 
+/** Bounded-concurrency map. `computeProjectMonthly` is internally a chain of
+ * sequential queries; running projects one-by-one made every rentability /
+ * home month view a serial crawl. A small limit keeps the pg pool busy
+ * without unbounded fan-out. Order-preserving. */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        out[i] = await fn(items[i]);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return out;
+}
+
+const PROJECT_CONCURRENCY = 6;
+
 async function sumProjectRevenue(
   projects: ActiveProjectRow[],
   monthYm: string,
 ): Promise<Decimal> {
   let revenue = new Decimal(0);
-  for (const raw of projects) {
-    const breakdown = await computeProjectMonthly(raw.project_id, monthYm);
+  const breakdowns = await mapLimit(projects, PROJECT_CONCURRENCY, (p) =>
+    computeProjectMonthly(p.project_id, monthYm),
+  );
+  for (let i = 0; i < projects.length; i++) {
+    const raw = projects[i];
+    const breakdown = breakdowns[i];
     if (breakdown === null) continue;
     if (breakdown.assignments.length === 0) continue;
     if (raw.billing_model === "time_and_material") {
@@ -309,8 +340,13 @@ export async function computeProjectMonthlyRows(
   const rows: ProjectMonthlyRow[] = [];
   const agg = emptyProjectAgg();
 
-  for (const raw of projects) {
-    const breakdown = await computeProjectMonthly(raw.project_id, monthYm);
+  // Compute all breakdowns with bounded concurrency, then fold in order.
+  const breakdowns = await mapLimit(projects, PROJECT_CONCURRENCY, (p) =>
+    computeProjectMonthly(p.project_id, monthYm),
+  );
+  for (let i = 0; i < projects.length; i++) {
+    const raw = projects[i];
+    const breakdown = breakdowns[i];
     if (breakdown === null) continue;
     const assignments = breakdown.assignments;
     if (assignments.length === 0) continue;

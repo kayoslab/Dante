@@ -541,27 +541,37 @@ function CapacitySection({ capacity }: { capacity: CapacityBreakdown }) {
           </table>
         </div>
 
-        <CapacityBars
-          rows={capacity.by_team}
-          monthLabelText={monthLabel(capacity.months[0]?.month ?? "")}
-        />
+        {capacity.months.map((m, i) => (
+          <CapacityBars
+            key={m.month}
+            rows={capacity.by_team}
+            monthIndex={i}
+            monthLabelText={monthLabel(m.month)}
+            showLegend={i === 0}
+          />
+        ))}
       </CardContent>
     </Card>
   );
 }
 
-/** Stacked bar per team for the current month: Billable / Alloc·NB / Bench /
- * Vacation as % of total capacity. Over-allocation is flagged with a red ring
- * + "+X%" rather than overflowing the track. */
+/** Stacked bar per team for one forecast month: On-project / Bench / Vacation
+ * as % of total capacity. Over-allocation is flagged with a red ring + "+X%"
+ * rather than overflowing the track. Rendered once per forecast month so the
+ * future months show bars too, not just the current one. */
 function CapacityBars({
   rows,
+  monthIndex,
   monthLabelText,
+  showLegend,
 }: {
   rows: CapacityBreakdown["by_team"];
+  monthIndex: number;
   monthLabelText: string;
+  showLegend: boolean;
 }) {
   const withData = rows
-    .map((r) => ({ key: r.key, b: r.months[0] }))
+    .map((r) => ({ key: r.key, b: r.months[monthIndex] }))
     .filter((r) => r.b && r.b.capacity_h > 0);
   if (withData.length === 0) return null;
 
@@ -573,11 +583,13 @@ function CapacityBars({
         <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {monthLabelText} · capacity mix
         </h4>
-        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-          <Legend cls="bg-emerald-500" label="On-project" />
-          <Legend cls="bg-amber-400" label="Bench" />
-          <Legend cls="bg-sky-300" label="Vacation" />
-        </div>
+        {showLegend && (
+          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+            <Legend cls="bg-emerald-500" label="On-project" />
+            <Legend cls="bg-amber-400" label="Bench" />
+            <Legend cls="bg-sky-300" label="Vacation" />
+          </div>
+        )}
       </div>
       <div className="space-y-1.5">
         {withData.map(({ key, b }) => {
