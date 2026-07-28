@@ -80,10 +80,7 @@ export function maxIso(a: string, b: string): string {
   return a > b ? a : b;
 }
 
-export function minIso(
-  a: string | null | undefined,
-  b: string,
-): string {
+export function minIso(a: string | null | undefined, b: string): string {
   if (a === null || a === undefined) return b;
   return a < b ? a : b;
 }
@@ -298,7 +295,7 @@ export async function entityMonthlyCost(
       weekly_working_hours: wkh,
       source: (asofUsed
         ? "compensation_event"
-        : ((fix !== null && fix > 0) || (hourly !== null && hourly > 0))
+        : (fix !== null && fix > 0) || (hourly !== null && hourly > 0)
           ? "employee_current"
           : "none") as "compensation_event" | "employee_current" | "none",
     };
@@ -329,7 +326,10 @@ export async function entityMonthlyCost(
       };
     }
     if (hourly !== null && hourly > 0 && wkh !== null && wkh > 0) {
-      const cost = new Decimal(hourly).mul(wkh).mul(WEEKS_PER_MONTH).mul(burden);
+      const cost = new Decimal(hourly)
+        .mul(wkh)
+        .mul(WEEKS_PER_MONTH)
+        .mul(burden);
       return {
         monthly_cost: cost,
         basis: `hourly ${hourly.toFixed(2)} × ${wkh}h × 52/12 × burden ×${burden}${asofTag}`,
@@ -388,7 +388,9 @@ export async function employeeFte(employee_id: number): Promise<Decimal> {
   const r = await db.execute(sql`
     SELECT weekly_working_hours FROM employee_current WHERE employee_id = ${employee_id}
   `);
-  const row = (r.rows as Array<{ weekly_working_hours: number | string | null }>)[0];
+  const row = (
+    r.rows as Array<{ weekly_working_hours: number | string | null }>
+  )[0];
   return fteFromWeeklyHours(
     row?.weekly_working_hours == null ? null : Number(row.weekly_working_hours),
   );
@@ -424,6 +426,31 @@ export async function resolveRateForDay(
     if (frRow) return new Decimal(frRow.daily_rate_eur);
   }
   return null;
+}
+
+/** Bounded-concurrency, order-preserving map. The report engines are chains
+ * of per-entity awaits (per employee, per project); running them strictly
+ * sequentially made every report a serial crawl. A small limit keeps the pg
+ * pool busy without unbounded fan-out. */
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        out[i] = await fn(items[i]);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return out;
 }
 
 export type RateResolver = (
@@ -676,7 +703,8 @@ export async function employeeWeightedAllocInMonth(
     const a_start = raw.start_date as string;
     const a_end = raw.end_date as string | null;
     const ws = a_start > month_start ? a_start : month_start;
-    const we = a_end === null ? month_end : a_end < month_end ? a_end : month_end;
+    const we =
+      a_end === null ? month_end : a_end < month_end ? a_end : month_end;
     let active = 0;
     for (const d of working_days) {
       if (d >= ws && d <= we && wdSet.has(d)) active++;
@@ -728,7 +756,8 @@ export async function employeeAllocSplitInMonth(
     const a_start = raw.start_date as string;
     const a_end = raw.end_date as string | null;
     const ws = a_start > month_start ? a_start : month_start;
-    const we = a_end === null ? month_end : a_end < month_end ? a_end : month_end;
+    const we =
+      a_end === null ? month_end : a_end < month_end ? a_end : month_end;
     let active = 0;
     for (const d of working_days) {
       if (d >= ws && d <= we && wdSet.has(d)) active++;
@@ -779,7 +808,8 @@ export async function projectTotalWeightedAllocInMonth(
     const a_start = raw.start_date as string;
     const a_end = raw.end_date as string | null;
     const ws = a_start > month_start ? a_start : month_start;
-    const we = a_end === null ? month_end : a_end < month_end ? a_end : month_end;
+    const we =
+      a_end === null ? month_end : a_end < month_end ? a_end : month_end;
     let active = 0;
     for (const d of working_days) {
       if (d >= ws && d <= we) active++;
@@ -1095,7 +1125,12 @@ export async function fpRecognitionThrough(
   planned_end: string | null,
 ): Promise<RecognitionResult> {
   if (agreed_amount === null) {
-    return { cumulative_recognized: null, method: "none", pct_complete_raw: null, over_budget: false };
+    return {
+      cumulative_recognized: null,
+      method: "none",
+      pct_complete_raw: null,
+      over_budget: false,
+    };
   }
 
   if (time_budget_hours !== null && time_budget_hours > 0) {
@@ -1145,7 +1180,12 @@ export async function fpRecognitionThrough(
     };
   }
 
-  return { cumulative_recognized: null, method: "none", pct_complete_raw: null, over_budget: false };
+  return {
+    cumulative_recognized: null,
+    method: "none",
+    pct_complete_raw: null,
+    over_budget: false,
+  };
 }
 
 // ----------------------------------------------------------------------------
@@ -1176,10 +1216,24 @@ export async function fpRecognizedRevenueForMonth(
   const ps = row.planned_start_date as string | null;
   const pe = row.planned_end_date as string | null;
 
-  const now = await fpRecognitionThrough(project_id, month_end, agreed, tbh, ps, pe);
+  const now = await fpRecognitionThrough(
+    project_id,
+    month_end,
+    agreed,
+    tbh,
+    ps,
+    pe,
+  );
   if (now.cumulative_recognized === null) return null;
   const prev_end = shiftDay(month_start, -1);
-  const prev = await fpRecognitionThrough(project_id, prev_end, agreed, tbh, ps, pe);
+  const prev = await fpRecognitionThrough(
+    project_id,
+    prev_end,
+    agreed,
+    tbh,
+    ps,
+    pe,
+  );
   const prev_cum = prev.cumulative_recognized ?? new Decimal(0);
   return now.cumulative_recognized.minus(prev_cum);
 }
@@ -1241,7 +1295,9 @@ export async function trackedMinutesPerEmployeeInMonth(
 // Project has a time-tracking mapping (Personio or awork)
 // ----------------------------------------------------------------------------
 
-export async function projectHasTimeMapping(project_id: number): Promise<boolean> {
+export async function projectHasTimeMapping(
+  project_id: number,
+): Promise<boolean> {
   const r = await db.execute(sql`
     SELECT (
       EXISTS (SELECT 1 FROM personio_project_link WHERE project_id = ${project_id})
@@ -1483,8 +1539,7 @@ export async function unassignedTrackedForProject(
       }
     }
 
-    const margin =
-      billing === "time_and_material" ? revenue.sub(cost) : null;
+    const margin = billing === "time_and_material" ? revenue.sub(cost) : null;
 
     const sources: string[] = [];
     if (Number(raw.has_personio) === 1) sources.push("personio");
@@ -1497,8 +1552,7 @@ export async function unassignedTrackedForProject(
       tracked_hours: `${hours}`,
       tracked_days: days_dec.toFixed(3),
       sources,
-      revenue:
-        billing === "time_and_material" ? revenue.toFixed(2) : null,
+      revenue: billing === "time_and_material" ? revenue.toFixed(2) : null,
       cost: cost.toFixed(2),
       margin: margin === null ? null : margin.toFixed(2),
       rate_unresolved_days,
@@ -1647,12 +1701,14 @@ export async function cumulativeProjectCost(
       if (fl_entered_hours !== undefined) {
         // monthly_cost = daily_cost × 20 (see entityMonthlyCost freelancer
         // branch). cost-per-hour = monthly_cost / (20 × standard_daily_hours).
-        const cost_per_hour = monthly_cost
-          .div(20)
-          .div(standard_daily_hours);
+        const cost_per_hour = monthly_cost.div(20).div(standard_daily_hours);
         total = total.add(cost_per_hour.mul(fl_entered_hours));
       } else if (has_time_mapping && emp_id !== null) {
-        const tm = await trackedMinutesPerEmployeeInMonth(project_id, m_start, m_end);
+        const tm = await trackedMinutesPerEmployeeInMonth(
+          project_id,
+          m_start,
+          m_end,
+        );
         const tracked = tm.get(emp_id) ?? 0;
         if (tracked > 0) {
           const effective_hourly = monthly_cost
@@ -1790,7 +1846,12 @@ export async function cumulativeProjectBurdenedCost(
     // burdened lifetime sum uses today's salary across all months
     // within an assignment. Fix in lock-step with the cumulative
     // cost helper.
-    const { monthly_cost, standard_daily_hours } = await entityMonthlyCost(emp_id, fl_id, cost_ov, burden);
+    const { monthly_cost, standard_daily_hours } = await entityMonthlyCost(
+      emp_id,
+      fl_id,
+      cost_ov,
+      burden,
+    );
     if (monthly_cost === null) continue;
     const a_end_eff =
       a_end !== null && a_end < through_month_end ? a_end : through_month_end;
@@ -1816,9 +1877,7 @@ export async function cumulativeProjectBurdenedCost(
         const fl_hours_key = `${assignment_id}|${m_start.slice(0, 7)}`;
         const fl_entered_hours = freelancerHours.get(fl_hours_key);
         if (fl_entered_hours !== undefined) {
-          const cost_per_hour = monthly_cost
-            .div(20)
-            .div(standard_daily_hours);
+          const cost_per_hour = monthly_cost.div(20).div(standard_daily_hours);
           total = total.add(cost_per_hour.mul(fl_entered_hours));
         }
         // Freelancer with no entered-hours row: contributes 0 — they only

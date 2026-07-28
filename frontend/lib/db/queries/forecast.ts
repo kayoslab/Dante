@@ -9,6 +9,7 @@ import {
   firstOfMonth,
   holidaysForYearOf,
   lastOfMonth,
+  mapWithConcurrency,
   monthCalendarByState,
   workingDaysInRange,
 } from "../_monthly-helpers";
@@ -22,6 +23,8 @@ import {
 } from "../_capacity-model";
 import { roleTierFromAlias } from "../_sql-fragments";
 import { getTrackedHoursForMonth } from "./tracked-hours";
+
+const EMPLOYEE_CONCURRENCY = 6;
 
 // ---------------------------------------------------------------------------
 // Forecast report — engine + shaped read. Manager-only, backs /reports/forecast.
@@ -99,7 +102,8 @@ async function listForecastEligible(
     first_name: (row.first_name as string | null) ?? null,
     last_name: (row.last_name as string | null) ?? null,
     weekly_working_hours:
-      row.weekly_working_hours === null || row.weekly_working_hours === undefined
+      row.weekly_working_hours === null ||
+      row.weekly_working_hours === undefined
         ? null
         : Number(row.weekly_working_hours),
     hire_date: (row.hire_date as string | null) ?? null,
@@ -122,7 +126,13 @@ function monthWindow(monthStart: string): MonthWindow {
   const end = lastOfMonth(monthStart);
   const holidays = holidaysForYearOf(monthStart);
   const wd = workingDaysInRange(monthStart, end, holidays);
-  return { month: monthStart.slice(0, 7), start: monthStart, end, wd, holidays };
+  return {
+    month: monthStart.slice(0, 7),
+    start: monthStart,
+    end,
+    wd,
+    holidays,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +220,11 @@ export type ForecastReport = {
 
 /** Current-month KPIs from that rollup's per-month accumulators. `accs[0]` is
  * the current month; the rest are the forward plan. */
-function toForecastRow(key: string, accs: CapacityAcc[], months: string[]): ForecastRow {
+function toForecastRow(
+  key: string,
+  accs: CapacityAcc[],
+  months: string[],
+): ForecastRow {
   const cur = accs[0];
   return {
     key,
@@ -225,9 +239,13 @@ function toForecastRow(key: string, accs: CapacityAcc[], months: string[]): Fore
     over_h: hrs(cur.over),
     // Denominator is available-to-date so the KPI is trend-comparable on any
     // day of the month (both sides month-to-date).
-    utilization_pct: pct(ratioOrNull(cur.actual_billable, cur.available_to_date)),
+    utilization_pct: pct(
+      ratioOrNull(cur.actual_billable, cur.available_to_date),
+    ),
     bench_pct: pct(ratioOrNull(cur.bench, cur.available)),
-    delivery_pct: pct(ratioOrNull(cur.actual_billable, cur.planned_billable_to_date)),
+    delivery_pct: pct(
+      ratioOrNull(cur.actual_billable, cur.planned_billable_to_date),
+    ),
     next: accs.slice(1).map((a, i) => ({
       month: months[i + 1],
       planned_billable_h: hrs(a.planned_billable),
@@ -256,7 +274,9 @@ function newMonthAccs(n: number): CapacityAcc[] {
 // Engine
 // ---------------------------------------------------------------------------
 
-export async function computeForecast(todayIso: string): Promise<ForecastReport> {
+export async function computeForecast(
+  todayIso: string,
+): Promise<ForecastReport> {
   const currentStart = firstOfMonth(todayIso);
   const windows: MonthWindow[] = [
     monthWindow(currentStart),
@@ -286,7 +306,10 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
     month_end: toDateEnd,
     team: null,
   });
-  const trackedByEmp = new Map<number, { billable: Decimal; nonbillable: Decimal }>();
+  const trackedByEmp = new Map<
+    number,
+    { billable: Decimal; nonbillable: Decimal }
+  >();
   for (const t of tracked) {
     trackedByEmp.set(t.employee_id, {
       billable: new Decimal(t.b_min).div(60),
@@ -300,10 +323,147 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
   const tierMap = new Map<string, CapacityAcc[]>();
   const consultants: ForecastConsultantRow[] = [];
 
-  for (const emp of employees) {
-    const empDailyHours = new Decimal(emp.weekly_working_hours ?? 40).div(5);
-    const tr = trackedByEmp.get(emp.employee_id) ?? { billable: D0, nonbillable: D0 };
+  // The expensive per-employee absence/allocation queries run in parallel;
+  // accumulation into the shared team/tier/total buckets happens in the
+  // sequential fold below, so the accumulator math stays order-stable.
+  const perEmployee = await mapWithConcurrency(
+    employees,
+    EMPLOYEE_CONCURRENCY,
+    async (emp) => {
+      const empDailyHours = new Decimal(emp.weekly_working_hours ?? 40).div(5);
+      const tr = trackedByEmp.get(emp.employee_id) ?? {
+        billable: D0,
+        nonbillable: D0,
+      };
+      const contributions: CapacityContribution[] = [];
 
+      for (let i = 0; i < nMonths; i++) {
+        const w = windows[i];
+        const isCurrent = i === 0;
+        // State-aware calendar for this employee's office (NRW fallback;
+        // federal when office is null) — capacity must not count state
+        // holidays as workable days.
+        const cal = calFors[i](emp.office);
+        const stateWd = cal.working_days;
+
+        // Contract-clip the month's working days to [hire, employment_end].
+        const clipStart =
+          emp.hire_date && emp.hire_date > w.start ? emp.hire_date : w.start;
+        const clipEnd =
+          emp.employment_end_date && emp.employment_end_date < w.end
+            ? emp.employment_end_date
+            : w.end;
+        const contractWd = stateWd.filter(
+          (d) => d >= clipStart && d <= clipEnd,
+        );
+
+        const [allAbs, unpaid] = await absencesForEmployee(
+          emp.employee_id,
+          w.start,
+          w.end,
+          cal.holidays,
+        );
+        // Weighted absence days: Personio half-days count 0.5 (see
+        // absencesForEmployee). Paid vacation weight = all-absence minus the
+        // unpaid share of the same day.
+        let unpaidDays = 0;
+        let paidVacDays = 0;
+        for (const d of contractWd) {
+          const uw = unpaid.get(d) ?? 0;
+          const aw = allAbs.get(d) ?? 0;
+          unpaidDays += uw;
+          paidVacDays += Math.max(aw - uw, 0);
+        }
+        const capacityDays = Math.max(contractWd.length - unpaidDays, 0);
+        const capacity = empDailyHours.mul(capacityDays);
+        const vacation = empDailyHours.mul(paidVacDays);
+
+        // Available capacity TO DATE (current month only): same construction
+        // clipped to elapsed working days. This is the utilization denominator —
+        // month-to-date billable over month-to-date available — so the KPI is
+        // comparable on any day of the month instead of climbing from ~0%.
+        let available_to_date: Decimal | null = null;
+        if (isCurrent) {
+          const contractWdTd = contractWd.filter((d) => d <= toDateEnd);
+          let unpaidTd = 0;
+          let vacTd = 0;
+          for (const d of contractWdTd) {
+            const uw = unpaid.get(d) ?? 0;
+            const aw = allAbs.get(d) ?? 0;
+            unpaidTd += uw;
+            vacTd += Math.max(aw - uw, 0);
+          }
+          const availTdDays = Math.max(
+            contractWdTd.length - unpaidTd - vacTd,
+            0,
+          );
+          available_to_date = empDailyHours.mul(availTdDays);
+        }
+
+        // Planned allocation for the full month, split billable vs total —
+        // weighted and converted to hours on the employee's own calendar.
+        const alloc = await employeeAllocSplitInMonth(
+          emp.employee_id,
+          w.start,
+          w.end,
+          stateWd,
+        );
+        const planned_total = alloc.total
+          .mul(FULL_TIME_DAILY)
+          .mul(stateWd.length);
+        const planned_billable = alloc.billable
+          .mul(FULL_TIME_DAILY)
+          .mul(stateWd.length);
+
+        // Current month: month-to-date actuals + to-date planned (for delivery).
+        let actual_billable = D0;
+        let actual_nonbillable = D0;
+        let planned_billable_to_date = D0;
+        if (isCurrent) {
+          actual_billable = tr.billable;
+          actual_nonbillable = tr.nonbillable;
+          const stateWdToDate = stateWd.filter((d) => d <= toDateEnd);
+          if (stateWdToDate.length > 0) {
+            const allocTd = await employeeAllocSplitInMonth(
+              emp.employee_id,
+              cur.start,
+              toDateEnd,
+              stateWdToDate,
+            );
+            planned_billable_to_date = allocTd.billable
+              .mul(FULL_TIME_DAILY)
+              .mul(stateWdToDate.length);
+          }
+        }
+
+        const buckets = capacityBuckets({
+          capacity,
+          vacation,
+          planned_total,
+          planned_billable,
+          actual_billable,
+        });
+        const contribution: CapacityContribution = {
+          capacity,
+          vacation,
+          planned_total,
+          planned_billable,
+          planned_billable_to_date,
+          actual_billable,
+          actual_nonbillable,
+          // Future months have no "to date" concept — use full available so the
+          // accumulator field is always meaningful.
+          available_to_date: available_to_date ?? buckets.available,
+          buckets,
+        };
+        contributions.push(contribution);
+      }
+      return contributions;
+    },
+  );
+
+  for (const [idx, emp] of employees.entries()) {
+    const contributions = perEmployee[idx];
     const teamKey = emp.team ?? "(no team)";
     const tierKey = emp.role_tier ?? "(unset)";
     const teamAccs = teamMap.get(teamKey) ?? newMonthAccs(nMonths);
@@ -311,119 +471,7 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
     const empAccs = newMonthAccs(nMonths);
 
     for (let i = 0; i < nMonths; i++) {
-      const w = windows[i];
-      const isCurrent = i === 0;
-      // State-aware calendar for this employee's office (NRW fallback;
-      // federal when office is null) — capacity must not count state
-      // holidays as workable days.
-      const cal = calFors[i](emp.office);
-      const stateWd = cal.working_days;
-
-      // Contract-clip the month's working days to [hire, employment_end].
-      const clipStart =
-        emp.hire_date && emp.hire_date > w.start ? emp.hire_date : w.start;
-      const clipEnd =
-        emp.employment_end_date && emp.employment_end_date < w.end
-          ? emp.employment_end_date
-          : w.end;
-      const contractWd = stateWd.filter((d) => d >= clipStart && d <= clipEnd);
-
-      const [allAbs, unpaid] = await absencesForEmployee(
-        emp.employee_id,
-        w.start,
-        w.end,
-        cal.holidays,
-      );
-      // Weighted absence days: Personio half-days count 0.5 (see
-      // absencesForEmployee). Paid vacation weight = all-absence minus the
-      // unpaid share of the same day.
-      let unpaidDays = 0;
-      let paidVacDays = 0;
-      for (const d of contractWd) {
-        const uw = unpaid.get(d) ?? 0;
-        const aw = allAbs.get(d) ?? 0;
-        unpaidDays += uw;
-        paidVacDays += Math.max(aw - uw, 0);
-      }
-      const capacityDays = Math.max(contractWd.length - unpaidDays, 0);
-      const capacity = empDailyHours.mul(capacityDays);
-      const vacation = empDailyHours.mul(paidVacDays);
-
-      // Available capacity TO DATE (current month only): same construction
-      // clipped to elapsed working days. This is the utilization denominator —
-      // month-to-date billable over month-to-date available — so the KPI is
-      // comparable on any day of the month instead of climbing from ~0%.
-      let available_to_date: Decimal | null = null;
-      if (isCurrent) {
-        const contractWdTd = contractWd.filter((d) => d <= toDateEnd);
-        let unpaidTd = 0;
-        let vacTd = 0;
-        for (const d of contractWdTd) {
-          const uw = unpaid.get(d) ?? 0;
-          const aw = allAbs.get(d) ?? 0;
-          unpaidTd += uw;
-          vacTd += Math.max(aw - uw, 0);
-        }
-        const availTdDays = Math.max(contractWdTd.length - unpaidTd - vacTd, 0);
-        available_to_date = empDailyHours.mul(availTdDays);
-      }
-
-      // Planned allocation for the full month, split billable vs total —
-      // weighted and converted to hours on the employee's own calendar.
-      const alloc = await employeeAllocSplitInMonth(
-        emp.employee_id,
-        w.start,
-        w.end,
-        stateWd,
-      );
-      const planned_total = alloc.total
-        .mul(FULL_TIME_DAILY)
-        .mul(stateWd.length);
-      const planned_billable = alloc.billable
-        .mul(FULL_TIME_DAILY)
-        .mul(stateWd.length);
-
-      // Current month: month-to-date actuals + to-date planned (for delivery).
-      let actual_billable = D0;
-      let actual_nonbillable = D0;
-      let planned_billable_to_date = D0;
-      if (isCurrent) {
-        actual_billable = tr.billable;
-        actual_nonbillable = tr.nonbillable;
-        const stateWdToDate = stateWd.filter((d) => d <= toDateEnd);
-        if (stateWdToDate.length > 0) {
-          const allocTd = await employeeAllocSplitInMonth(
-            emp.employee_id,
-            cur.start,
-            toDateEnd,
-            stateWdToDate,
-          );
-          planned_billable_to_date = allocTd.billable
-            .mul(FULL_TIME_DAILY)
-            .mul(stateWdToDate.length);
-        }
-      }
-
-      const buckets = capacityBuckets({
-        capacity,
-        vacation,
-        planned_total,
-        planned_billable,
-        actual_billable,
-      });
-      const contribution: CapacityContribution = {
-        capacity,
-        vacation,
-        planned_total,
-        planned_billable,
-        planned_billable_to_date,
-        actual_billable,
-        actual_nonbillable,
-        // Future months have no "to date" concept — use full available so the
-        // accumulator field is always meaningful.
-        available_to_date: available_to_date ?? buckets.available,
-        buckets,
-      };
+      const contribution = contributions[i];
       addToCapacityAcc(totals[i], contribution);
       addToCapacityAcc(teamAccs[i], contribution);
       addToCapacityAcc(tierAccs[i], contribution);
@@ -442,9 +490,9 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
     });
   }
 
-  const by_team = Array.from(teamMap, ([k, accs]) => toForecastRow(k, accs, monthLabels)).sort(
-    (a, b) => b.available_h - a.available_h,
-  );
+  const by_team = Array.from(teamMap, ([k, accs]) =>
+    toForecastRow(k, accs, monthLabels),
+  ).sort((a, b) => b.available_h - a.available_h);
   const by_role_tier = Array.from(tierMap, ([k, accs]) =>
     toForecastRow(k, accs, monthLabels),
   ).sort((a, b) => b.available_h - a.available_h);
@@ -456,7 +504,9 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
   const capByTeam: CapacityTeamRow[] = Array.from(teamMap, ([k, accs]) => ({
     key: k,
     months: accs.map(toCapacityBucket),
-  })).sort((a, b) => (b.months[0]?.capacity_h ?? 0) - (a.months[0]?.capacity_h ?? 0));
+  })).sort(
+    (a, b) => (b.months[0]?.capacity_h ?? 0) - (a.months[0]?.capacity_h ?? 0),
+  );
 
   return {
     generated_for: todayIso,
@@ -467,7 +517,10 @@ export async function computeForecast(todayIso: string): Promise<ForecastReport>
     by_role_tier,
     by_consultant: consultants,
     capacity: {
-      months: windows.map((w) => ({ month: w.month, working_days: w.wd.length })),
+      months: windows.map((w) => ({
+        month: w.month,
+        working_days: w.wd.length,
+      })),
       totals: { key: "__total__", months: totals.map(toCapacityBucket) },
       by_team: capByTeam,
     },

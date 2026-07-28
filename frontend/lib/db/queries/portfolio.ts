@@ -10,6 +10,7 @@ import {
   fmt,
   fteFromWeeklyHours,
   lastOfMonth,
+  mapWithConcurrency,
   monthCalendarByState,
 } from "../_monthly-helpers";
 import {
@@ -56,59 +57,58 @@ export async function computeMonthlyBenchTotals(
     month_start,
     month_end,
   );
-  let loaded = new Decimal(0);
-  let unallocated = new Decimal(0);
+  const perEmployee = await mapLimit(
+    employees,
+    PROJECT_CONCURRENCY,
+    async (raw) => {
+      const emp_id = raw.employee_id;
+      const hire_date = raw.hire_date;
+      const end_date = raw.employment_end_date;
+      const { monthly_cost } = await entityMonthlyCost(
+        emp_id,
+        null,
+        null,
+        burden,
+        month_start,
+      );
+      if (monthly_cost === null) return null;
 
-  for (const raw of employees) {
-    const emp_id = raw.employee_id;
-    const hire_date = raw.hire_date;
-    const end_date = raw.employment_end_date;
-    const { monthly_cost } = await entityMonthlyCost(
-      emp_id,
-      null,
-      null,
-      burden,
-      month_start,
-    );
-    if (monthly_cost === null) continue;
+      const cal = calFor(raw.office);
+      const working_days = cal.working_days;
+      const n_wd = working_days.length;
 
-    const cal = calFor(raw.office);
-    const working_days = cal.working_days;
-    const n_wd = working_days.length;
+      const clip_start =
+        hire_date !== null && hire_date > month_start ? hire_date : month_start;
+      const clip_end =
+        end_date !== null && end_date < month_end ? end_date : month_end;
+      const contract_workdays =
+        n_wd > 0
+          ? working_days.filter((d) => d >= clip_start && d <= clip_end).length
+          : 0;
+      if (contract_workdays === 0) return null;
+      const contract_share =
+        n_wd > 0 ? new Decimal(contract_workdays).div(n_wd) : new Decimal(1);
+      let cost_prorated = monthly_cost.mul(contract_share);
 
-    const clip_start =
-      hire_date !== null && hire_date > month_start ? hire_date : month_start;
-    const clip_end =
-      end_date !== null && end_date < month_end ? end_date : month_end;
-    const contract_workdays =
-      n_wd > 0
-        ? working_days.filter((d) => d >= clip_start && d <= clip_end).length
-        : 0;
-    if (contract_workdays === 0) continue;
-    const contract_share =
-      n_wd > 0 ? new Decimal(contract_workdays).div(n_wd) : new Decimal(1);
-    let cost_prorated = monthly_cost.mul(contract_share);
+      const [, unpaid_in_month] = await absencesForEmployee(
+        emp_id,
+        month_start,
+        month_end,
+        cal.holidays,
+      );
+      let unpaid_in_contract = 0;
+      for (const [d, w] of unpaid_in_month) {
+        if (d >= clip_start && d <= clip_end) unpaid_in_contract += w;
+      }
+      if (unpaid_in_contract > 0 && contract_workdays > 0) {
+        const paid_share = new Decimal(
+          contract_workdays - unpaid_in_contract,
+        ).div(contract_workdays);
+        cost_prorated = cost_prorated.mul(paid_share);
+      }
 
-    const [, unpaid_in_month] = await absencesForEmployee(
-      emp_id,
-      month_start,
-      month_end,
-      cal.holidays,
-    );
-    let unpaid_in_contract = 0;
-    for (const [d, w] of unpaid_in_month) {
-      if (d >= clip_start && d <= clip_end) unpaid_in_contract += w;
-    }
-    if (unpaid_in_contract > 0 && contract_workdays > 0) {
-      const paid_share = new Decimal(
-        contract_workdays - unpaid_in_contract,
-      ).div(contract_workdays);
-      cost_prorated = cost_prorated.mul(paid_share);
-    }
+      if (!opts.includeAllocation) return { cost_prorated, unalloc: null };
 
-    loaded = loaded.add(cost_prorated);
-
-    if (opts.includeAllocation) {
       // BILLABLE allocations only — matches computeEmployeeLoad in
       // utilization.ts, so the rentability bench line and the booked-capacity
       // report stay on one definition: booked = booked on billable work.
@@ -126,8 +126,16 @@ export async function computeMonthlyBenchTotals(
       const util_clamped = Decimal.min(weighted_alloc.div(fte), new Decimal(1));
       let unalloc = cost_prorated.mul(new Decimal(1).sub(util_clamped));
       if (unalloc.lt(0)) unalloc = new Decimal(0);
-      unallocated = unallocated.add(unalloc);
-    }
+      return { cost_prorated, unalloc };
+    },
+  );
+
+  let loaded = new Decimal(0);
+  let unallocated = new Decimal(0);
+  for (const r of perEmployee) {
+    if (r === null) continue;
+    loaded = loaded.add(r.cost_prorated);
+    if (r.unalloc !== null) unallocated = unallocated.add(r.unalloc);
   }
 
   return {
@@ -158,32 +166,8 @@ export async function monthlyFreelancerCost(monthYm: string): Promise<Decimal> {
     : new Decimal(raw as string);
 }
 
-/** Bounded-concurrency map. `computeProjectMonthly` is internally a chain of
- * sequential queries; running projects one-by-one made every rentability /
- * home month view a serial crawl. A small limit keeps the pg pool busy
- * without unbounded fan-out. Order-preserving. */
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const out = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      for (;;) {
-        const i = next++;
-        if (i >= items.length) return;
-        out[i] = await fn(items[i]);
-      }
-    },
-  );
-  await Promise.all(workers);
-  return out;
-}
-
 const PROJECT_CONCURRENCY = 6;
+const mapLimit = mapWithConcurrency;
 
 async function sumProjectRevenue(
   projects: ActiveProjectRow[],
@@ -373,11 +357,7 @@ export async function computeProjectMonthlyRows(
     let row_revenue = revenue;
     let row_margin = margin;
     let row_margin_pct = margin_pct;
-    let recognition_method:
-      | "tracked_hours"
-      | "timeline"
-      | "none"
-      | null = null;
+    let recognition_method: "tracked_hours" | "timeline" | "none" | null = null;
     let over_budget = false;
     const pct_complete = (breakdown.pct_complete as string | null) ?? null;
 
@@ -404,9 +384,7 @@ export async function computeProjectMonthlyRows(
         breakdown.recognized_margin_pct !== null &&
         breakdown.recognized_margin_pct !== undefined
       ) {
-        row_margin_pct = new Decimal(
-          breakdown.recognized_margin_pct as string,
-        );
+        row_margin_pct = new Decimal(breakdown.recognized_margin_pct as string);
       }
     }
 
@@ -422,8 +400,7 @@ export async function computeProjectMonthlyRows(
       n_assignments: assignments.length,
       revenue: row_revenue === null ? null : fmt(row_revenue, 2),
       allocation_revenue:
-        raw.billing_model === "time_and_material" &&
-        allocation_revenue !== null
+        raw.billing_model === "time_and_material" && allocation_revenue !== null
           ? fmt(allocation_revenue, 2)
           : null,
       cost: fmt(cost, 2),

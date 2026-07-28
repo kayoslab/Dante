@@ -15,11 +15,14 @@ import {
   fteFromWeeklyHours,
   holidaysForYearOf,
   lastOfMonth,
+  mapWithConcurrency,
   type MonthCalendar,
   monthCalendarByState,
   workingDaysInRange,
 } from "../_monthly-helpers";
 import { roleTierFromAlias } from "../_sql-fragments";
+
+const EMPLOYEE_CONCURRENCY = 6;
 
 // ---------------------------------------------------------------------------
 // Utilization report — engine + shaped reads
@@ -120,7 +123,9 @@ async function listEligibleEmployees(
     first_name: (row.first_name as string | null) ?? null,
     last_name: (row.last_name as string | null) ?? null,
     weekly_working_hours:
-      row.weekly_working_hours == null ? null : Number(row.weekly_working_hours),
+      row.weekly_working_hours == null
+        ? null
+        : Number(row.weekly_working_hours),
     hire_date: (row.hire_date as string | null) ?? null,
     employment_end_date: (row.employment_end_date as string | null) ?? null,
     office: (row.office as string | null) ?? null,
@@ -170,9 +175,7 @@ async function computeEmployeeLoad(
       ? emp.employment_end_date
       : ctx.month_end;
   const contract_workdays =
-    n_wd > 0
-      ? wd.filter((d) => d >= clip_start && d <= clip_end).length
-      : 0;
+    n_wd > 0 ? wd.filter((d) => d >= clip_start && d <= clip_end).length : 0;
   if (contract_workdays === 0) return null;
 
   const contract_share =
@@ -190,9 +193,9 @@ async function computeEmployeeLoad(
     if (d >= clip_start && d <= clip_end) unpaid_in_contract += w;
   }
   if (unpaid_in_contract > 0 && contract_workdays > 0) {
-    const paid_share = new Decimal(
-      contract_workdays - unpaid_in_contract,
-    ).div(contract_workdays);
+    const paid_share = new Decimal(contract_workdays - unpaid_in_contract).div(
+      contract_workdays,
+    );
     loaded_cost = loaded_cost.mul(paid_share);
   }
 
@@ -278,7 +281,10 @@ function addToGroup(g: GroupAccumulator, load: EmployeeMonthlyLoad): void {
   g.util_sum = g.util_sum.add(Decimal.min(load.util_ratio, ONE));
 }
 
-function summarizeGroup(key: string, g: GroupAccumulator): UtilizationGroupAggregate {
+function summarizeGroup(
+  key: string,
+  g: GroupAccumulator,
+): UtilizationGroupAggregate {
   const util_pct_eur = g.loaded.gt(0)
     ? ONE.sub(g.unalloc.div(g.loaded)).mul(100)
     : null;
@@ -304,11 +310,11 @@ export async function computeUtilizationForMonth(
   const ctx = await loadMonthContext(monthYm);
   const employees = await listEligibleEmployees(ctx.month_start, ctx.month_end);
 
-  const loads: EmployeeMonthlyLoad[] = [];
-  for (const emp of employees) {
-    const load = await computeEmployeeLoad(emp, ctx);
-    if (load !== null) loads.push(load);
-  }
+  const loads = (
+    await mapWithConcurrency(employees, EMPLOYEE_CONCURRENCY, (emp) =>
+      computeEmployeeLoad(emp, ctx),
+    )
+  ).filter((l): l is EmployeeMonthlyLoad => l !== null);
 
   const totalsAcc = newGroupAcc();
   const teamMap = new Map<string, GroupAccumulator>();
@@ -332,8 +338,7 @@ export async function computeUtilizationForMonth(
 
   const totalsSummary = summarizeGroup("__total__", totalsAcc);
   const by_team = Array.from(teamMap, ([k, g]) => summarizeGroup(k, g)).sort(
-    (a, b) =>
-      Number(b.unallocated_cost) - Number(a.unallocated_cost),
+    (a, b) => Number(b.unallocated_cost) - Number(a.unallocated_cost),
   );
   const by_role_tier = Array.from(tierMap, ([k, g]) =>
     summarizeGroup(k, g),
@@ -491,8 +496,16 @@ export async function computeUtilizationMonthDetail(
   const teamMap = new Map<string, Acc>();
   const tierMap = new Map<string, Acc>();
 
-  for (const emp of employees) {
-    const load = await computeEmployeeLoad(emp, ctx);
+  // Loads in parallel (the expensive per-employee queries); the fold below
+  // stays sequential — its accumulator math is cheap and order-stable.
+  const loadByEmp = await mapWithConcurrency(
+    employees,
+    EMPLOYEE_CONCURRENCY,
+    (emp) => computeEmployeeLoad(emp, ctx),
+  );
+
+  for (const [i, emp] of employees.entries()) {
+    const load = loadByEmp[i];
 
     if (!is_future) {
       const a = available.get(emp.employee_id) ?? 0;
@@ -573,7 +586,9 @@ export async function computeUtilizationMonthDetail(
     }
   }
 
-  benched.sort((a, b) => Number(b.unallocated_cost) - Number(a.unallocated_cost));
+  benched.sort(
+    (a, b) => Number(b.unallocated_cost) - Number(a.unallocated_cost),
+  );
   overbooked.sort((a, b) => Number(b.overbook_pct) - Number(a.overbook_pct));
 
   const toGroup = (key: string, acc: Acc): BillableUtilGroup => ({
@@ -655,16 +670,16 @@ export async function listForecastDrivers(
     GROUP BY a.project_id, p.name, c.name, a.end_date
     ORDER BY a.end_date, p.name
   `);
-  const projects_ending = (endingRes.rows as Array<Record<string, unknown>>).map(
-    (row) => ({
-      project_id: row.project_id as number,
-      project_name: row.project_name as string,
-      customer_name: row.customer_name as string,
-      end_date: row.end_date as string,
-      n_assignments: row.n_assignments as number,
-      freeing_alloc_sum: String(row.freeing_alloc_sum ?? "0"),
-    }),
-  );
+  const projects_ending = (
+    endingRes.rows as Array<Record<string, unknown>>
+  ).map((row) => ({
+    project_id: row.project_id as number,
+    project_name: row.project_name as string,
+    customer_name: row.customer_name as string,
+    end_date: row.end_date as string,
+    n_assignments: row.n_assignments as number,
+    freeing_alloc_sum: String(row.freeing_alloc_sum ?? "0"),
+  }));
 
   // Hires starting in window: real, project-contributing, active.
   const roleTier = roleTierFromAlias("ec", "ann");
