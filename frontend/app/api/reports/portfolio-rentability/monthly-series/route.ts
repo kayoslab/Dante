@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
     const today = new Date().toISOString().slice(0, 10);
     // Bounded month fan-out: each month is internally parallel already;
     // running all 16 at once would just flood the pg pool queue.
-    const points = await mapWithConcurrency(months, 4, async (monthYm) => {
+    const points = await mapWithConcurrency(months, 2, async (monthYm) => {
       const totals = await computePortfolioMonthlyTotals(monthYm);
       const month_start = `${monthYm}-01`;
       const is_forecast = month_start > today;

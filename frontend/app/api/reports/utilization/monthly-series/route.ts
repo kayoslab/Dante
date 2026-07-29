@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
     const [points, forecast_drivers] = await Promise.all([
       // Bounded month fan-out: each month is internally parallel already;
       // running all 16 at once would just flood the pg pool queue.
-      mapWithConcurrency(months, 4, (monthYm) =>
+      mapWithConcurrency(months, 2, (monthYm) =>
         computeUtilizationForMonth(monthYm, today),
       ),
       future_months.length > 0

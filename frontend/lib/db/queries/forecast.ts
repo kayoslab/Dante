@@ -24,7 +24,7 @@ import {
 import { roleTierFromAlias } from "../_sql-fragments";
 import { getTrackedHoursForMonth } from "./tracked-hours";
 
-const EMPLOYEE_CONCURRENCY = 6;
+const EMPLOYEE_CONCURRENCY = 4;
 
 // ---------------------------------------------------------------------------
 // Forecast report — engine + shaped read. Manager-only, backs /reports/forecast.

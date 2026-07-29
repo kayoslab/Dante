@@ -167,7 +167,7 @@ export async function monthlyFreelancerCost(monthYm: string): Promise<Decimal> {
     : new Decimal(raw as string);
 }
 
-const PROJECT_CONCURRENCY = 6;
+const PROJECT_CONCURRENCY = 4;
 const mapLimit = mapWithConcurrency;
 
 async function sumProjectRevenue(

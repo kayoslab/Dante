@@ -23,7 +23,7 @@ import {
 import { cachePastMonth } from "../_report-cache";
 import { roleTierFromAlias } from "../_sql-fragments";
 
-const EMPLOYEE_CONCURRENCY = 6;
+const EMPLOYEE_CONCURRENCY = 4;
 
 // ---------------------------------------------------------------------------
 // Utilization report — engine + shaped reads
