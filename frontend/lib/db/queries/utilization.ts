@@ -7,17 +7,19 @@ import {
   getTrackedHoursForMonth,
 } from "./tracked-hours";
 import {
-  absencesForEmployee,
+  allocDaySumsForEmployees,
   burdenFactor,
-  employeeAllocSplitInMonth,
   entityMonthlyCost,
   fmt,
   fteFromWeeklyHours,
   holidaysForYearOf,
   lastOfMonth,
   mapWithConcurrency,
+  type MonthAllocDaySums,
   type MonthCalendar,
   monthCalendarByState,
+  type MonthDayStats,
+  monthDayStatsForEmployees,
   workingDaysInRange,
 } from "../_monthly-helpers";
 import { cachePastMonth } from "../_report-cache";
@@ -151,6 +153,8 @@ type EmployeeMonthlyLoad = {
 async function computeEmployeeLoad(
   emp: EligibleEmployee,
   ctx: MonthContext,
+  day: MonthDayStats | undefined,
+  alloc: MonthAllocDaySums | undefined,
 ): Promise<EmployeeMonthlyLoad | null> {
   const { monthly_cost } = await entityMonthlyCost(
     emp.employee_id,
@@ -161,38 +165,19 @@ async function computeEmployeeLoad(
   );
   if (monthly_cost === null) return null;
 
-  // State-aware calendar for THIS employee's office (NRW fallback; federal
-  // when office is null) — same basis as available-hours everywhere else.
-  const cal = ctx.calFor(emp.office);
-  const wd = cal.working_days;
-  const n_wd = wd.length;
-
-  const clip_start =
-    emp.hire_date !== null && emp.hire_date > ctx.month_start
-      ? emp.hire_date
-      : ctx.month_start;
-  const clip_end =
-    emp.employment_end_date !== null && emp.employment_end_date < ctx.month_end
-      ? emp.employment_end_date
-      : ctx.month_end;
-  const contract_workdays =
-    n_wd > 0 ? wd.filter((d) => d >= clip_start && d <= clip_end).length : 0;
+  // Calendar / absence / allocation math comes precomputed from the bulk
+  // SQL stats (state-aware working days per office, contract-clipped,
+  // absence-weighted) — one query per month for the whole roster instead
+  // of three per employee.
+  const n_wd = day?.n_wd ?? 0;
+  const contract_workdays = day?.contract_wd ?? 0;
   if (contract_workdays === 0) return null;
 
   const contract_share =
     n_wd > 0 ? new Decimal(contract_workdays).div(n_wd) : ONE;
   let loaded_cost = monthly_cost.mul(contract_share);
 
-  const [, unpaid_in_month] = await absencesForEmployee(
-    emp.employee_id,
-    ctx.month_start,
-    ctx.month_end,
-    cal.holidays,
-  );
-  let unpaid_in_contract = 0;
-  for (const [d, w] of unpaid_in_month) {
-    if (d >= clip_start && d <= clip_end) unpaid_in_contract += w;
-  }
+  const unpaid_in_contract = day?.unpaid_w ?? 0;
   if (unpaid_in_contract > 0 && contract_workdays > 0) {
     const paid_share = new Decimal(contract_workdays - unpaid_in_contract).div(
       contract_workdays,
@@ -204,13 +189,8 @@ async function computeEmployeeLoad(
   // work. An assignment on a non-billable/internal project (e.g. an awork
   // Planner booking on an internal project) does not count as booked —
   // that person is bench from a revenue point of view.
-  const alloc_split = await employeeAllocSplitInMonth(
-    emp.employee_id,
-    ctx.month_start,
-    ctx.month_end,
-    wd,
-  );
-  const weighted_alloc = alloc_split.billable;
+  const weighted_alloc =
+    alloc !== undefined && n_wd > 0 ? alloc.billable.div(n_wd) : new Decimal(0);
   // `allocation_pct` is a fraction of full-time (40h), so a fully-booked
   // part-timer's `weighted_alloc` equals their FTE. Measure utilization
   // against FTE, not a hardcoded 1.0 — otherwise an 88%-contract employee
@@ -323,9 +303,22 @@ async function computeUtilizationForMonthUncached(
   const ctx = await loadMonthContext(monthYm);
   const employees = await listEligibleEmployees(ctx.month_start, ctx.month_end);
 
+  // Calendar/absence/allocation stats for the whole roster in two set
+  // queries; the per-employee loop below only resolves salaries.
+  const ids = employees.map((e) => e.employee_id);
+  const [dayStats, allocSums] = await Promise.all([
+    monthDayStatsForEmployees(ids, ctx.month_start, ctx.month_end),
+    allocDaySumsForEmployees(ids, ctx.month_start, ctx.month_end),
+  ]);
+
   const loads = (
     await mapWithConcurrency(employees, EMPLOYEE_CONCURRENCY, (emp) =>
-      computeEmployeeLoad(emp, ctx),
+      computeEmployeeLoad(
+        emp,
+        ctx,
+        dayStats.get(emp.employee_id),
+        allocSums.get(emp.employee_id),
+      ),
     )
   ).filter((l): l is EmployeeMonthlyLoad => l !== null);
 
@@ -509,12 +502,24 @@ export async function computeUtilizationMonthDetail(
   const teamMap = new Map<string, Acc>();
   const tierMap = new Map<string, Acc>();
 
-  // Loads in parallel (the expensive per-employee queries); the fold below
+  // Calendar/absence/allocation stats for the whole roster in two set
+  // queries; the parallel loop below only resolves salaries. The fold
   // stays sequential — its accumulator math is cheap and order-stable.
+  const statIds = employees.map((e) => e.employee_id);
+  const [dayStats, allocSums] = await Promise.all([
+    monthDayStatsForEmployees(statIds, ctx.month_start, ctx.month_end),
+    allocDaySumsForEmployees(statIds, ctx.month_start, ctx.month_end),
+  ]);
   const loadByEmp = await mapWithConcurrency(
     employees,
     EMPLOYEE_CONCURRENCY,
-    (emp) => computeEmployeeLoad(emp, ctx),
+    (emp) =>
+      computeEmployeeLoad(
+        emp,
+        ctx,
+        dayStats.get(emp.employee_id),
+        allocSums.get(emp.employee_id),
+      ),
   );
 
   for (const [i, emp] of employees.entries()) {

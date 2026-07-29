@@ -3,15 +3,15 @@ import { sql } from "drizzle-orm";
 
 import { db } from "../client";
 import {
-  absencesForEmployee,
+  allocDaySumsForEmployees,
   burdenFactor,
-  employeeAllocSplitInMonth,
   entityMonthlyCost,
   fmt,
   fteFromWeeklyHours,
   lastOfMonth,
   mapWithConcurrency,
-  monthCalendarByState,
+  type MonthAllocDaySums,
+  monthDayStatsForEmployees,
 } from "../_monthly-helpers";
 import {
   type ActiveProjectRow,
@@ -49,22 +49,27 @@ export async function computeMonthlyBenchTotals(
 ): Promise<{ loaded: Decimal; unallocated: Decimal | null }> {
   const month_start = `${monthYm}-01`;
   const month_end = lastOfMonth(month_start);
-  // Per-office state-aware calendars — same basis as available-hours and the
-  // booked-capacity engine, so the bench line and the reports reconcile.
-  const calFor = monthCalendarByState(month_start, month_end);
   const burden = await burdenFactor();
 
   const employees = await listUnallocatedPayrollEmployees(
     month_start,
     month_end,
   );
+  // State-aware calendar + absence + allocation stats for the whole roster
+  // in set queries (state_holiday / absence_day); the per-employee loop
+  // below only resolves salaries.
+  const ids = employees.map((e) => e.employee_id);
+  const [dayStats, allocSums] = await Promise.all([
+    monthDayStatsForEmployees(ids, month_start, month_end),
+    opts.includeAllocation
+      ? allocDaySumsForEmployees(ids, month_start, month_end)
+      : Promise.resolve(new Map<number, MonthAllocDaySums>()),
+  ]);
   const perEmployee = await mapLimit(
     employees,
     PROJECT_CONCURRENCY,
     async (raw) => {
       const emp_id = raw.employee_id;
-      const hire_date = raw.hire_date;
-      const end_date = raw.employment_end_date;
       const { monthly_cost } = await entityMonthlyCost(
         emp_id,
         null,
@@ -74,33 +79,15 @@ export async function computeMonthlyBenchTotals(
       );
       if (monthly_cost === null) return null;
 
-      const cal = calFor(raw.office);
-      const working_days = cal.working_days;
-      const n_wd = working_days.length;
-
-      const clip_start =
-        hire_date !== null && hire_date > month_start ? hire_date : month_start;
-      const clip_end =
-        end_date !== null && end_date < month_end ? end_date : month_end;
-      const contract_workdays =
-        n_wd > 0
-          ? working_days.filter((d) => d >= clip_start && d <= clip_end).length
-          : 0;
+      const day = dayStats.get(emp_id);
+      const n_wd = day?.n_wd ?? 0;
+      const contract_workdays = day?.contract_wd ?? 0;
       if (contract_workdays === 0) return null;
       const contract_share =
         n_wd > 0 ? new Decimal(contract_workdays).div(n_wd) : new Decimal(1);
       let cost_prorated = monthly_cost.mul(contract_share);
 
-      const [, unpaid_in_month] = await absencesForEmployee(
-        emp_id,
-        month_start,
-        month_end,
-        cal.holidays,
-      );
-      let unpaid_in_contract = 0;
-      for (const [d, w] of unpaid_in_month) {
-        if (d >= clip_start && d <= clip_end) unpaid_in_contract += w;
-      }
+      const unpaid_in_contract = day?.unpaid_w ?? 0;
       if (unpaid_in_contract > 0 && contract_workdays > 0) {
         const paid_share = new Decimal(
           contract_workdays - unpaid_in_contract,
@@ -113,12 +100,10 @@ export async function computeMonthlyBenchTotals(
       // BILLABLE allocations only — matches computeEmployeeLoad in
       // utilization.ts, so the rentability bench line and the booked-capacity
       // report stay on one definition: booked = booked on billable work.
-      const { billable: weighted_alloc } = await employeeAllocSplitInMonth(
-        emp_id,
-        month_start,
-        month_end,
-        working_days,
-      );
+      const weighted_alloc =
+        n_wd > 0
+          ? (allocSums.get(emp_id)?.billable ?? new Decimal(0)).div(n_wd)
+          : new Decimal(0);
       // `allocation_pct` is a fraction of full-time, so a fully-booked
       // part-timer's weighted_alloc equals their FTE. Utilization is
       // relative to FTE — not a hardcoded 1.0 — else part-timers show

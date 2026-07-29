@@ -21,6 +21,7 @@ import {
   germanHolidaysForStateCached,
   stateCodeForOffice,
 } from "./_de-holidays";
+import { officeStateFromAlias } from "./_sql-fragments";
 import { resolveSalaryFromRow } from "./_salary-resolve";
 import { fteFromWeeklyHours } from "./_fte";
 
@@ -768,6 +769,199 @@ export async function employeeAllocSplitInMonth(
     if (raw.billable === true) billable = billable.add(weighted);
   }
   return { total, billable };
+}
+
+// ----------------------------------------------------------------------------
+// Bulk per-employee month statistics — SQL-side calendar + absence + alloc
+// math on state_holiday / absence_day (migration 0022). One query per month
+// for ALL employees replaces the per-employee date iteration the report
+// engines used to do in Node. Semantics mirror the TS helpers exactly:
+// working day = Mon–Fri minus the employee's state calendar (office → state
+// via the same map, 'DE' federal when office is NULL), contract clip to
+// [hire_date, employment_end_date], absence weights per absence_day.
+// ----------------------------------------------------------------------------
+
+export type MonthDayStats = {
+  /** State-calendar working days in the month (NOT contract-clipped). */
+  n_wd: number;
+  n_wd_td: number;
+  /** Working days clipped to [hire_date, employment_end_date]. */
+  contract_wd: number;
+  contract_wd_td: number;
+  /** Σ absence weight over contract working days. */
+  abs_w: number;
+  /** Σ unpaid-absence weight over contract working days. */
+  unpaid_w: number;
+  /** Σ max(weight − unpaid, 0) — paid-vacation weight over contract days. */
+  paid_vac_w: number;
+  unpaid_w_td: number;
+  paid_vac_w_td: number;
+};
+
+/** `_td` fields are the same aggregates restricted to days ≤ `to_date_end`
+ * (the forecast's month-to-date basis). Omit `to_date_end` when no to-date
+ * view is needed — the fields then equal their full-month counterparts. */
+export async function monthDayStatsForEmployees(
+  employee_ids: number[],
+  month_start: string,
+  month_end: string,
+  to_date_end?: string,
+): Promise<Map<number, MonthDayStats>> {
+  const out = new Map<number, MonthDayStats>();
+  if (employee_ids.length === 0) return out;
+  const td = to_date_end ?? month_end;
+  const idList = sql.join(
+    employee_ids.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const r = await db.execute(sql`
+    WITH emp AS (
+      SELECT ec.employee_id, ec.hire_date, ec.employment_end_date,
+             ${officeStateFromAlias("ec")} AS state
+      FROM employee_current ec
+      WHERE ec.employee_id IN (${idList})
+    ),
+    d AS (
+      SELECT e.employee_id, g.dy::date AS dy,
+             ((e.hire_date IS NULL OR g.dy::date >= e.hire_date)
+              AND (e.employment_end_date IS NULL
+                   OR g.dy::date <= e.employment_end_date)) AS in_contract
+      FROM emp e
+      CROSS JOIN generate_series(
+        ${month_start}::date, ${month_end}::date, interval '1 day'
+      ) AS g(dy)
+      WHERE EXTRACT(ISODOW FROM g.dy) < 6
+        AND NOT EXISTS (
+          SELECT 1 FROM state_holiday h
+          WHERE h.state = e.state AND h.day = g.dy::date
+        )
+    )
+    SELECT d.employee_id,
+           COUNT(*)::int AS n_wd,
+           COUNT(*) FILTER (WHERE d.dy <= ${td}::date)::int AS n_wd_td,
+           COUNT(*) FILTER (WHERE d.in_contract)::int AS contract_wd,
+           COUNT(*) FILTER (WHERE d.in_contract AND d.dy <= ${td}::date)::int
+             AS contract_wd_td,
+           COALESCE(SUM(ad.weight) FILTER (WHERE d.in_contract), 0) AS abs_w,
+           COALESCE(SUM(ad.unpaid_weight) FILTER (WHERE d.in_contract), 0)
+             AS unpaid_w,
+           COALESCE(SUM(GREATEST(ad.weight - ad.unpaid_weight, 0))
+             FILTER (WHERE d.in_contract), 0) AS paid_vac_w,
+           COALESCE(SUM(ad.unpaid_weight)
+             FILTER (WHERE d.in_contract AND d.dy <= ${td}::date), 0)
+             AS unpaid_w_td,
+           COALESCE(SUM(GREATEST(ad.weight - ad.unpaid_weight, 0))
+             FILTER (WHERE d.in_contract AND d.dy <= ${td}::date), 0)
+             AS paid_vac_w_td
+    FROM d
+    LEFT JOIN absence_day ad
+      ON ad.employee_id = d.employee_id AND ad.day = d.dy
+    GROUP BY d.employee_id
+  `);
+  for (const raw of r.rows as Array<Record<string, unknown>>) {
+    out.set(raw.employee_id as number, {
+      n_wd: Number(raw.n_wd ?? 0),
+      n_wd_td: Number(raw.n_wd_td ?? 0),
+      contract_wd: Number(raw.contract_wd ?? 0),
+      contract_wd_td: Number(raw.contract_wd_td ?? 0),
+      abs_w: Number(raw.abs_w ?? 0),
+      unpaid_w: Number(raw.unpaid_w ?? 0),
+      paid_vac_w: Number(raw.paid_vac_w ?? 0),
+      unpaid_w_td: Number(raw.unpaid_w_td ?? 0),
+      paid_vac_w_td: Number(raw.paid_vac_w_td ?? 0),
+    });
+  }
+  return out;
+}
+
+export type MonthAllocDaySums = {
+  /** Σ allocation_pct over (assignment × active working day). Divide by the
+   * month's n_wd (from MonthDayStats) for the fraction-of-full-time the
+   * engines use; multiply by 8 for planned hours. */
+  total: Decimal;
+  billable: Decimal;
+  total_td: Decimal;
+  billable_td: Decimal;
+};
+
+/** Bulk version of `employeeAllocSplitInMonth` on the SQL calendar: same
+ * awork-planning-vs-manual dedup, same `COALESCE(project.billable, TRUE)`
+ * split, day-weighted on each employee's state working days. Employees with
+ * no overlapping assignments are absent from the map (treat as zero). */
+export async function allocDaySumsForEmployees(
+  employee_ids: number[],
+  month_start: string,
+  month_end: string,
+  to_date_end?: string,
+): Promise<Map<number, MonthAllocDaySums>> {
+  const out = new Map<number, MonthAllocDaySums>();
+  if (employee_ids.length === 0) return out;
+  const td = to_date_end ?? month_end;
+  const idList = sql.join(
+    employee_ids.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const r = await db.execute(sql`
+    WITH emp AS (
+      SELECT ec.employee_id, ${officeStateFromAlias("ec")} AS state
+      FROM employee_current ec
+      WHERE ec.employee_id IN (${idList})
+    ),
+    wd AS (
+      SELECT e.employee_id, g.dy::date AS dy
+      FROM emp e
+      CROSS JOIN generate_series(
+        ${month_start}::date, ${month_end}::date, interval '1 day'
+      ) AS g(dy)
+      WHERE EXTRACT(ISODOW FROM g.dy) < 6
+        AND NOT EXISTS (
+          SELECT 1 FROM state_holiday h
+          WHERE h.state = e.state AND h.day = g.dy::date
+        )
+    ),
+    asn AS (
+      SELECT a.employee_id, a.allocation_pct, a.start_date, a.end_date,
+             COALESCE(p.billable, TRUE) AS billable
+      FROM assignment a
+      LEFT JOIN project p ON p.project_id = a.project_id
+      WHERE a.employee_id IN (${idList})
+        AND a.start_date <= ${month_end}::date
+        AND (a.end_date IS NULL OR a.end_date >= ${month_start}::date)
+        AND NOT (
+          a.source = 'awork-planning'
+          AND EXISTS (
+            SELECT 1 FROM assignment m
+            WHERE m.employee_id = a.employee_id
+              AND m.project_id = a.project_id
+              AND m.source = 'manual'
+          )
+        )
+    )
+    SELECT w.employee_id,
+           COALESCE(SUM(a.allocation_pct), 0) AS total,
+           COALESCE(SUM(a.allocation_pct) FILTER (WHERE a.billable), 0)
+             AS billable,
+           COALESCE(SUM(a.allocation_pct)
+             FILTER (WHERE w.dy <= ${td}::date), 0) AS total_td,
+           COALESCE(SUM(a.allocation_pct)
+             FILTER (WHERE a.billable AND w.dy <= ${td}::date), 0)
+             AS billable_td
+    FROM wd w
+    JOIN asn a
+      ON a.employee_id = w.employee_id
+     AND w.dy >= a.start_date
+     AND (a.end_date IS NULL OR w.dy <= a.end_date)
+    GROUP BY w.employee_id
+  `);
+  for (const raw of r.rows as Array<Record<string, unknown>>) {
+    out.set(raw.employee_id as number, {
+      total: new Decimal((raw.total as string) ?? 0),
+      billable: new Decimal((raw.billable as string) ?? 0),
+      total_td: new Decimal((raw.total_td as string) ?? 0),
+      billable_td: new Decimal((raw.billable_td as string) ?? 0),
+    });
+  }
+  return out;
 }
 
 // ----------------------------------------------------------------------------
