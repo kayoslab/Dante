@@ -23,7 +23,7 @@ const PYTHON_NAME_OVERRIDES: Record<string, string> = {
  * `stateCodeForOffice` getting passed undefined upstream; this default
  * only applies when `stateCodeForOffice` is actually called for an
  * employee row. */
-const DEFAULT_EMPLOYEE_STATE_CODE = "NW";
+export const DEFAULT_EMPLOYEE_STATE_CODE = "NW";
 
 /** Map of `employee_current.office` values → ISO 3166-2 German subdivision
  * code recognized by the `date-holidays` library. Values come from the
@@ -37,7 +37,7 @@ const DEFAULT_EMPLOYEE_STATE_CODE = "NW";
  *
  * "Homeoffice", foreign offices, and anything not in the map fall back
  * to `DEFAULT_EMPLOYEE_STATE_CODE` (NW) — see comment there. */
-const OFFICE_TO_STATE_CODE: Record<string, string> = {
+export const OFFICE_TO_STATE_CODE: Record<string, string> = {
   // 16 federal states.
   "Baden-Württemberg": "BW",
   "Baden Württemberg": "BW",

@@ -37,17 +37,7 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "../client";
-import {
-  absenceRowsForEmployees,
-  absenceWeightOverDays,
-  expandAbsenceRows,
-  holidaysForYearOf,
-  workingDaysInRange,
-} from "../_monthly-helpers";
-import {
-  germanHolidaysForStateCached,
-  stateCodeForOffice,
-} from "../_de-holidays";
+import { officeStateFromAlias } from "../_sql-fragments";
 
 export type TrackedHoursConsultantRow = {
   employee_id: number;
@@ -64,55 +54,16 @@ export async function getTrackedHoursForMonth(opts: {
   month_end: string;
   team: string | null;
 }): Promise<TrackedHoursConsultantRow[]> {
-  const teamFilter = opts.team
-    ? sql` AND ann.team_user = ${opts.team}`
-    : sql``;
+  const teamFilter = opts.team ? sql` AND ann.team_user = ${opts.team}` : sql``;
 
   const result = await db.execute(sql`
-    WITH awork_days AS (
-      -- (employee, day) pairs where the person tracked in awork.
-      SELECT DISTINCT ul.employee_id, t.work_date
-      FROM awork_time_entry t
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      WHERE t.work_date BETWEEN ${opts.month_start}::date AND ${opts.month_end}::date
-    ),
-    personio AS (
-      SELECT a.employee_id,
-             CASE
-               WHEN a.project_id IS NULL THEN 'untagged'
-               WHEN pl.project_id IS NOT NULL
-                 THEN CASE WHEN pp_proj.billable THEN 'billable' ELSE 'non_billable' END
-               ELSE CASE WHEN COALESCE(pp.billable, TRUE) THEN 'billable' ELSE 'non_billable' END
-             END AS bucket,
-             a.duration_minutes AS dm
-      FROM attendance a
-      LEFT JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
-      LEFT JOIN project pp_proj ON pp_proj.project_id = pl.project_id
-      LEFT JOIN personio_project pp ON pp.personio_project_id = a.project_id
-      WHERE a.work_date BETWEEN ${opts.month_start}::date AND ${opts.month_end}::date
-        -- day-level reconciliation: drop Personio on days the person tracked awork
-        AND NOT EXISTS (
-          SELECT 1 FROM awork_days ad
-          WHERE ad.employee_id = a.employee_id AND ad.work_date = a.work_date
-        )
-    ),
-    awork AS (
-      SELECT ul.employee_id,
-             CASE
-               WHEN apl.project_id IS NOT NULL
-                 THEN CASE WHEN ap_proj.billable THEN 'billable' ELSE 'non_billable' END
-               ELSE CASE WHEN COALESCE(ap.is_billable_by_default, TRUE) THEN 'billable' ELSE 'non_billable' END
-             END AS bucket,
-             t.duration_minutes AS dm
-      FROM awork_time_entry t
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      LEFT JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-      LEFT JOIN project ap_proj ON ap_proj.project_id = apl.project_id
-      LEFT JOIN awork_project ap ON ap.awork_project_id = t.awork_project_id
-      WHERE t.work_date BETWEEN ${opts.month_start}::date AND ${opts.month_end}::date
-    ),
-    all_tracked AS (
-      SELECT * FROM personio UNION ALL SELECT * FROM awork
+    WITH all_tracked AS (
+      -- Day-level awork/Personio reconciliation + effective billability
+      -- live in the tracked_time_effective VIEW (migration 0022) so every
+      -- consumer shares one definition.
+      SELECT employee_id, bucket, duration_minutes AS dm
+      FROM tracked_time_effective
+      WHERE work_date BETWEEN ${opts.month_start}::date AND ${opts.month_end}::date
     ),
     agg AS (
       SELECT employee_id,
@@ -186,20 +137,42 @@ export async function getAvailableHoursForEmployees(
     employee_ids.map((id) => sql`${id}`),
     sql`, `,
   );
+  // One set query for all employees: working days come from Mon–Fri minus
+  // the employee's state_holiday calendar (office → state via the same map
+  // the TS engines use), absence weights from the absence_day view. The
+  // final arithmetic stays in TS so rounding matches the other engines.
   const r = await db.execute(sql`
-    SELECT employee_id, weekly_working_hours, hire_date,
-           employment_end_date, office
-    FROM employee_current
-    WHERE employee_id IN (${idList})
+    WITH emp AS (
+      SELECT ec.employee_id, ec.weekly_working_hours, ec.hire_date,
+             ec.employment_end_date,
+             ${officeStateFromAlias("ec")} AS state
+      FROM employee_current ec
+      WHERE ec.employee_id IN (${idList})
+    ),
+    wd AS (
+      -- Contract-clipped working days of the month, per employee.
+      SELECT e.employee_id, d.dy::date AS dy
+      FROM emp e
+      CROSS JOIN generate_series(
+        ${month_start}::date, ${month_end}::date, interval '1 day'
+      ) AS d(dy)
+      WHERE EXTRACT(ISODOW FROM d.dy) < 6
+        AND NOT EXISTS (
+          SELECT 1 FROM state_holiday h
+          WHERE h.state = e.state AND h.day = d.dy::date
+        )
+        AND (e.hire_date IS NULL OR d.dy::date >= e.hire_date)
+        AND (e.employment_end_date IS NULL OR d.dy::date <= e.employment_end_date)
+    )
+    SELECT e.employee_id, e.weekly_working_hours,
+           COUNT(w.dy) AS contract_wd,
+           COALESCE(SUM(ad.weight), 0) AS absent_w
+    FROM emp e
+    LEFT JOIN wd w ON w.employee_id = e.employee_id
+    LEFT JOIN absence_day ad
+      ON ad.employee_id = w.employee_id AND ad.day = w.dy
+    GROUP BY e.employee_id, e.weekly_working_hours
   `);
-  const year = Number(month_start.slice(0, 4));
-  const federalHolidays = holidaysForYearOf(month_start);
-  // One query for every employee's absences instead of one per employee.
-  const absenceRows = await absenceRowsForEmployees(
-    employee_ids,
-    month_start,
-    month_end,
-  );
   for (const raw of r.rows as Array<Record<string, unknown>>) {
     const emp_id = raw.employee_id as number;
     const wkh =
@@ -207,30 +180,14 @@ export async function getAvailableHoursForEmployees(
       raw.weekly_working_hours === undefined
         ? null
         : Number(raw.weekly_working_hours);
-    const hire = (raw.hire_date as string | null) ?? null;
-    const end = (raw.employment_end_date as string | null) ?? null;
-    const state = stateCodeForOffice((raw.office as string | null) ?? null);
-    const holidays =
-      state === null
-        ? federalHolidays
-        : germanHolidaysForStateCached(state, year, year);
-    const wd = workingDaysInRange(month_start, month_end, holidays);
-    const contractWd = wd.filter(
-      (d) => (hire === null || d >= hire) && (end === null || d <= end),
-    );
-    if (contractWd.length === 0) {
+    const contract_wd = Number(raw.contract_wd ?? 0);
+    if (contract_wd === 0) {
       out.set(emp_id, 0);
       continue;
     }
-    const [allAbs] = expandAbsenceRows(
-      absenceRows.get(emp_id) ?? [],
-      month_start,
-      month_end,
-      holidays,
-    );
-    const absentW = absenceWeightOverDays(allAbs, contractWd);
+    const absentW = Number(raw.absent_w ?? 0);
     const daily = wkh !== null && wkh > 0 ? wkh / 5 : 8;
-    const available = Math.max(contractWd.length - absentW, 0) * daily;
+    const available = Math.max(contract_wd - absentW, 0) * daily;
     out.set(emp_id, Number(available.toFixed(1)));
   }
   return out;

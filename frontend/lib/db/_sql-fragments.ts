@@ -1,9 +1,12 @@
 import { sql } from "drizzle-orm";
 
-export const roleTierFromAlias = (
-  ecAlias: string,
-  annAlias: string,
-) => sql.raw(`
+import {
+  DEFAULT_EMPLOYEE_STATE_CODE,
+  OFFICE_TO_STATE_CODE,
+} from "./_de-holidays";
+
+export const roleTierFromAlias = (ecAlias: string, annAlias: string) =>
+  sql.raw(`
   COALESCE(
     ${annAlias}.role_tier,
     CASE
@@ -34,7 +37,8 @@ export const roleTierFromAlias = (
  * the actual leaving date the user cares about.
  *
  * Expects `employee_current` aliased as the given alias. */
-export const effectiveEndDateFromAlias = (ecAlias: string) => sql.raw(`
+export const effectiveEndDateFromAlias = (ecAlias: string) =>
+  sql.raw(`
   LEAST(
     COALESCE(${ecAlias}.contract_end_date, DATE '9999-12-31'),
     COALESCE(${ecAlias}.employment_end_date, DATE '9999-12-31')
@@ -52,7 +56,8 @@ export const effectiveRateSql = (
   asnAlias: string,
   projAlias: string,
   profileExpr: string,
-) => sql.raw(`
+) =>
+  sql.raw(`
   COALESCE(
     ${asnAlias}.daily_rate_override_eur,
     (SELECT daily_rate_eur FROM project_rate pr
@@ -66,4 +71,22 @@ export const effectiveRateSql = (
        AND fr.valid_from <= ${asnAlias}.start_date
      ORDER BY fr.valid_from DESC LIMIT 1)
   )
+`);
+
+/** Employee `office` → holiday-state code for joining `state_holiday`,
+ * mirroring `stateCodeForOffice` exactly: NULL office → 'DE' (federal
+ * calendar), known office → its state, anything else → NW fallback.
+ * Generated from the same TS map so the two can't drift. */
+export const officeStateFromAlias = (ecAlias: string) =>
+  sql.raw(`
+  CASE
+    WHEN ${ecAlias}.office IS NULL THEN 'DE'
+    ${Object.entries(OFFICE_TO_STATE_CODE)
+      .map(
+        ([office, st]) =>
+          `WHEN ${ecAlias}.office = '${office.replace(/'/g, "''")}' THEN '${st}'`,
+      )
+      .join("\n    ")}
+    ELSE '${DEFAULT_EMPLOYEE_STATE_CODE}'
+  END
 `);
