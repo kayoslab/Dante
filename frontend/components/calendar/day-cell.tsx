@@ -6,6 +6,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { CalendarCell, CalendarDay } from "@/lib/api/calendar";
+import { DAY_HOURS, type LoadKind } from "@/lib/api/_calendar-load";
 import { cn } from "@/lib/utils";
 import { formatRate } from "@/lib/format";
 
@@ -13,17 +14,21 @@ import { formatRate } from "@/lib/format";
 //   1. vacation         — amber, intentional time off
 //   2. public holiday   — amber tint, no work expected
 //   3. weekend          — muted gray, no work expected
-//   4. load             — blue scale on combined load from THREE
-//                         sources (see comment by `load` below):
-//                          • manual `assignment.allocation_pct`
-//                          • awork planned (time bookings / 8h)
-//                          • awork tracked (time entries / 8h)
+//   4. load             — blue scale, red/orange above 1.0. The server
+//                         picks ONE signal per cell (`load_kind`):
+//                          • past days:  awork tracked hours / 8h
+//                                        → > 1.0 is OVERTIME (orange)
+//                          • today+future: manual allocation_pct and
+//                                        awork planned hours / 8h,
+//                                        max per project, summed
+//                                        → > 1.0 is OVERBOOKED (red)
 //   5. empty            — nothing
 //
 // Weekend / holiday / vacation override load so "Friday at 100% but
 // it's Karfreitag" / "she's on holiday today" stays surfaced.
 function colorClass(
   load: number,
+  loadKind: LoadKind,
   onVacation: boolean,
   hasHoliday: boolean,
   isWeekend: boolean,
@@ -31,7 +36,7 @@ function colorClass(
   if (onVacation) return "bg-amber-200/80";
   if (hasHoliday) return "bg-amber-100/60";
   if (isWeekend) return "bg-muted/30";
-  if (load > 1.0) return "bg-red-300";
+  if (load > 1.0) return loadKind === "actual" ? "bg-orange-300" : "bg-red-300";
   if (load >= 1.0) return "bg-blue-400";
   if (load >= 0.75) return "bg-blue-300";
   if (load >= 0.5) return "bg-blue-200";
@@ -86,14 +91,12 @@ export function DayCell({
   // Personio attendance — corner number for comparison with awork.
   const trackedHours = cell?.tracked_hours ?? 0;
   const aworkTrackedHours = cell?.awork_tracked_hours ?? 0;
-  // Color signal — the server already collapsed manual + awork at
-  // the project level (sum over projects of max(manual, planned/8,
-  // awork_tracked/8)) so a manual 100% on Project X + an 8h awork
-  // booking on Project X stay at 1.00, not 2.00. Personio is
-  // intentionally NOT in this sum — it's the corner number, not a
-  // load source.
+  // Color signal — computed server-side from ONE source depending on
+  // the day (see colorClass). Personio is intentionally NOT in it —
+  // it's the corner number, not a load source.
   const plannedHours = cell?.planned_hours ?? 0;
   const load = cell ? Number(cell.load) : 0;
+  const loadKind: LoadKind = cell?.load_kind ?? "planned";
 
   // Tooltip when there's data: allocation, vacation, holiday, or
   // tracked hours.
@@ -101,7 +104,7 @@ export function DayCell({
 
   const base = cn(
     "h-9 relative border-r border-b transition outline-none",
-    colorClass(load, onVacation, !!holiday || !!localHoliday, day.weekend),
+    colorClass(load, loadKind, onVacation, !!holiday || !!localHoliday, day.weekend),
     onClick && "cursor-pointer hover:ring-1 hover:ring-inset hover:ring-blue-500/60",
     onClick && "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500",
     !onClick && hasTooltip && "cursor-help",
@@ -195,9 +198,16 @@ export function DayCell({
               )}
             </ul>
           )}
-          {load > 1.0 && (
+          {load > 1.0 && loadKind === "planned" && (
             <div className="rounded bg-red-100 px-2 py-1 text-xs text-red-800">
-              ⚠ Overbooked ({load.toFixed(2)} of 1.00)
+              ⚠ Overbooked: {(load * DAY_HOURS).toFixed(1)}h planned of{" "}
+              {DAY_HOURS}h
+            </div>
+          )}
+          {load > 1.0 && loadKind === "actual" && (
+            <div className="rounded bg-orange-100 px-2 py-1 text-xs text-orange-900">
+              ⚠ Overtime: {(load * DAY_HOURS).toFixed(1)}h worked of{" "}
+              {DAY_HOURS}h
             </div>
           )}
           {cell && cell.planned_entries.length > 0 && (

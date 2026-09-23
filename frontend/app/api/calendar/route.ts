@@ -17,6 +17,7 @@ import { enforceRateLimit } from "@/lib/api/rate-limit";
 import {
   bucketKey,
   computeLoad,
+  loadKindFor,
   type ProjectLoadBucket,
 } from "@/lib/api/_calendar-load";
 
@@ -139,15 +140,11 @@ export async function GET(req: NextRequest) {
       return { start, end, days, employees: [], cells: [] };
     }
 
-    // Per-employee FTE (weekly_working_hours / 40). Cell load is divided by
-    // this so it reads as a fraction of the person's OWN capacity: a
-    // fully-booked 88%-contract employee shows 1.0 (fully allocated), not
-    // 0.88. `allocation_pct` is a fraction of full-time, so without this a
-    // part-timer looks perpetually under-allocated. See day-cell coloring.
-    const fteByEmp = new Map<number, number>();
-    for (const r of empRows) {
-      fteByEmp.set(r.employee_id, r.fte && r.fte > 0 ? r.fte : 1);
-    }
+    // NOTE: cell load is NOT scaled by the employee's weekly FTE. Capacity
+    // is a fixed 8h day for everyone — part-timers work full days on fewer
+    // days, so dividing an 8h booking by 0.8 painted every working day of
+    // theirs red. The FTE badge on the grid row carries that information
+    // instead. See lib/api/_calendar-load.ts.
 
     // Per-state holiday set, computed once per unique state code on the
     // grid. The set returned by `germanHolidaysForState` already includes
@@ -214,8 +211,9 @@ export async function GET(req: NextRequest) {
         hours: number;
       }>;
       // Per-project rollup of all load signals. See bucketKey + the
-      // computeLoad doc in lib/api/_calendar-load.ts for the
-      // max-per-project / sum-across-projects semantics.
+      // computeLoad doc in lib/api/_calendar-load.ts: future days score
+      // the plan (max-per-project / sum-across-projects), past days score
+      // awork tracked hours only.
       project_load: Map<string, ProjectLoadBucket>;
     };
 
@@ -381,18 +379,21 @@ export async function GET(req: NextRequest) {
         const planned_entries = c.planned_entries
           .filter((e) => e.hours > 0)
           .sort((a, b) => b.hours - a.hours);
-        const { load: rawLoad, planned_hours } = computeLoad(
+        // Past days: what was actually worked (awork tracked hours);
+        // > 1.0 = overtime. Today + future: what is planned (manual
+        // allocation + awork Planner); > 1.0 = overbooked. Never both —
+        // mixing them flagged "planned on A, worked on B" as 2.0.
+        const load_kind = loadKindFor(c.date, today);
+        const { load, planned_hours } = computeLoad(
           c.project_load.values(),
+          load_kind,
         );
-        // Normalize to the employee's capacity so part-timers aren't shown
-        // as under-allocated (allocation_pct is a fraction of full-time).
-        const empFte = fteByEmp.get(c.employee_id) ?? 1;
-        const load = empFte > 0 ? rawLoad / empFte : rawLoad;
         return {
           employee_id: c.employee_id,
           date: c.date,
           allocation_pct: c.allocation_pct.toFixed(4),
           load: load.toFixed(4),
+          load_kind,
           on_vacation: c.on_vacation,
           vacation_type: c.vacation_type,
           assignments: c.assignments,

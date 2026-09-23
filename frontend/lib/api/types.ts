@@ -294,12 +294,21 @@ export type CalendarCell = {
         /** Allocation Pct */
         allocation_pct: string;
         /**
-         * Cell load = sum over projects of max(manual_allocation,
-         * awork_planned/8, awork_tracked/8). Drives the cell color.
-         * Manual + awork on the same project collapse to max (same
-         * work, two views) rather than summing.
+         * Cell load as a fraction of an 8h day. Which signal feeds it
+         * depends on `load_kind`: past days score awork tracked hours
+         * only (> 1.0 = overtime), today and future days score the plan
+         * only — sum over projects of max(manual_allocation,
+         * awork_planned/8) — (> 1.0 = overbooked). Manual + awork on
+         * the same project collapse to max (same work, two views)
+         * rather than summing. Not scaled by weekly FTE.
          */
         load: string;
+        /**
+         * Which signal `load` was computed from: "actual" for days
+         * before today (awork tracked hours), "planned" for today and
+         * later (manual allocation + awork Planner).
+         */
+        load_kind: "planned" | "actual";
         /** On Vacation */
         on_vacation: boolean;
         /** Vacation Type */
@@ -328,7 +337,8 @@ export type CalendarCell = {
         tracked_entries: CalendarTrackedEntry[];
         /**
          * Total planned hours for this cell, distributed per-day from
-         * awork time bookings (planner data). Drives the cell color.
+         * awork time bookings (planner data). Drives the cell color on
+         * today + future days; on past days it's tooltip-only.
          * @default 0
          */
         planned_hours: number;

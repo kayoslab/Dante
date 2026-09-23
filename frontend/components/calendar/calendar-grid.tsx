@@ -201,7 +201,8 @@ export function CalendarGrid({
         <Legend swatch="bg-blue-200" label="50–74% load" />
         <Legend swatch="bg-blue-300" label="75–99% load" />
         <Legend swatch="bg-blue-400" label="100% load" />
-        <Legend swatch="bg-red-300" label=">100% load (overbook, assignment-only)" />
+        <Legend swatch="bg-red-300" label="Overbooked (>8h planned, today onwards)" />
+        <Legend swatch="bg-orange-300" label="Overtime (>8h tracked in awork, past days)" />
         <Legend swatch="bg-amber-200/80" label="Vacation/absence" />
         <Legend swatch="bg-amber-100/80" label="Public holiday (federal or local state)" />
         <Legend swatch="bg-muted/50" label="Weekend" />
