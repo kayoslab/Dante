@@ -162,9 +162,10 @@ export type CalendarTrackedRow = {
  * tracked-hours/forecast reports). The calendar's Personio corner number is
  * a standalone signal — it should always show the raw Personio-tracked hours
  * so a manager can see whether someone logged time in Personio *in addition*
- * to awork (an overtime / double-tracking check). The Personio side never
- * feeds the cell LOAD anyway (only manual alloc + awork planned/tracked do),
- * so there is no double-count to reconcile here. */
+ * to awork (an overtime / double-tracking check). Personio only feeds the
+ * cell LOAD as a past-day fallback when the cell has NO awork time at all
+ * (see lib/api/_calendar-load.ts), so there is no double-count to
+ * reconcile here. */
 export async function listCalendarTrackedTime(opts: {
   start: string;
   end: string;

@@ -11,8 +11,9 @@
  *     the person: manual `assignment.allocation_pct` + awork Planner
  *     bookings. > 1.0 means "overbooked": more work was planned than
  *     fits in a day.
- *   • past — ACTUAL load only. awork tracked hours ÷ 8h. > 1.0 means
- *     "overtime": the person clocked more than a day.
+ *   • past — ACTUAL load only. awork tracked hours ÷ 8h; when nothing
+ *     was tracked in awork that day, Personio attendance ÷ 8h instead.
+ *     > 1.0 means "overtime": the person clocked more than a day.
  *
  * Mixing the two (the previous Σ max(manual, planned, tracked) form)
  * flagged normal days as overbooked whenever the plan and the actual
@@ -37,6 +38,11 @@ export type ProjectLoadBucket = {
 };
 
 export type LoadKind = "planned" | "actual";
+
+/** Where an "actual" load came from. awork is preferred (project-level
+ * detail); Personio attendance is the fallback for people/days with no
+ * awork entries at all. Null on planned cells and on empty actual cells. */
+export type ActualSource = "awork" | "personio";
 
 /** Hours in one working day. Shared denominator for allocation_pct
  * (1.0 = one full day) and awork hours. */
@@ -73,6 +79,11 @@ export function loadKindFor(iso_day: string, today_iso: string): LoadKind {
  *            because those ARE different work.
  *   actual:  Σ over projects of awork_tracked_h / 8. Plain hours
  *            worked; the project split doesn't change the total.
+ *            If that sum is 0 and `personio_h` > 0, Personio
+ *            attendance stands in — the person worked, they just
+ *            don't log in awork (or forgot that day). Never blended:
+ *            once any awork time exists, Personio stays a corner
+ *            number so double-tracking can't inflate the load.
  *
  * `planned_hours` (the tooltip's "Planned: Xh [awork]") is reported in
  * both regimes — on a past day it's still useful to see what HAD been
@@ -80,7 +91,8 @@ export function loadKindFor(iso_day: string, today_iso: string): LoadKind {
 export function computeLoad(
   buckets: Iterable<ProjectLoadBucket>,
   kind: LoadKind,
-): { load: number; planned_hours: number } {
+  personio_h = 0,
+): { load: number; planned_hours: number; actual_source: ActualSource | null } {
   let load = 0;
   let planned_h_sum = 0;
   for (const b of buckets) {
@@ -91,5 +103,18 @@ export function computeLoad(
       load += b.awork_tracked_h / DAY_HOURS;
     }
   }
-  return { load, planned_hours: Math.round(planned_h_sum * 10) / 10 };
+  let actual_source: ActualSource | null = null;
+  if (kind === "actual") {
+    if (load > 0) {
+      actual_source = "awork";
+    } else if (personio_h > 0) {
+      load = personio_h / DAY_HOURS;
+      actual_source = "personio";
+    }
+  }
+  return {
+    load,
+    planned_hours: Math.round(planned_h_sum * 10) / 10,
+    actual_source,
+  };
 }

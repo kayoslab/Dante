@@ -379,14 +379,17 @@ export async function GET(req: NextRequest) {
         const planned_entries = c.planned_entries
           .filter((e) => e.hours > 0)
           .sort((a, b) => b.hours - a.hours);
-        // Past days: what was actually worked (awork tracked hours);
-        // > 1.0 = overtime. Today + future: what is planned (manual
-        // allocation + awork Planner); > 1.0 = overbooked. Never both —
-        // mixing them flagged "planned on A, worked on B" as 2.0.
+        // Past days: what was actually worked (awork tracked hours,
+        // falling back to Personio attendance when nothing was tracked
+        // in awork); > 1.0 = overtime. Today + future: what is planned
+        // (manual allocation + awork Planner); > 1.0 = overbooked.
+        // Never both — mixing them flagged "planned on A, worked on B"
+        // as 2.0.
         const load_kind = loadKindFor(c.date, today);
-        const { load, planned_hours } = computeLoad(
+        const { load, planned_hours, actual_source } = computeLoad(
           c.project_load.values(),
           load_kind,
+          c.personio_minutes_raw / 60,
         );
         return {
           employee_id: c.employee_id,
@@ -394,6 +397,7 @@ export async function GET(req: NextRequest) {
           allocation_pct: c.allocation_pct.toFixed(4),
           load: load.toFixed(4),
           load_kind,
+          actual_source,
           on_vacation: c.on_vacation,
           vacation_type: c.vacation_type,
           assignments: c.assignments,

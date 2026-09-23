@@ -175,3 +175,47 @@ test("actual: planned-but-not-worked day is 0", () => {
   assert.equal(load, 0);
   assert.equal(planned_hours, 8);
 });
+
+// ------------------------------------------------------- personio fallback
+
+test("actual: no awork time → Personio attendance drives the load", () => {
+  const { load, actual_source } = computeLoad(
+    [{ manual: 1.0, planned_h: 8, awork_tracked_h: 0 }],
+    "actual",
+    9.5,
+  );
+  assert.equal(load, 9.5 / 8);
+  assert.equal(actual_source, "personio");
+});
+
+test("actual: no awork time and no Personio → empty, no source", () => {
+  const { load, actual_source } = computeLoad(
+    [{ manual: 1.0, planned_h: 8, awork_tracked_h: 0 }],
+    "actual",
+    0,
+  );
+  assert.equal(load, 0);
+  assert.equal(actual_source, null);
+});
+
+test("actual: any awork time wins, Personio is never blended in", () => {
+  // 2h in awork + 8h Personio attendance: the person double-tracks.
+  // Load is the awork 2h, not 10h and not 8h.
+  const { load, actual_source } = computeLoad(
+    [{ manual: 0, planned_h: 0, awork_tracked_h: 2 }],
+    "actual",
+    8,
+  );
+  assert.equal(load, 0.25);
+  assert.equal(actual_source, "awork");
+});
+
+test("planned: Personio hours are ignored, source is null", () => {
+  const { load, actual_source } = computeLoad(
+    [{ manual: 0.5, planned_h: 0, awork_tracked_h: 0 }],
+    "planned",
+    10,
+  );
+  assert.equal(load, 0.5);
+  assert.equal(actual_source, null);
+});

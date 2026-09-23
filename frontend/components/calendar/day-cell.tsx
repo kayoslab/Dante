@@ -16,7 +16,9 @@ import { formatRate } from "@/lib/format";
 //   3. weekend          — muted gray, no work expected
 //   4. load             — blue scale, red/orange above 1.0. The server
 //                         picks ONE signal per cell (`load_kind`):
-//                          • past days:  awork tracked hours / 8h
+//                          • past days:  awork tracked hours / 8h, or
+//                                        Personio attendance / 8h when
+//                                        nothing was tracked in awork
 //                                        → > 1.0 is OVERTIME (orange)
 //                          • today+future: manual allocation_pct and
 //                                        awork planned hours / 8h,
@@ -92,11 +94,12 @@ export function DayCell({
   const trackedHours = cell?.tracked_hours ?? 0;
   const aworkTrackedHours = cell?.awork_tracked_hours ?? 0;
   // Color signal — computed server-side from ONE source depending on
-  // the day (see colorClass). Personio is intentionally NOT in it —
-  // it's the corner number, not a load source.
+  // the day (see colorClass). Personio only feeds it as the past-day
+  // fallback when awork has nothing; otherwise it's the corner number.
   const plannedHours = cell?.planned_hours ?? 0;
   const load = cell ? Number(cell.load) : 0;
   const loadKind: LoadKind = cell?.load_kind ?? "planned";
+  const actualSource = cell?.actual_source ?? null;
 
   // Tooltip when there's data: allocation, vacation, holiday, or
   // tracked hours.
@@ -207,7 +210,10 @@ export function DayCell({
           {load > 1.0 && loadKind === "actual" && (
             <div className="rounded bg-orange-100 px-2 py-1 text-xs text-orange-900">
               ⚠ Overtime: {(load * DAY_HOURS).toFixed(1)}h worked of{" "}
-              {DAY_HOURS}h
+              {DAY_HOURS}h{" "}
+              <span className="text-orange-900/70">
+                [{actualSource === "personio" ? "Personio" : "awork"}]
+              </span>
             </div>
           )}
           {cell && cell.planned_entries.length > 0 && (

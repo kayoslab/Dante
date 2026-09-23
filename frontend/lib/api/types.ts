@@ -296,7 +296,8 @@ export type CalendarCell = {
         /**
          * Cell load as a fraction of an 8h day. Which signal feeds it
          * depends on `load_kind`: past days score awork tracked hours
-         * only (> 1.0 = overtime), today and future days score the plan
+         * only, or Personio attendance when there are none (> 1.0 =
+         * overtime); today and future days score the plan
          * only — sum over projects of max(manual_allocation,
          * awork_planned/8) — (> 1.0 = overbooked). Manual + awork on
          * the same project collapse to max (same work, two views)
@@ -309,6 +310,13 @@ export type CalendarCell = {
          * later (manual allocation + awork Planner).
          */
         load_kind: "planned" | "actual";
+        /**
+         * For `load_kind = "actual"`: which system the hours came from.
+         * "awork" when any awork time exists for the day, "personio"
+         * when none does and Personio attendance stood in, null when
+         * nothing was tracked anywhere. Always null on planned cells.
+         */
+        actual_source: "awork" | "personio" | null;
         /** On Vacation */
         on_vacation: boolean;
         /** Vacation Type */
