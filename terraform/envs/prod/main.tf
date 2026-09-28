@@ -41,7 +41,7 @@ provider "aws" {
 
 # Cognito requires ACM certs for custom user-pool domains to live in
 # us-east-1 specifically (no exceptions, regardless of where the pool
-# itself is). Only used for the `auth.dante.example.com` cert below
+# itself is). Only used for the `auth.<domain>` cert below
 # — every other resource stays in eu-central-1.
 provider "aws" {
   alias  = "us_east_1"
@@ -119,7 +119,7 @@ module "cognito" {
   # Custom Cognito hosted-UI domain. WebAuthn passkeys are bound to an
   # RPID (relying party ID) that must be a registrable suffix of the
   # browser's current page origin. Passkeys registered against the app
-  # at `dante.example.com` can only be used at sign-in if the hosted
+  # at `var.domain` can only be used at sign-in if the hosted
   # UI lives on the same eTLD+1. The default `*.amazoncognito.com`
   # domain is on a different eTLD+1 and breaks WebAuthn.
   custom_domain_name     = "auth.${var.domain}"
@@ -226,7 +226,7 @@ resource "aws_route53_record" "ses_dkim" {
 }
 
 # SPF for the sending subdomain. Authorizes SES as a sender for
-# `dante.example.com`. Cognito's default envelope (MAIL FROM) is an
+# `var.domain`. Cognito's default envelope (MAIL FROM) is an
 # amazonses.com address, so DMARC alignment is carried by DKIM (above),
 # not SPF — but publishing SPF is standard hygiene and lets receivers
 # that check the header From domain see an explicit authorization.
@@ -241,13 +241,13 @@ resource "aws_route53_record" "spf" {
 }
 
 # DMARC policy for the sending subdomain. Legitimate mail passes via
-# DKIM alignment (SES Easy-DKIM signs d=dante.example.com, which
+# DKIM alignment (SES Easy-DKIM signs d=<var.domain>, which
 # matches the From domain); this record tells receivers to quarantine
-# anything claiming to be from dante.example.com that isn't
+# anything claiming to be from `var.domain` that isn't
 # authenticated. `p=quarantine` is the prudent strong policy for a
 # dedicated transactional subdomain that only sends through SES — tighten
 # to `p=reject` once comfortable. No `rua` to avoid a cross-domain
-# report-authorization record in the corporate example.com zone.
+# report-authorization record in the corporate parent zone.
 resource "aws_route53_record" "dmarc" {
   zone_id = var.hosted_zone_id
   name    = "_dmarc.${var.domain}"
@@ -258,22 +258,22 @@ resource "aws_route53_record" "dmarc" {
 
 # Recipient-domain verification for the corporate PARENT domain.
 #
-# We do NOT send from example.com — Dante sends from the dedicated
-# subdomain dante.example.com (identity + DKIM above). This identity
+# We do NOT send from the parent domain (`var.parent_domain`) — Dante
+# sends from the dedicated subdomain `var.domain` (identity + DKIM above). This identity
 # exists purely so that, while the SES account is in the sandbox, every
-# @example.com employee counts as a *verified destination*. Without it,
+# mailbox on the parent domain counts as a *verified destination*. Without it,
 # the sandbox's "verified recipients only" rule blocks Cognito from ever
 # delivering an invite/reset to a staff mailbox (only the subdomain is
-# verified today, and no employee has a @dante.example.com address).
+# verified today, and no employee has an address on the app subdomain).
 #
 # Because we only need ownership proof — not sending — we use the classic
 # single-TXT verification (SESv1 aws_ses_domain_identity) rather than the
 # DKIM-CNAME flow. IT publishes ONE TXT record; no DKIM, no SPF/DMARC
 # changes to the corporate zone, and no interaction with the existing
 # corporate mail auth (MX / SPF / DKIM stay untouched — the
-# _amazonses.example.com name is used only by SES for ownership).
+# _amazonses.<parent_domain> name is used only by SES for ownership).
 #
-# The example.com zone is NOT managed by this Terraform (corporate IT
+# The parent zone is NOT managed by this Terraform (corporate IT
 # owns it), so Terraform creates only the identity here; the verification
 # record is surfaced via the `ses_parent_domain_verification` output for
 # IT to publish. Until that TXT resolves the identity sits "pending" and
@@ -281,8 +281,17 @@ resource "aws_route53_record" "dmarc" {
 #
 # Once verified, this whole block can be removed if the account leaves the
 # SES sandbox (production access makes recipient verification moot).
-resource "aws_ses_domain_identity" "company_parent" {
-  domain = "example.com"
+resource "aws_ses_domain_identity" "parent_domain" {
+  domain = var.parent_domain
+}
+
+# The identity used to be addressed as `company_parent` with a
+# hardcoded domain. Keep the state address stable across the rename so
+# an apply doesn't destroy + recreate the (possibly already verified)
+# identity.
+moved {
+  from = aws_ses_domain_identity.company_parent
+  to   = aws_ses_domain_identity.parent_domain
 }
 
 # ACM cert for the Cognito custom domain. MUST be in us-east-1

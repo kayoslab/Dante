@@ -213,7 +213,7 @@ function AddLinkDialog({ projectId }: { projectId: number }) {
           </DialogDescription>
         </DialogHeader>
         <Input
-          placeholder="Search name (e.g. Globex, Initech)…"
+          placeholder="Search name (e.g. Acme, Globex)…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           autoFocus

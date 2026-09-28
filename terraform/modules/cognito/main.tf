@@ -21,7 +21,7 @@
  *     OIDC endpoint, plus attribute mapping — no app code change.
  *   - Custom SES sender. Cognito's default sender is rate-limited to ~50
  *     emails/day, which is fine for dev. Switch to SES with a verified
- *     domain (d.alighieri@dante.example.com) in prod.
+ *     domain (noreply@<domain>) in prod.
  */
 locals {
   name = "${var.name_prefix}-${var.environment}"

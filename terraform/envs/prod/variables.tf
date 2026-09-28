@@ -10,15 +10,18 @@ variable "aws_region" {
 }
 
 variable "domain" {
-  description = "Public hostname the prod app is served from. Used to derive Cognito callback and logout URLs."
+  description = "Public hostname the prod app is served from (e.g. `dante.example.com`). Used to derive Cognito callback / logout URLs, the Cognito hosted-UI custom domain (`auth.<domain>`), and the SES sender identity. No default — supplied by CI from the `APP_DOMAIN` repository variable, or via a gitignored `*.auto.tfvars` for manual applies."
   type        = string
-  default     = "dante.example.com"
+}
+
+variable "parent_domain" {
+  description = "Corporate parent domain (e.g. `example.com`) whose Route 53 zone (`hosted_zone_id`) hosts `var.domain`. Verified as an SES identity so that, while the SES account is sandboxed, every mailbox on the parent domain is a valid recipient for Cognito invite / reset mail. Supplied by CI from the `PARENT_DOMAIN` repository variable."
+  type        = string
 }
 
 variable "seed_admin_emails" {
-  description = "Email addresses to invite as admin users into the prod Cognito pool. Cognito emails each a temp password."
+  description = "Email addresses to invite as admin users into the prod Cognito pool. Cognito emails each a temp password. Supplied by CI from the `SEED_ADMIN_EMAILS` repository variable (JSON list)."
   type        = list(string)
-  default     = ["admin@example.com"]
 
   validation {
     condition     = length(var.seed_admin_emails) >= 1
@@ -35,9 +38,8 @@ variable "sync_lambda_package_zip_path" {
 }
 
 variable "sync_lambda_alarm_emails" {
-  description = "Email addresses subscribed to the sync Lambda's CloudWatch alarm SNS topic. Each receives a confirmation email after the first apply."
+  description = "Email addresses subscribed to the sync Lambda's CloudWatch alarm SNS topic. Each receives a confirmation email after the first apply. Supplied by CI from the `SYNC_LAMBDA_ALARM_EMAILS` repository variable (JSON list)."
   type        = list(string)
-  default     = ["admin@example.com"]
 }
 
 variable "sync_lambda_schedule_expression" {
@@ -111,7 +113,7 @@ variable "rds_engine_version" {
 # --- DNS ---------------------------------------------------------------
 
 variable "hosted_zone_id" {
-  description = "Route 53 hosted zone ID for the parent domain (the zone hosting `example.com`). Required for ACM DNS validation + the A-alias record on `var.domain`."
+  description = "Route 53 hosted zone ID for the parent domain (the zone hosting `var.parent_domain`). Required for ACM DNS validation + the A-alias record on `var.domain`. Supplied by CI from the `HOSTED_ZONE_ID` repository variable."
   type        = string
 }
 
@@ -149,9 +151,8 @@ variable "waf_geo_allow_list" {
 }
 
 variable "waf_alarm_emails" {
-  description = "Subscribers for the WAF blocked-spike alarm. Each receives a confirmation email after first apply."
+  description = "Subscribers for the WAF blocked-spike alarm. Each receives a confirmation email after first apply. Supplied by CI from the `WAF_ALARM_EMAILS` repository variable (JSON list)."
   type        = list(string)
-  default     = ["admin@example.com"]
 }
 
 variable "waf_enabled" {
@@ -163,6 +164,6 @@ variable "waf_enabled" {
 # --- GitHub Actions ----------------------------------------------------
 
 variable "github_repository" {
-  description = "GitHub repo in `owner/repo` form (e.g. `cr0ss/dante`). Drives the OIDC trust policies — only workflows from this repo can assume the check / deploy roles."
+  description = "GitHub repo in `owner/repo` form (e.g. `your-org/dante`). Drives the OIDC trust policies — only workflows from this repo can assume the check / deploy roles."
   type        = string
 }

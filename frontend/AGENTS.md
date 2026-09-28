@@ -91,7 +91,7 @@ fallback for the password path. Managed Login v2 renders passkey sign-in
 (add / list / remove) via the Cognito WebAuthn SDK
 (`Start`/`Complete`/`List`/`DeleteWebAuthnCredential`) with their own
 access token — the ceremony runs against the app origin and binds to the
-pool's `relying_party_id` (`dante.example.com`, the shared registrable
+pool's `relying_party_id` (the app domain, the shared registrable
 parent of the app + Managed Login origins).
 
 **MFA posture with passkeys on.** Cognito hard-refuses `WEB_AUTHN` as a
@@ -263,7 +263,7 @@ Order matters — Terraform creates empty secret containers, but the operator wr
 
 4. **Terraform apply (round 2)** with `-var app_image_uri=<repo_url>:<git_sha>`. ECS rolls the service. Deployment circuit-breaker auto-rolls back on failed health checks.
 
-5. **Confirm SNS subscription emails** — the sync Lambda's alarm topic and any others land in `admin@example.com`. Click the confirm link or alarms won't fire.
+5. **Confirm SNS subscription emails** — the sync Lambda's alarm topic and any others land in the `sync_lambda_alarm_emails` / `waf_alarm_emails` addresses. Click the confirm link or alarms won't fire.
 
 6. **First sign-in** — Cognito sends a temp-password email to seed admins; you complete first sign-in, set a permanent password, then Cognito's hosted UI prompts for TOTP enrollment. After that the user redirects back to `/` already MFA-verified.
 
@@ -304,15 +304,23 @@ Two workflows + two OIDC roles. No long-lived AWS keys.
 
 **`.github/workflows/deploy.yml`** — runs on push to `main`:
 1. **build**: assume the deploy role via OIDC, ECR login, `docker buildx` arm64 build + push tagged with the first 12 chars of the commit SHA. Then rebuild the sync Lambda zip and upload as a workflow artifact.
-2. **terraform**: download the Lambda artifact, `terraform plan` (passing `app_image_uri` + `github_repository` + `hosted_zone_id`), `terraform apply` the plan.
+2. **terraform**: download the Lambda artifact, `terraform plan` (passing `app_image_uri` + `github_repository` + the deployment-specific variables listed below), `terraform apply` the plan.
 3. **rollout**: `aws ecs update-service --force-new-deployment` + `aws ecs wait services-stable`. The task definition already moved during the Terraform step; this triggers the service to roll.
 
 **Repository configuration (one-time after first `terraform apply`)** — set as repository **variables** (ARNs aren't secrets). The repo's GitHub Secrets are deliberately empty for app config — all app secrets live in AWS Secrets Manager and the runtime reads them directly; see [Prod bring-up §2](#prod-bring-up).
+- `DEPLOY_ENABLED`      ← `true`. Explicit opt-in; every deploy job is skipped unless this is exactly `true`, so forks and mirrors never deploy.
 - `AWS_DEPLOY_ROLE_ARN` ← `terraform output -raw github_deploy_role_arn`
 - `AWS_CHECK_ROLE_ARN`  ← `terraform output -raw github_check_role_arn`
 - `ECS_CLUSTER_NAME`    ← `terraform output -raw app_cluster_name`
 - `ECS_SERVICE_NAME`    ← `terraform output -raw app_service_name`
 - `HOSTED_ZONE_ID`      ← the Route 53 zone ID for the parent domain
+- `APP_DOMAIN`          ← public hostname of the app, e.g. `dante.example.com`
+- `PARENT_DOMAIN`       ← corporate parent domain, e.g. `example.com`
+- `SEED_ADMIN_EMAILS`   ← JSON list, e.g. `["admin@example.com"]` — first admins invited into Cognito
+- `SYNC_LAMBDA_ALARM_EMAILS` ← JSON list of sync-alarm subscribers
+- `WAF_ALARM_EMAILS`    ← JSON list of WAF-alarm subscribers
+
+Every job in `deploy.yml` is gated on `vars.DEPLOY_ENABLED == 'true'`, so a fork or mirror without that variable skips the deploy entirely. For manual applies from a workstation the same values go into a gitignored `terraform/envs/prod/prod.auto.tfvars` — copy `prod.auto.tfvars.example`.
 
 **The chicken-and-egg**: the deploy workflow assumes the deploy role, but Terraform created it. First apply runs from a developer's laptop with admin credentials. After that, GitHub takes over.
 

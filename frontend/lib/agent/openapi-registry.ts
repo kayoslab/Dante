@@ -24,7 +24,11 @@ export const agentRegistry = new OpenAPIRegistry();
 // Cognito OAuth security scheme. The fully-qualified scope strings
 // (`dante-agents/<name>`) come from the catalog so adding a scope is
 // one source-of-truth edit, not three.
-const COGNITO_BASE = "https://auth.dante.example.com";
+// Hosted-UI base URL of the pool (the custom `auth.<domain>` in prod).
+// Same env var `/login` uses for the forgot-password link; ECS injects
+// it from terraform. Empty in environments without a hosted UI, which
+// only degrades the *documented* authorization URL, not enforcement.
+const COGNITO_BASE = process.env.COGNITO_HOSTED_UI_URL ?? "";
 const RESOURCE_SERVER = "dante-agents";
 
 const scopeMap: Record<string, string> = {};

@@ -1,0 +1,27 @@
+/**
+ * Per-environment values for MANUAL `terraform plan / apply` from an
+ * operator workstation. Copy to `prod.auto.tfvars` (gitignored) and
+ * fill in. CI does not use this file — the deploy workflow passes the
+ * same values with `-var` from GitHub repository variables (see
+ * `.github/workflows/deploy.yml`), so the two must be kept in sync.
+ *
+ * `app_image_uri` is intentionally NOT listed — it rotates on every
+ * deploy and CI injects the current value.
+ */
+
+# `owner/repo` slug of the GitHub repository allowed to assume the
+# check / deploy OIDC roles. CI passes `${{ github.repository }}`.
+github_repository = "your-org/dante"
+
+# Route 53 zone ID of the parent domain (the zone hosting `domain`).
+hosted_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# Public hostname the app is served from, and the corporate parent
+# domain it lives under. Cognito's hosted UI goes on `auth.<domain>`.
+domain        = "dante.example.com"
+parent_domain = "example.com"
+
+# Who gets the first admin invite, and who receives alarm mail.
+seed_admin_emails        = ["admin@example.com"]
+sync_lambda_alarm_emails = ["ops@example.com"]
+waf_alarm_emails         = ["ops@example.com"]

@@ -155,7 +155,7 @@ function AddAworkLinkDialog({ projectId }: { projectId: number }) {
           </DialogDescription>
         </DialogHeader>
         <Input
-          placeholder="Search name (e.g. Globex, Pentest, Acme)…"
+          placeholder="Search name (e.g. Acme, Globex)…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           autoFocus

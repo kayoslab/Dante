@@ -60,7 +60,7 @@ const CreateFreelancerBodySchema = z
       .nullable()
       .optional()
       .openapi({
-        example: "Introduced via June 2026 pentest engagement.",
+        example: "Introduced via the June 2026 pentest engagement.",
         description:
           "Optional provenance note — how the freelancer entered the " +
           "roster, contact context, or anything the next operator should " +

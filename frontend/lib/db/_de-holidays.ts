@@ -15,7 +15,7 @@ const PYTHON_NAME_OVERRIDES: Record<string, string> = {
 /** Default state for employees whose `office` field is missing, blank,
  * "Homeoffice", a foreign country, or otherwise unrecognized.
  *
- * the original operator is registered in NRW; this is the safe fallback
+ * The reference deployment's company is registered in NRW; this is the safe fallback
  * for any active employee whose office is stale data (the live DB still
  * has Homeoffice rows that should have a federal state set in Personio).
  *

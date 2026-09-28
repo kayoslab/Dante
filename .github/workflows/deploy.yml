@@ -4,6 +4,28 @@ name: deploy
 # to ECR, apply Terraform with the new image tag. The deploy role's
 # trust policy enforces that ONLY `main` workflows can assume it — a
 # malicious feature branch can't deploy.
+#
+# Every job is additionally gated on `vars.DEPLOY_ENABLED == 'true'`:
+# a repository where that variable is unset (a fork, a personal mirror,
+# a fresh clone of this reference implementation) never even attempts a
+# deploy. The AWS OIDC trust policy would reject it anyway, but this
+# keeps the workflow from running and failing noisily — and it is an
+# explicit opt-in rather than an inference from other configuration.
+#
+# Required GitHub *repository variables* (Settings → Secrets and
+# variables → Actions → Variables). None of these are secrets, but all
+# are deployment-specific, which is why they are not in the repo:
+#
+#   DEPLOY_ENABLED             "true" to allow this repo to deploy
+#   AWS_DEPLOY_ROLE_ARN        IAM role CI assumes (output of terraform)
+#   HOSTED_ZONE_ID             Route 53 zone of the parent domain
+#   APP_DOMAIN                 e.g. dante.example.com
+#   PARENT_DOMAIN              e.g. example.com
+#   SEED_ADMIN_EMAILS          JSON list, e.g. ["admin@example.com"]
+#   SYNC_LAMBDA_ALARM_EMAILS   JSON list of alarm subscribers
+#   WAF_ALARM_EMAILS           JSON list of alarm subscribers
+#   ECS_CLUSTER_NAME           e.g. dante-prod-app
+#   ECS_SERVICE_NAME           e.g. dante-prod-app
 on:
   push:
     branches: ["main"]
@@ -43,6 +65,7 @@ jobs:
   # ---------------------------------------------------------------------
   build:
     name: build (container + lambda)
+    if: vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     outputs:
       image_uri: ${{ steps.tag.outputs.image_uri }}
@@ -202,7 +225,7 @@ jobs:
   terraform_plan:
     name: terraform plan (prod)
     needs: build
-    if: github.event.inputs.skip_terraform_apply != 'true'
+    if: vars.DEPLOY_ENABLED == 'true' && github.event.inputs.skip_terraform_apply != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -250,6 +273,11 @@ jobs:
           terraform plan \
             -var "github_repository=${{ github.repository }}" \
             -var "hosted_zone_id=${{ vars.HOSTED_ZONE_ID }}" \
+            -var "domain=${{ vars.APP_DOMAIN }}" \
+            -var "parent_domain=${{ vars.PARENT_DOMAIN }}" \
+            -var 'seed_admin_emails=${{ vars.SEED_ADMIN_EMAILS }}' \
+            -var 'sync_lambda_alarm_emails=${{ vars.SYNC_LAMBDA_ALARM_EMAILS }}' \
+            -var 'waf_alarm_emails=${{ vars.WAF_ALARM_EMAILS }}' \
             -var "app_image_uri=${{ needs.build.outputs.image_uri }}" \
             -out=prod.tfplan \
             -no-color 2>&1 | tee plan.txt
@@ -293,11 +321,11 @@ jobs:
   terraform_apply:
     name: terraform apply (prod)
     needs: [build, terraform_plan]
-    if: github.event.inputs.skip_terraform_apply != 'true'
+    if: vars.DEPLOY_ENABLED == 'true' && github.event.inputs.skip_terraform_apply != 'true'
     runs-on: ubuntu-latest
     environment:
       name: production
-      url: https://dante.example.com
+      url: https://${{ vars.APP_DOMAIN }}
     defaults:
       run:
         working-directory: terraform/envs/prod
@@ -356,6 +384,7 @@ jobs:
   rollout:
     name: ECS rollout
     needs: [build, terraform_apply]
+    if: vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: aws-actions/configure-aws-credentials@v4

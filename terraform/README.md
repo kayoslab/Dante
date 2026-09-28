@@ -35,7 +35,7 @@ One module per AWS-shaped concern. Environments compose modules. State is local 
 
 ## ⚠️ AWS Free Plan workarounds (prod)
 
-The prod AWS account (`000000000000`) was on AWS's 2025 Free Plan at bring-up. The plan hard-blocks two configurations Dante needs at safe defaults, so the prod env temporarily overrides them. Both overrides live in `terraform/envs/prod/main.tf` marked `TODO(free-plan)`:
+The prod AWS account was on AWS's 2025 Free Plan at bring-up. The plan hard-blocks two configurations Dante needs at safe defaults, so the prod env temporarily overrides them. Both overrides live in `terraform/envs/prod/main.tf` marked `TODO(free-plan)`:
 
 | Setting | Safe default | Free-Plan override | Impact |
 |---|---|---|---|
@@ -69,7 +69,7 @@ terraform apply
 
 After `apply`:
 
-- Cognito will email `admin@example.com` (the seeded admin) with a temp password. The sender is the default Cognito one (`no-reply@verificationemail.com`) — moves to SES with `d.alighieri@dante.example.com` in P3.
+- Cognito will email each address in `seed_admin_emails` with a temp password. The sender is the default Cognito one (`no-reply@verificationemail.com`) — moves to SES with `noreply@<domain>` in P3.
 - Read the outputs and put them in `frontend/.env`:
   ```
   terraform output cognito_user_pool_id

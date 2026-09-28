@@ -5,13 +5,47 @@
 Welcome to time tracking. Mind the gap between your ambitions and your
 billable hours.
 
-Dante is the internal HR + time-tracking analytics tool for **the original operator**. It pulls employee records, salaries, absences, and attendances
-from Personio, marries them to time entries from awork, and gives managers
-the numbers they need to run a consultancy without spreadsheets that lie.
+Dante is the HR + time-tracking analytics tool built for **the original operator**, published here as an open-source example implementation.
+It pulls employee records, salaries, absences, and attendances from
+Personio, marries them to time entries from awork, and gives managers the
+numbers they need to run a consultancy without spreadsheets that lie.
 
 It is named after the poet who wrote about descending through nine circles
 of progressively worse predicaments. If you have ever filled out a timesheet,
 the analogy will land.
+
+---
+
+## What this repository is
+
+This is a **reference implementation, not a product.** It is offered as a
+starting point for organisations with a *dispersed data environment* —
+the common situation where the people you employ are recorded in one
+system (an HRIS such as Personio), the work they do is recorded in
+another (a project or time-tracking tool such as awork), your customers
+and rates live in a third place, and nobody has a single view that joins
+them. Dante shows one complete, production-grade way to close that gap:
+
+- a scheduled **sync layer** that pulls each source into a normalised
+  PostgreSQL schema, with the source-specific quirks isolated behind
+  adapters;
+- a **reconciliation layer** that links records across systems (people
+  by email, customers by name, assignments derived from logged time)
+  and lets an operator override the guesses;
+- a set of **report engines** (utilisation, bench, project P&L, margin,
+  pay-gap) that compute against the reconciled data rather than against
+  any one source;
+- a **role model** (employee / SDM / manager / admin) that decides who
+  may see what, down to individual HR-sensitive fields;
+- the **infrastructure** to run it securely on AWS — network, secrets,
+  auth with mandatory MFA, WAF, audit logging, alarms — as Terraform.
+
+The concrete integrations (Personio, awork, Cognito, the German
+working-calendar rules) reflect the original operator's own environment. If yours
+differs, the intended path is to fork this repository, swap the adapter
+that doesn't match, and keep the rest. The repository is MIT-licensed
+precisely so that you can. See [`CONTRIBUTING.md`](CONTRIBUTING.md) if
+you'd like to send improvements back.
 
 ---
 
@@ -106,7 +140,7 @@ version of this is wrong. That's why this exists.
   reuses the same Lambda via synchronous invoke — the web-app task role
   doesn't hold Personio credentials directly.
 - **Auth:** AWS Cognito user pool with hosted UI on the custom domain
-  `auth.dante.example.com` (own ACM cert in `us-east-1` per Cognito
+  `auth.<domain>` (own ACM cert in `us-east-1` per Cognito
   requirement). MFA is mandatory for every user
   (`mfa_configuration = "ON"`); TOTP via any authenticator app. The
   pool runs on the **Plus tier** with Threat Protection set to
@@ -125,7 +159,7 @@ version of this is wrong. That's why this exists.
   Secrets Manager perms are split read-write (only the cognito_client
   secret terraform manages) vs describe-only on everything else.
 - **Email:** Cognito invitation / reset / MFA-setup emails route through
-  SES from `noreply@dante.example.com` (domain identity verified with
+  SES from `noreply@<domain>` (domain identity verified with
   Easy-DKIM; DKIM CNAMEs in Route 53). SES is in sandbox until AWS
   approves production access — see "What is not available" below.
 - **WAF:** Managed rule groups (Common, KnownBadInputs, IpReputation,
@@ -205,6 +239,14 @@ Cliff notes:
 4. Build + push the container image to ECR.
 5. `terraform apply -var app_image_uri=<repo>:<sha>` rolls the service.
 6. Confirm SNS subscription emails for the alarm topics.
+
+Nothing deployment-specific is checked in. Hostnames, the parent DNS
+zone, admin and alarm addresses, and the IAM role CI assumes all come
+from GitHub **repository variables** (listed at the top of
+`.github/workflows/deploy.yml`) or, for manual applies, from a
+gitignored `terraform/envs/prod/prod.auto.tfvars` copied from its
+`.example`. The deploy job only runs where the `DEPLOY_ENABLED` variable is
+exactly `true`, so a fork or mirror never deploys by accident.
 
 ### Cost
 
@@ -317,6 +359,15 @@ functionality is degraded or missing from production:
 
 ---
 
+## Contributing
+
+Issues and pull requests are welcome — see
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the checks to run and the two
+architectural guards (awork read-only, DB access local to `lib/db/`)
+that CI enforces.
+
+---
+
 ## License
 
-Proprietary. See [`LICENSE.md`](LICENSE.md).
+MIT. See [`LICENSE.md`](LICENSE.md). Copyright (c) 2026 Simon Krüger (https://github.com/kayoslab).

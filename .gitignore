@@ -45,6 +45,10 @@ playwright-report/
 .terraform/
 .terraform.tfstate.lock.info
 *.tfplan
+# Per-operator variable files carry hostnames, zone IDs and contact
+# addresses — keep them local. The *.example twins are committed.
+*.tfvars
+!*.tfvars.example
 crash.log
 crash.*.log
 # Lock file IS committed — pins provider versions across the team.
