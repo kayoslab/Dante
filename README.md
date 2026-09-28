@@ -241,13 +241,9 @@ Cliff notes:
 5. `terraform apply -var app_image_uri=<repo>:<sha>` rolls the service.
 6. Confirm SNS subscription emails for the alarm topics.
 
-Nothing deployment-specific is checked in. Hostnames, the parent DNS
-zone, admin and alarm addresses, and the IAM role CI assumes all come
-from GitHub **repository variables** (listed at the top of
-`.github/workflows/deploy.yml`) or, for manual applies, from a
-gitignored `terraform/envs/prod/prod.auto.tfvars` copied from its
-`.example`. The deploy job only runs where the `DEPLOY_ENABLED` variable is
-exactly `true`, so a fork or mirror never deploys by accident.
+Nothing deployment-specific is checked in — see
+[Configuration](#configuration) for every variable CI and terraform
+expect.
 
 ### Cost
 
@@ -263,14 +259,13 @@ retention, SES, SNS, S3 state) totals well under €10/mo.
 **Cost assumptions** baked into the current setup, each of which is a
 deliberate trade and a future lever if you need to cut further:
 
-- **NAT Gateway today; NAT instance available** (`vpc.nat_mode =
-  "instance"`) — switching saves ~€30/mo but requires a non-Free-Tier
-  ARM instance type that the AWS 2025 Free Plan blocks
-  (`InvalidParameterCombination: The specified instance type is not
-  eligible for Free Tier`). The terraform variable is plumbed; flip
-  it once IT upgrades the billing tier. NAT instance is single-AZ,
-  single-instance — if it dies, the next `terraform apply` rebuilds
-  it (~5 min of NAT-dependent outbound disrupted).
+- **NAT Gateway by default; NAT instance available**
+  (`vpc_nat_mode = "instance"`) — switching saves ~€30/mo but needs a
+  Graviton instance type, which AWS Free Plan accounts cannot launch
+  (`InvalidParameterCombination: ... not eligible for Free Tier`). NAT
+  instance is single-AZ, single-instance — if it dies, the next
+  `terraform apply` rebuilds it (~5 min of NAT-dependent outbound
+  disrupted).
 - **Single-AZ NAT** for both modes — one NAT in `eu-central-1a`, both
   app AZs route through it. AZ outage on `1a` means no outbound from
   either AZ. Toggle `vpc.single_nat_gateway = false` if multi-AZ
@@ -292,71 +287,51 @@ deliberate trade and a future lever if you need to cut further:
   at 30 days (see migration 0014). Keep an eye on the log group size
   if `DANTE_LOG_LEVEL` is ever set to `debug` in prod.
 
-### What is *not* available right now (AWS account state, June 2026)
+### Configuration
 
-The account this stack is deployed to is in two restrictive states at
-once: AWS's 2025 Free Plan (gates several billed services) and SES's
-default sandbox mode (gates outbound email). Both lift the moment the
-appropriate request is approved by AWS, but until then the following
-functionality is degraded or missing from production:
+Deployment-specific values live in two places, never in the tree:
+GitHub **repository variables** for CI (Settings → Secrets and variables
+→ Actions → Variables), and a gitignored
+`terraform/envs/prod/prod.auto.tfvars` (copy the `.example`) for manual
+applies. None of them are secrets; all app secrets live in AWS Secrets
+Manager.
 
-**Data durability and recovery**
-- **No automated database backups.** RDS rejects
-  `backup_retention_period > 0` under the Free Plan, so the prod DB
-  has `backup_retention_days = 0`. There are no daily snapshots, no
-  point-in-time recovery, no transaction-log retention. The only way
-  to recover from data corruption, an erroneous `DELETE`, or an
-  accidental schema migration is to **restore from a manual snapshot**
-  taken before the incident. If no manual snapshot exists, the data is
-  gone. **Do not load real employee or salary data into prod until
-  this is restored.**
+**GitHub repository variables** (read by `.github/workflows/deploy.yml`)
 
-**Email deliverability**
-- **SES is in sandbox**, so Cognito invitation / password-reset / MFA
-  setup emails only reach addresses that have been individually
-  pre-verified as SES identities. New hires invited via
-  `/settings/users` do not receive their welcome email — the action
-  succeeds at the API layer but SES silently drops delivery. The
-  workaround is to verify each new email address as an SES identity
-  in the AWS console before inviting, or — properly — open the
-  SES production-access request. Once approved, the sandbox restriction
-  lifts and every recipient gets mail.
+| Variable | Example | Purpose |
+|---|---|---|
+| `DEPLOY_ENABLED` | `true` | Explicit opt-in. Every deploy job is skipped unless this is exactly `true`, so forks and mirrors never deploy. |
+| `AWS_FREE_PLAN` | `true` / `false` | Whether the AWS account is on the 2025 Free Plan. Drives terraform `aws_free_plan` and the CVE scan gate — see below. |
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::…:role/dante-prod-gh-deploy` | IAM role CI assumes via OIDC. `terraform output -raw github_deploy_role_arn`. |
+| `HOSTED_ZONE_ID` | `Z0123…` | Route 53 zone of the parent domain. |
+| `APP_DOMAIN` | `dante.example.com` | Public hostname. Cognito's hosted UI goes on `auth.<APP_DOMAIN>`. |
+| `PARENT_DOMAIN` | `example.com` | Corporate parent domain; verified as an SES identity for sandbox delivery. |
+| `SEED_ADMIN_EMAILS` | `["admin@example.com"]` | JSON list. First admins invited into Cognito. |
+| `SYNC_LAMBDA_ALARM_EMAILS` | `["ops@example.com"]` | JSON list. Sync-alarm SNS subscribers. |
+| `WAF_ALARM_EMAILS` | `["ops@example.com"]` | JSON list. WAF-alarm SNS subscribers. |
+| `ECS_CLUSTER_NAME` / `ECS_SERVICE_NAME` | `dante-prod-app` | Targets for the post-apply rollout. `terraform output -raw app_cluster_name` / `app_service_name`. |
 
-**Runtime safety nets**
-- **No concurrency cap on the sync Lambda**
-  (`reserved_concurrent_executions = -1`). The Free Plan caps
-  account-wide unreserved concurrency below AWS's 10-execution floor
-  required to reserve, so we'd be denied if we set it. The sync runs
-  once a day so contention is rare, but a runaway invocation could in
-  principle exhaust RDS connections.
+**Terraform toggles** (`terraform/envs/prod/variables.tf`; all have safe
+defaults except the ones CI must supply)
 
-**CI / CD safety nets**
-- **No CVE scan gate on container images.** Images deploy to prod
-  without a vulnerability scan
-  (`SCAN_GATE_ENABLED: "false"` in `.github/workflows/deploy.yml`).
-  ECR basic scanning doesn't support arm64 / Graviton, and Inspector
-  v2 enhanced scanning needs a Free-Plan-blocked subscription
-  (`SubscriptionRequiredException` on `inspector2:Enable`).
+| Variable | Default | What it does |
+|---|---|---|
+| `aws_free_plan` | `false` | **The Free Plan switch.** `true` degrades three things the Free Plan rejects: RDS automated backups (`backup_retention_period` forced to `0` — no point-in-time recovery, so don't load real employee data), Lambda concurrency reservations (`-1`, no cap), and Inspector v2 enhanced ECR scanning (not created; the workflow's CVE gate is skipped in lockstep). Flip to `false` on a paid account and re-apply — everything reverts. Dispatch the first deploy after flipping with `skip_scan_gate = true`, since the scan gate runs before terraform enables Inspector. |
+| `rds_backup_retention_days` | `7` | Backup retention on a paid account. |
+| `rds_multi_az` | `false` | Multi-AZ RDS. Flip when traffic justifies it. |
+| `vpc_nat_mode` | `gateway` | `instance` saves ~€30/mo but can't launch on Free Plan accounts. |
+| `vpc_single_nat_gateway` | `true` | One NAT for all AZs vs one per AZ. |
+| `waf_enabled` | `true` | Detach the WAF only for a pentest window. |
+| `sync_lambda_schedule_expression` | every 6 h | EventBridge cron for the Personio + awork sync. |
+| `domain`, `parent_domain`, `hosted_zone_id`, `github_repository`, `seed_admin_emails`, `sync_lambda_alarm_emails`, `waf_alarm_emails`, `app_image_uri` | *none* | Required; CI passes them from the variables above. |
 
-**Cost optimisations blocked by Free Plan**
-- **NAT instance** (`vpc.nat_mode = "instance"`) — saves ~€30/mo over
-  NAT Gateway but needs a non-Free-Tier instance type. The Free Plan
-  rejects `RunInstances` for anything outside `t2.micro` /
-  `t3.micro`, both x86. Plumbed in terraform but defaulted off until
-  the billing tier lifts.
-
-**What is *not* affected**
-- WAF, IAM, KMS, Secrets Manager, ALB, Cognito itself, ECR pushes,
-  ECS deploys, Route 53, ACM, CloudWatch, SNS — all unaffected.
-- App-side functionality is unaffected. Users that *do* receive their
-  invitation email can sign in, enroll TOTP, and use the app
-  end-to-end exactly as designed.
-
-**How to re-enable**
-- Free Plan items are marked `TODO(free-plan)` in
-  `terraform/envs/prod/main.tf` or carry long-form notes in the deploy
-  workflow. Flipping each back is mechanical once IT upgrades the
-  billing tier — see the inline comments for the exact recipes.
+**One account-level item no variable can fix:** a fresh AWS account has
+SES in **sandbox**, so Cognito invitation / reset emails only reach
+addresses individually verified as SES identities (or any mailbox on
+`PARENT_DOMAIN` once its verification TXT record is published — see the
+`ses_parent_domain_verification` terraform output). Request SES
+production access in the console; nothing in this repo changes when it
+is granted.
 
 ---
 

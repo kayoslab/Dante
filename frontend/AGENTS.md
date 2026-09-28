@@ -309,6 +309,7 @@ Two workflows + two OIDC roles. No long-lived AWS keys.
 
 **Repository configuration (one-time after first `terraform apply`)** — set as repository **variables** (ARNs aren't secrets). The repo's GitHub Secrets are deliberately empty for app config — all app secrets live in AWS Secrets Manager and the runtime reads them directly; see [Prod bring-up §2](#prod-bring-up).
 - `DEPLOY_ENABLED`      ← `true`. Explicit opt-in; every deploy job is skipped unless this is exactly `true`, so forks and mirrors never deploy.
+- `AWS_FREE_PLAN`       ← `true` while the account is on the AWS Free Plan; drives terraform `aws_free_plan` and the CVE scan gate. See README → Configuration.
 - `AWS_DEPLOY_ROLE_ARN` ← `terraform output -raw github_deploy_role_arn`
 - `AWS_CHECK_ROLE_ARN`  ← `terraform output -raw github_check_role_arn`
 - `ECS_CLUSTER_NAME`    ← `terraform output -raw app_cluster_name`

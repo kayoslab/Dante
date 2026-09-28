@@ -33,28 +33,20 @@ One module per AWS-shaped concern. Environments compose modules. State is local 
    aws sts get-caller-identity
    ```
 
-## ⚠️ AWS Free Plan workarounds (prod)
+## AWS Free Plan accounts (prod)
 
-The prod AWS account was on AWS's 2025 Free Plan at bring-up. The plan hard-blocks two configurations Dante needs at safe defaults, so the prod env temporarily overrides them. Both overrides live in `terraform/envs/prod/main.tf` marked `TODO(free-plan)`:
+AWS's 2025 Free Plan hard-blocks several settings this stack uses at its safe defaults. Rather than editing `main.tf`, set the single prod variable `aws_free_plan = true` (CI: repository variable `AWS_FREE_PLAN`). It swaps in the degraded variants and nothing else:
 
-| Setting | Safe default | Free-Plan override | Impact |
+| Setting | Paid account | `aws_free_plan = true` | Impact while degraded |
 |---|---|---|---|
-| `module.rds.backup_retention_days` | `7` | `0` | **No automated backups, no point-in-time recovery.** Do not put real employee data in prod RDS until restored. |
-| `module.sync_lambda.reserved_concurrent_executions` | `2` | `-1` | No concurrency reservation. The sync Lambda runs from the account-wide pool; under contention it could exceed the intended 2-in-flight cap on RDS connections. |
+| `module.rds.backup_retention_days` | `var.rds_backup_retention_days` (7) | `0` | **No automated backups, no point-in-time recovery.** Do not load real employee data. |
+| `module.sync_lambda.reserved_concurrent_executions` | `2` | `-1` | No concurrency cap; a runaway sync could exhaust RDS connections. |
+| `module.cognito_pretoken_lambda.reserved_concurrent_executions` | `5` | `-1` | Same, on the sign-in path. |
+| `aws_inspector2_enabler` + `aws_ecr_registry_scanning_configuration` | created | not created | Images deploy without a CVE scan; the workflow's scan gate is skipped in lockstep. |
 
-**Restoration steps once the account is upgraded:**
+Flip it back to `false` once the account is on a paid tier and run `terraform apply`. Verify RDS picked it up with `aws rds describe-db-instances --db-instance-identifier dante-prod --query 'DBInstances[0].BackupRetentionPeriod'` (expect `7`); if it still returns `0`, the account wasn't actually upgraded. The very first CI deploy after flipping should be dispatched with `skip_scan_gate = true`, because the build job's scan gate runs before terraform enables Inspector.
 
-1. Confirm IT has attached a billing method and the account is on a paid plan (`aws ce get-cost-and-usage` should succeed without quota errors).
-2. Edit `terraform/envs/prod/main.tf`: remove the `TODO(free-plan)` overrides, set `backup_retention_days = 7` and `reserved_concurrent_executions = 2`.
-3. `terraform plan` + `terraform apply` from `terraform/envs/prod/`.
-4. Verify RDS picked up the change:
-   ```
-   aws rds describe-db-instances --db-instance-identifier dante-prod \
-     --query 'DBInstances[0].BackupRetentionPeriod'
-   ```
-   Should return `7`. If still `0`, the plan succeeded but the account hasn't actually been upgraded — talk to IT before re-trying.
-
-Other Free-Plan symptoms surfaced during bring-up: the `aws rds describe-db-engine-versions` list excludes recently-retired minor versions (we bumped to 16.14), and RDS rejects some optional features outright with `FreeTierRestrictionError`. The `aws_region` lock to `eu-central-1` in `variables.tf` is unrelated (GDPR), not a Free-Plan effect.
+Other Free-Plan symptoms seen during bring-up: `aws rds describe-db-engine-versions` omits recently-retired minor versions (we bumped to 16.14), RDS rejects some optional features with `FreeTierRestrictionError`, and NAT-instance mode (`vpc_nat_mode = "instance"`) can't launch Graviton instance types. The `aws_region` lock to `eu-central-1` in `variables.tf` is unrelated (GDPR).
 
 ## Phase P1 (Day 1) — Cognito User Pool only
 

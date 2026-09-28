@@ -17,6 +17,9 @@ name: deploy
 # are deployment-specific, which is why they are not in the repo:
 #
 #   DEPLOY_ENABLED             "true" to allow this repo to deploy
+#   AWS_FREE_PLAN              "true" while the AWS account is on the Free
+#                              Plan (degrades backups / concurrency / CVE
+#                              scanning; see terraform `aws_free_plan`)
 #   AWS_DEPLOY_ROLE_ARN        IAM role CI assumes (output of terraform)
 #   HOSTED_ZONE_ID             Route 53 zone of the parent domain
 #   APP_DOMAIN                 e.g. dante.example.com
@@ -51,11 +54,11 @@ permissions:
 env:
   AWS_REGION: eu-central-1
   TF_VERSION: 1.9.x
-  # Flip to "true" once Inspector v2 is enabled at the account level
-  # and the `aws_ecr_registry_scanning_configuration` resource in
-  # terraform/envs/prod is applied. See the long-form note next to the
-  # scan-gate step below for why it's off right now.
-  SCAN_GATE_ENABLED: "false"
+  # The ECR CVE gate is armed exactly when terraform enables Inspector
+  # v2, i.e. whenever the account is NOT on the Free Plan. One switch
+  # (`AWS_FREE_PLAN`) drives both sides so the gate never waits on a
+  # scan that can't happen. See the note next to the scan-gate step.
+  SCAN_GATE_ENABLED: ${{ vars.AWS_FREE_PLAN != 'true' }}
 
 jobs:
   # ---------------------------------------------------------------------
@@ -131,12 +134,12 @@ jobs:
       # CRITICAL or HIGH CVEs. Was M-008 in the pre-launch pen test —
       # the scan was enabled but had no enforcement.
       #
-      # Currently disabled: ECR basic scans don't fire for arm64
-      # (Fargate Graviton), and Inspector v2 requires an account
-      # subscription that the AWS Free Plan blocks. Flip
-      # `SCAN_GATE_ENABLED: true` (env above) once IT upgrades the
-      # AWS account and the Inspector terraform stanza in
-      # `terraform/envs/prod/main.tf` is un-commented + applied. To
+      # Skipped while `AWS_FREE_PLAN` is "true": ECR basic scans don't
+      # fire for arm64 (Fargate Graviton), and Inspector v2 requires an
+      # account subscription the Free Plan blocks — terraform gates the
+      # Inspector resources on the same variable. The first deploy after
+      # flipping the variable runs this step before terraform has enabled
+      # Inspector; dispatch that one with `skip_scan_gate = true`. To
       # bypass for one-off deploys, re-run with `inputs.skip_scan_gate`.
       - name: Wait for ECR scan + enforce severity gate
         if: env.SCAN_GATE_ENABLED == 'true' && github.event.inputs.skip_scan_gate != 'true'
@@ -278,6 +281,7 @@ jobs:
             -var 'seed_admin_emails=${{ vars.SEED_ADMIN_EMAILS }}' \
             -var 'sync_lambda_alarm_emails=${{ vars.SYNC_LAMBDA_ALARM_EMAILS }}' \
             -var 'waf_alarm_emails=${{ vars.WAF_ALARM_EMAILS }}' \
+            -var "aws_free_plan=${{ vars.AWS_FREE_PLAN == 'true' }}" \
             -var "app_image_uri=${{ needs.build.outputs.image_uri }}" \
             -out=prod.tfplan \
             -no-color 2>&1 | tee plan.txt

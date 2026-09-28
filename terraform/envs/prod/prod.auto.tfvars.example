@@ -21,6 +21,11 @@ hosted_zone_id = "Z0123456789ABCDEFGHIJ"
 domain        = "dante.example.com"
 parent_domain = "example.com"
 
+# true while the AWS account is on the 2025 Free Plan. Degrades RDS
+# backups, Lambda concurrency reservations and ECR CVE scanning to what
+# that plan permits. Flip to false on a paid account and re-apply.
+aws_free_plan = false
+
 # Who gets the first admin invite, and who receives alarm mail.
 seed_admin_emails        = ["admin@example.com"]
 sync_lambda_alarm_emails = ["ops@example.com"]

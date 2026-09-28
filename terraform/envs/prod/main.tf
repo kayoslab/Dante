@@ -65,6 +65,7 @@ module "vpc" {
   cidr_block         = var.vpc_cidr_block
   az_count           = var.vpc_az_count
   single_nat_gateway = var.vpc_single_nat_gateway
+  nat_mode           = var.vpc_nat_mode
   # Flow logs off by default; flip after onboarding traffic for incident
   # response baselines.
   enable_flow_logs = false
@@ -178,10 +179,9 @@ module "cognito_pretoken_lambda" {
   package_zip_path    = var.cognito_pretoken_lambda_package_zip_path
   package_source_hash = filemd5(var.cognito_pretoken_lambda_package_zip_path)
 
-  # TODO(free-plan): -1 disables the reservation for the same reason
-  # the sync Lambda does. Restore to 5 (default) once the Free Plan
-  # account-wide cap is lifted.
-  reserved_concurrent_executions = -1
+  # -1 disables the reservation on Free Plan accounts for the same
+  # reason the sync Lambda does (see `var.aws_free_plan`).
+  reserved_concurrent_executions = var.aws_free_plan ? -1 : 5
 
   # Reuse the sync Lambda's alarm topic — same SNS subscription
   # already routes to the admin email. Separate topic per Lambda
@@ -409,12 +409,11 @@ module "rds" {
   deletion_protection = true
   skip_final_snapshot = false
 
-  # TODO(free-plan): the account is currently on AWS's 2025 Free Plan,
-  # which blocks `backup_retention_period > 0` on RDS. Setting to 0
+  # The Free Plan blocks `backup_retention_period > 0` on RDS. 0
   # disables automated backups + point-in-time recovery — UNSAFE FOR
-  # PRODUCTION DATA. Flip back to 7 (or remove the override) once IT
-  # upgrades the account to a paid plan.
-  backup_retention_days = 0
+  # PRODUCTION DATA, so don't load real employee data while
+  # `var.aws_free_plan` is true.
+  backup_retention_days = var.aws_free_plan ? 0 : var.rds_backup_retention_days
 }
 
 module "sync_lambda" {
@@ -464,11 +463,10 @@ module "sync_lambda" {
   # bills for time actually used.
   timeout = 900
 
-  # TODO(free-plan): -1 disables the reservation entirely because the
-  # 2025 Free Plan caps account-wide concurrency below the minimum AWS
-  # requires to leave unreserved (10). Restore to 2 once IT upgrades
-  # the account — see also the matching TODO on `module.rds.backup_retention_days`.
-  reserved_concurrent_executions = -1
+  # -1 disables the reservation entirely on Free Plan accounts, which
+  # cap account-wide concurrency below the minimum AWS requires to
+  # leave unreserved (10). Paid tier: 2 = one in-flight + one overlap.
+  reserved_concurrent_executions = var.aws_free_plan ? -1 : 2
 }
 
 # --- ECR / ALB / DNS / ECS for the Next.js app ---------------------------
@@ -499,33 +497,40 @@ module "ecr" {
 
 data "aws_caller_identity" "current" {}
 
-# CVE scan gate on ECR pushes is currently disabled.
+# CVE scanning on ECR pushes.
 #
-# We want Inspector v2 enhanced scanning here (basic `scan_on_push` is
-# silently a no-op for arm64 images, and Fargate Graviton is arm64).
-# Inspector v2 requires an account-level subscription that the AWS Free
-# Plan blocks ("SubscriptionRequiredException" on `inspector2:Enable`)
-# — same gating as the RDS backups + Lambda concurrency TODOs.
+# Inspector v2 enhanced scanning is required here: basic `scan_on_push`
+# is silently a no-op for arm64 images, and Fargate Graviton is arm64.
+# Inspector v2 needs an account-level subscription that the AWS Free
+# Plan blocks ("SubscriptionRequiredException" on `inspector2:Enable`),
+# so both resources are gated on `var.aws_free_plan`. The deploy
+# workflow's scan gate follows the same variable, so the gate is never
+# armed without a scanner behind it.
 #
-# When IT upgrades the AWS account, re-enable by un-commenting:
-#
-#   resource "aws_inspector2_enabler" "ecr" {
-#     account_ids    = [data.aws_caller_identity.current.account_id]
-#     resource_types = ["ECR"]
-#   }
-#   resource "aws_ecr_registry_scanning_configuration" "this" {
-#     scan_type = "ENHANCED"
-#     rule {
-#       scan_frequency = "SCAN_ON_PUSH"
-#       repository_filter {
-#         filter      = "*"
-#         filter_type = "WILDCARD"
-#       }
-#     }
-#     depends_on = [aws_inspector2_enabler.ecr]
-#   }
-#
-# And flip `SCAN_GATE_ENABLED` in `.github/workflows/deploy.yml`.
+# First deploy after flipping `aws_free_plan` to false: the build job's
+# scan gate runs BEFORE this apply enables Inspector, so run that one
+# via workflow_dispatch with `skip_scan_gate = true` (or let it fail
+# once and re-run).
+resource "aws_inspector2_enabler" "ecr" {
+  count = var.aws_free_plan ? 0 : 1
+
+  account_ids    = [data.aws_caller_identity.current.account_id]
+  resource_types = ["ECR"]
+}
+
+resource "aws_ecr_registry_scanning_configuration" "this" {
+  count = var.aws_free_plan ? 0 : 1
+
+  scan_type = "ENHANCED"
+  rule {
+    scan_frequency = "SCAN_ON_PUSH"
+    repository_filter {
+      filter      = "*"
+      filter_type = "WILDCARD"
+    }
+  }
+  depends_on = [aws_inspector2_enabler.ecr]
+}
 
 module "alb" {
   source = "../../modules/alb"

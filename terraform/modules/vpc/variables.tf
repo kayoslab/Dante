@@ -38,7 +38,7 @@ variable "single_nat_gateway" {
 }
 
 variable "nat_mode" {
-  description = "`gateway` provisions managed AWS NAT Gateway(s) (~€32/mo each, fully managed, HA within an AZ). `instance` provisions an EC2 instance running iptables MASQUERADE (~€3/mo on t4g.nano). For a 40-user internal tool the NAT instance is the right cost trade — once the AWS Free Plan is lifted. Free Plan 2025 only permits Free Tier eligible instance types, which excludes the ARM Graviton family we'd use here; default stays on `gateway` until that lifts."
+  description = "`gateway` provisions managed AWS NAT Gateway(s) (~€32/mo each, fully managed, HA within an AZ). `instance` provisions an EC2 instance running iptables MASQUERADE (~€3/mo on t4g.nano). For a 40-user internal tool the NAT instance is the right cost trade on a paid account. AWS Free Plan accounts only permit Free Tier eligible instance types, which excludes the ARM Graviton family used here — keep `gateway` there."
   type        = string
   default     = "gateway"
   validation {

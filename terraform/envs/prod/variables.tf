@@ -84,6 +84,12 @@ variable "vpc_az_count" {
   default     = 2
 }
 
+variable "vpc_nat_mode" {
+  description = "`gateway` (managed NAT Gateway, ~€32/mo) or `instance` (t4g.nano running iptables, ~€3/mo). The instance mode needs a Graviton instance type, which Free Plan accounts cannot launch — keep `gateway` while `aws_free_plan` is true."
+  type        = string
+  default     = "gateway"
+}
+
 variable "vpc_single_nat_gateway" {
   description = "One NAT for all AZs (saves ~€32/mo) vs one-per-AZ (no SPOF). For a 40-user internal tool, single NAT is the right trade-off; flip when uptime SLAs demand it."
   type        = bool
@@ -98,6 +104,12 @@ variable "rds_instance_class" {
   default     = "db.t4g.micro"
 }
 
+variable "rds_backup_retention_days" {
+  description = "Automated RDS backup retention in days (enables point-in-time recovery). Ignored — forced to 0 — while `aws_free_plan` is true, because the Free Plan rejects any value above 0."
+  type        = number
+  default     = 7
+}
+
 variable "rds_multi_az" {
   description = "Enable Multi-AZ for prod RDS. Doubles cost. Off day-1; flip on once steady-state confirms the workload and budget."
   type        = bool
@@ -108,6 +120,14 @@ variable "rds_engine_version" {
   description = "Pinned Postgres major.minor. Match what's running locally (`postgres:16-alpine`). Refresh periodically — AWS retires minor versions over time; check `aws rds describe-db-engine-versions --engine postgres` if a plan errors with 'Cannot find version'."
   type        = string
   default     = "16.14"
+}
+
+# --- Account tier ------------------------------------------------------
+
+variable "aws_free_plan" {
+  description = "Set to true while the AWS account is on the 2025 Free Plan. That plan rejects several settings this stack uses at its safe defaults, so `true` swaps in the degraded-but-deployable variants: RDS automated backups off (`backup_retention_period = 0`, no point-in-time recovery), no Lambda concurrency reservations (`-1`), and no Inspector v2 enhanced ECR scanning (the deploy workflow's CVE gate is skipped in lockstep). Flip to false as soon as the account is on a paid tier — every override reverts on the next apply. Supplied by CI from the `AWS_FREE_PLAN` repository variable; defaults to false so an unconfigured environment gets the safe settings."
+  type        = bool
+  default     = false
 }
 
 # --- DNS ---------------------------------------------------------------
