@@ -5,7 +5,7 @@ implementation** — a working reference for organisations whose people
 data lives in one system (an HRIS such as Personio), whose time data
 lives in another (a project tool such as awork), and who need the two
 reconciled into numbers a manager can act on. It is not a product, and
-there is no roadmap beyond what the original operator needs internally. That said,
+there is no roadmap beyond what the maintainer needs. That said,
 contributions that make the reference clearer, safer, or easier to adapt
 are very welcome.
 

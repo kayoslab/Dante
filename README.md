@@ -5,8 +5,9 @@
 Welcome to time tracking. Mind the gap between your ambitions and your
 billable hours.
 
-Dante is the HR + time-tracking analytics tool built for **the original operator**, published here as an open-source example implementation.
-It pulls employee records, salaries, absences, and attendances from
+Dante is an HR + time-tracking analytics tool for consultancies,
+released as an open-source example implementation by
+[Simon Krüger](https://github.com/kayoslab). It pulls employee records, salaries, absences, and attendances from
 Personio, marries them to time entries from awork, and gives managers the
 numbers they need to run a consultancy without spreadsheets that lie.
 
@@ -41,7 +42,7 @@ them. Dante shows one complete, production-grade way to close that gap:
   auth with mandatory MFA, WAF, audit logging, alarms — as Terraform.
 
 The concrete integrations (Personio, awork, Cognito, the German
-working-calendar rules) reflect the original operator's own environment. If yours
+working-calendar rules) reflect the environment it was first built for. If yours
 differs, the intended path is to fork this repository, swap the adapter
 that doesn't match, and keep the rest. The repository is MIT-licensed
 precisely so that you can. See [`CONTRIBUTING.md`](CONTRIBUTING.md) if
@@ -370,4 +371,5 @@ that CI enforces.
 
 ## License
 
-MIT. See [`LICENSE.md`](LICENSE.md). Copyright (c) 2026 Simon Krüger (https://github.com/kayoslab).
+Released under the [MIT License](LICENSE.md) by
+[Simon Krüger](https://github.com/kayoslab). Copyright (c) 2026 Simon Krüger.
