@@ -285,15 +285,6 @@ resource "aws_ses_domain_identity" "parent_domain" {
   domain = var.parent_domain
 }
 
-# The identity used to be addressed as `company_parent` with a
-# hardcoded domain. Keep the state address stable across the rename so
-# an apply doesn't destroy + recreate the (possibly already verified)
-# identity.
-moved {
-  from = aws_ses_domain_identity.company_parent
-  to   = aws_ses_domain_identity.parent_domain
-}
-
 # ACM cert for the Cognito custom domain. MUST be in us-east-1
 # regardless of the rest of the stack's region (Cognito requirement).
 resource "aws_acm_certificate" "cognito_custom" {
