@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -206,14 +206,14 @@ jobs:
           npm run build:cognito-pretoken-lambda
 
       - name: Upload sync Lambda bundle for the apply job
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: sync-lambda
           path: frontend/dist/lambda/dante-sync-lambda.zip
           retention-days: 7
 
       - name: Upload Cognito Pre Token Gen Lambda bundle for the apply job
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: cognito-pretoken-lambda
           path: frontend/dist/lambda-cognito-pretoken/dante-cognito-pretoken-lambda.zip
@@ -236,18 +236,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
       - name: Download sync Lambda bundle
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: sync-lambda
           # download-artifact's `path:` is resolved relative to
@@ -259,7 +259,7 @@ jobs:
           path: frontend/dist/lambda
 
       - name: Download Cognito Pre Token Gen Lambda bundle
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: cognito-pretoken-lambda
           path: frontend/dist/lambda-cognito-pretoken
@@ -297,7 +297,7 @@ jobs:
           exit "$rc"
 
       - name: Upload plan
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: terraform-plan
           # Only the plan binary travels via artifact. The apply job
@@ -336,18 +336,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
       - name: Download sync Lambda bundle
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: sync-lambda
           # download-artifact's `path:` is resolved relative to
@@ -359,13 +359,13 @@ jobs:
           path: frontend/dist/lambda
 
       - name: Download Cognito Pre Token Gen Lambda bundle
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: cognito-pretoken-lambda
           path: frontend/dist/lambda-cognito-pretoken
 
       - name: Download terraform plan
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: terraform-plan
           path: terraform/envs/prod
@@ -391,7 +391,7 @@ jobs:
     if: vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
