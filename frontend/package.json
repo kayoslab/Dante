@@ -12,11 +12,11 @@
     "build:sync-lambda": "tsx scripts/build-sync-lambda.ts",
     "build:cognito-pretoken-lambda": "tsx scripts/build-cognito-pretoken-lambda.ts",
     "build:migrate": "tsx scripts/build-migrate.ts",
-    "check:awork-readonly": "tsx scripts/check-awork-readonly.ts",
+    "check:integration-readonly": "tsx scripts/check-integration-readonly.ts",
     "check:db-locality": "tsx scripts/check-db-locality.ts",
     "check:types": "tsc --noEmit",
     "test": "tsx --test 'lib/**/*.test.ts'",
-    "check": "npm run check:types && npm run check:awork-readonly && npm run check:db-locality && npm test"
+    "check": "npm run check:types && npm run check:integration-readonly && npm run check:db-locality && npm test"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^8.5.0",

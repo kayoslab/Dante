@@ -3,7 +3,7 @@
  * By transport invariant, this client only issues GET requests. The
  * only POST surface in the codebase lives in `./auth.ts` and is
  * hardcoded to the OAuth token endpoint — enforced by
- * `scripts/check-awork-readonly.ts`.
+ * `scripts/check-integration-readonly.ts`.
  *
  * The `list*` methods Zod-validate each item at the boundary so the sync
  * layer downstream sees typed values, not `Record<string, unknown>`.

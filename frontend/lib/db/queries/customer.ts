@@ -6,7 +6,7 @@ import { db } from "../client";
 import {
   assignment,
   aworkCompany,
-  aworkCompanyLink,
+  externalLink,
   customer,
   frameworkAgreement,
   frameworkRate,
@@ -291,9 +291,15 @@ export async function getAworkCompanyLinkCustomerId(
   awork_company_id: string,
 ): Promise<number | null> {
   const [row] = await db
-    .select({ customer_id: aworkCompanyLink.customer_id })
-    .from(aworkCompanyLink)
-    .where(eq(aworkCompanyLink.awork_company_id, awork_company_id));
+    .select({ customer_id: externalLink.dante_id })
+    .from(externalLink)
+    .where(
+      and(
+        eq(externalLink.integration_slug, "awork"),
+        eq(externalLink.entity_type, "company"),
+        eq(externalLink.external_id, awork_company_id),
+      ),
+    );
   return row?.customer_id ?? null;
 }
 
@@ -301,9 +307,13 @@ export async function insertAworkCompanyLink(input: {
   awork_company_id: string;
   customer_id: number;
 }): Promise<void> {
-  await db.insert(aworkCompanyLink).values({
-    awork_company_id: input.awork_company_id,
-    customer_id: input.customer_id,
+  await db.insert(externalLink).values({
+    integration_slug: "awork",
+    entity_type: "company",
+    external_id: input.awork_company_id,
+    dante_type: "customer",
+    dante_id: input.customer_id,
+    origin: "manual",
     mapped_at: new Date(),
   });
 }
@@ -313,13 +323,15 @@ export async function deleteAworkCompanyLink(
   awork_company_id: string,
 ): Promise<number> {
   const rows = await db
-    .delete(aworkCompanyLink)
+    .delete(externalLink)
     .where(
       and(
-        eq(aworkCompanyLink.awork_company_id, awork_company_id),
-        eq(aworkCompanyLink.customer_id, customer_id),
+        eq(externalLink.integration_slug, "awork"),
+        eq(externalLink.entity_type, "company"),
+        eq(externalLink.external_id, awork_company_id),
+        eq(externalLink.dante_id, customer_id),
       ),
     )
-    .returning({ id: aworkCompanyLink.awork_company_id });
+    .returning({ id: externalLink.external_id });
   return rows.length;
 }

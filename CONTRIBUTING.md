@@ -43,8 +43,10 @@ terraform -chdir=terraform/envs/prod init -backend=false && terraform -chdir=ter
 Two guards in `npm run check` are deliberate architectural rules, not
 lint noise:
 
-- **awork is read-only.** Nothing outside `frontend/lib/sync/awork/auth.ts`
-  may issue a write to the awork API.
+- **Integrations are read-only.** A provider adapter under
+  `frontend/lib/integrations/providers/<slug>/` may only issue HTTP writes
+  from the files it lists in `writesAllowedIn` (awork: `auth.ts`, the
+  OAuth token endpoint). Dante never pushes data into an external tool.
 - **Database access is local to `lib/db/`.** Pages, Server Actions and
   API routes call named query functions from `lib/db/queries/*`; they do
   not open Drizzle calls themselves.

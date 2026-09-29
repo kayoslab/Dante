@@ -4,7 +4,7 @@ import { db } from "../client";
 import { roleTierFromAlias } from "../_sql-fragments";
 import {
   aworkUser,
-  aworkUserLink,
+  externalLink,
   employeeCurrent,
 } from "../schema";
 
@@ -292,9 +292,16 @@ export async function getAworkUserLinkEmployeeId(
   awork_user_id: string,
 ): Promise<number | null> {
   const [row] = await db
-    .select({ employee_id: aworkUserLink.employee_id })
-    .from(aworkUserLink)
-    .where(eq(aworkUserLink.awork_user_id, awork_user_id));
+    .select({ employee_id: externalLink.dante_id })
+    .from(externalLink)
+    .where(
+      and(
+        eq(externalLink.integration_slug, "awork"),
+        eq(externalLink.entity_type, "person"),
+        eq(externalLink.external_id, awork_user_id),
+        eq(externalLink.dante_type, "employee"),
+      ),
+    );
   return row?.employee_id ?? null;
 }
 
@@ -302,9 +309,13 @@ export async function insertAworkUserLink(input: {
   awork_user_id: string;
   employee_id: number;
 }): Promise<void> {
-  await db.insert(aworkUserLink).values({
-    awork_user_id: input.awork_user_id,
-    employee_id: input.employee_id,
+  await db.insert(externalLink).values({
+    integration_slug: "awork",
+    entity_type: "person",
+    external_id: input.awork_user_id,
+    dante_type: "employee",
+    dante_id: input.employee_id,
+    origin: "manual",
     mapped_at: new Date(),
   });
 }
@@ -314,13 +325,16 @@ export async function deleteAworkUserLink(
   awork_user_id: string,
 ): Promise<number> {
   const rows = await db
-    .delete(aworkUserLink)
+    .delete(externalLink)
     .where(
       and(
-        eq(aworkUserLink.awork_user_id, awork_user_id),
-        eq(aworkUserLink.employee_id, employee_id),
+        eq(externalLink.integration_slug, "awork"),
+        eq(externalLink.entity_type, "person"),
+        eq(externalLink.external_id, awork_user_id),
+        eq(externalLink.dante_type, "employee"),
+        eq(externalLink.dante_id, employee_id),
       ),
     )
-    .returning({ id: aworkUserLink.awork_user_id });
+    .returning({ id: externalLink.external_id });
   return rows.length;
 }

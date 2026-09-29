@@ -10,7 +10,7 @@
  *
  * This module is the ONLY place in the codebase that issues HTTP POST to
  * the awork API, and only ever against the token endpoint. Enforced by
- * `scripts/check-awork-readonly.ts`. The data-path client (`./client.ts`)
+ * `scripts/check-integration-readonly.ts`. The data-path client (`./client.ts`)
  * is GET-only.
  */
 import {
@@ -19,7 +19,7 @@ import {
   storeAworkTokens,
   type AworkTokens,
   type AworkClientCredentials,
-} from "@/lib/sync/credentials";
+} from "@/lib/integrations/core/credentials";
 
 const TOKEN_URL = "https://api.awork.com/api/v1/accounts/token";
 const AUTHORIZE_URL = "https://api.awork.com/api/v1/accounts/authorize";

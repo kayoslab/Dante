@@ -22,18 +22,24 @@ function workPeriod(): Record<string, unknown> {
 test("flattenAttendancePeriod: maps a WORK period to a row", () => {
   const row = flattenAttendancePeriod(workPeriod());
   assert.deepEqual(row, {
-    attendance_id: "8f3c1e2a-0000-4a1b-9c00-000000000001",
-    employee_id: 42,
+    external_id: "8f3c1e2a-0000-4a1b-9c00-000000000001",
+    external_person_id: "42",
+    external_project_id: "82173",
+    external_task_id: null,
     work_date: "2026-07-14",
-    start_time: "2026-07-14T09:00:00",
-    end_time: "2026-07-14T17:30:00",
-    break_minutes: null,
+    start_at: new Date("2026-07-14T09:00:00"),
+    end_at: new Date("2026-07-14T17:30:00"),
     // 09:00 → 17:30 = 510 minutes; breaks are separate BREAK periods,
     // so NO subtraction happens here.
     duration_minutes: 510,
-    project_id: "82173",
+    is_billable: null,
+    is_billed: null,
     status: "CONFIRMED",
-    updated_at: new Date("2026-07-14T18:00:00Z"),
+    note: "ignored",
+    type_of_work: null,
+    // Raw wall-clock strings survive untouched next to the parsed dates.
+    extra: { start_raw: "2026-07-14T09:00:00", end_raw: "2026-07-14T17:30:00" },
+    source_updated_at: new Date("2026-07-14T18:00:00Z"),
   });
 });
 
@@ -120,9 +126,9 @@ test("flattenAttendancePeriod: nullable fields default to null", () => {
     // no project, no approval, no updated_at
   };
   const row = flattenAttendancePeriod(sparse);
-  assert.equal(row?.project_id, null);
+  assert.equal(row?.external_project_id, null);
   assert.equal(row?.status, null);
-  assert.equal(row?.updated_at, null);
+  assert.equal(row?.source_updated_at, null);
   assert.equal(row?.duration_minutes, 60);
 });
 

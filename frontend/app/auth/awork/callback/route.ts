@@ -18,8 +18,8 @@ import { type NextRequest, NextResponse } from "next/server";
 import { audit } from "@/lib/auth/audit";
 import { ForbiddenError, requireSession } from "@/lib/auth/session";
 import { log } from "@/lib/logger";
-import { exchangeAuthorizationCode } from "@/lib/sync/awork/auth";
-import { storeAworkTokens } from "@/lib/sync/credentials";
+import { exchangeAuthorizationCode } from "@/lib/integrations/providers/awork/auth";
+import { storeAworkTokens } from "@/lib/integrations/core/credentials";
 
 import { COOKIE_NAME } from "../start/route";
 

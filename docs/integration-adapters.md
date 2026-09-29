@@ -1,9 +1,10 @@
 # Integration adapters — design and build plan
 
-Status: agreed design (2026-09-29). Phase 1 implemented in migration 0023
-(`frontend/lib/db/migrations/0023_integration_model.sql`, schema in
-`frontend/lib/db/schema/integration.ts`, vocabulary in
-`frontend/lib/integrations/core/capabilities.ts`). Phases 2-6 pending.
+Status: agreed design (2026-09-29). Phase 1 (migration 0023) and phase 2
+(adapter extraction, canonical writes, migration 0024) implemented. The
+code lives under `frontend/lib/integrations/`; `frontend/lib/sync/` keeps
+only the connection helper, the Lambda handler and a re-export of
+`runSync`. Phases 3-6 pending.
 
 Dante pulls people from an HRIS and work from a project / time-tracking
 tool. Today those are Personio and awork, and both are hard-wired: the
@@ -51,6 +52,12 @@ third tool is a pure adapter job.
 
 ## Adapter contract
 
+The shipped contract is in `lib/integrations/core/types.ts`; the sketch
+below is kept in step with it. Pull methods return arrays (every source
+API returns complete lists anyway), catalog pulls report whether they
+were `full` or `incremental`, and delta high-water marks come from the
+core through `PullContext.highWaterMark(capability)`.
+
 ```ts
 // lib/integrations/core/types.ts
 export type Capability =
@@ -74,22 +81,31 @@ export interface ProviderAdapter<Config = unknown> {
    *  (OAuth token endpoint etc.). Consumed by the read-only guard. */
   writesAllowedIn: string[];
 
-  createClient(creds: ResolvedCredentials, config: Config): ProviderClient;
+  createClient(ctx: { integration, config, log }): Promise<ProviderClient>;
   healthCheck(client: ProviderClient): Promise<HealthStatus>;
 
-  pullPeople?(client, ctx: PullContext): AsyncIterable<CanonicalPerson>;
-  pullAbsences?(client, ctx, window: DateWindow): AsyncIterable<CanonicalAbsence>;
-  pullCompensations?(client, ctx): AsyncIterable<CanonicalCompensation>;
-  pullTimeEntries?(client, ctx, window): AsyncIterable<CanonicalTimeEntry>;
-  pullPlannedBookings?(client, ctx): AsyncIterable<CanonicalBooking>;
-  pullProjects?(client, ctx, opts: { full: boolean }): AsyncIterable<CanonicalProject>;
-  pullCompanies?(client, ctx, opts: { full: boolean }): AsyncIterable<CanonicalCompany>;
+  pullEmployees?(client, ctx: PullContext): Promise<CanonicalEmployee[]>;        // people
+  pullPersons?(client, ctx): Promise<CanonicalPerson[]>;                         // external_contributors
+  pullCompanies?(client, ctx, { full }): Promise<Pulled<CanonicalCompany>>;
+  pullProjects?(client, ctx, { full }): Promise<Pulled<CanonicalProject>>;
+  pullAbsences?(client, ctx, window): Promise<CanonicalAbsence[]>;
+  pullCompensations?(client, ctx): Promise<CanonicalCompensation[]>;
+  pullTimeEntries?(client, ctx, { window, full }): Promise<Pulled<CanonicalTimeEntry>>;
+  pullPlannedBookings?(client, ctx): Promise<CanonicalBooking[]>;
 
-  /** Optional provider housekeeping after the core has upserted and linked
-   *  (awork: fill fixed-price / rates / budgets onto imported projects). */
-  afterSync?(ctx: SyncContext): Promise<void>;
+  /** Optional provider housekeeping after the core has upserted, linked,
+   *  rolled up and imported. The one place an adapter sees the connection
+   *  (awork: money fields onto imported projects; Personio: the
+   *  salary-history walk). */
+  afterSync?(client, ctx: SyncContext): Promise<void>;
 }
 ```
+
+`people` is special: the primary binding materialises `CanonicalEmployee`
+records into `employee_current` (resolving each through its
+`external_link`, minting a Dante id for a person seen for the first time)
+and mirrors them into `external_person`. Every other capability lands in
+its canonical table only.
 
 Rules that make the contract hold:
 
@@ -104,25 +120,33 @@ Rules that make the contract hold:
 - `PullContext` exposes `log`, `integration`, `highWaterMark(capability)` and
   nothing else; adapters cannot reach the connection.
 
-Module layout:
+Module layout (as shipped):
 
 ```
 frontend/lib/integrations/
   core/
+    capabilities.ts   capability + link vocabulary
     types.ts          contract + canonical DTOs
     registry.ts       static list of adapters (no side effects on import)
+    config.ts         loads integration / binding / rule rows for a run
     runner.ts         orchestrator: bindings → adapters → core upserts
-    credentials.ts    SecretStore interface + implementations
+    upsert.ts         canonical upserts + per-capability prune/archive
     links.ts          external_link helpers + auto-link rules
-    reconcile.ts      precedence / overlap policies
-    upsert.ts         moved from lib/sync/_upsert.ts
-    retention.ts      moved from lib/sync/_retention.ts
+    rollups.ts        planned bookings → assignment, hours → freelancer months
+    import.ts         import policy: companies → customers, projects → projects
+    credentials.ts    secret loading (env / Secrets Manager); SecretStore in phase 3
+    excluded-set.ts   ON CONFLICT helper
+    retention.ts      audit-log retention
+    registry.test.ts  adapter conformance test
   providers/
-    personio/         moved from lib/sync/personio
-    awork/            moved from lib/sync/awork
-    _template/        copy-me skeleton with the conformance test
-frontend/lib/sync/    keeps db.ts, lambda.ts, run.ts as thin shims
+    personio/         adapter.ts + client, flatten, attendance, absences, compensations
+    awork/            adapter.ts + client, auth, schemas, money (afterSync)
+frontend/lib/sync/    db.ts (connection), lambda.ts (handler), run.ts (re-export)
 ```
+
+Reconciliation between overlapping sources (`time_entries.overlap_policy`)
+is a *read-side* rule and is applied in phase 5; the runner does not
+consult it.
 
 ## Data model
 
@@ -193,6 +217,15 @@ Employee identity:
 - `pullPeople` records resolve to an employee through `external_link`; an
   unlinked person from the primary `people` source is inserted with a fresh
   identity and linked. Lower-priority `people` sources never insert.
+
+Migration 0024 (phase 2) copies every legacy row into the canonical
+tables (provider-specific columns into `extra`), drops the legacy tables
+and recreates each as a compatibility **view** with the same name and
+columns, recreates `tracked_time_effective` verbatim over the views, and
+adds `external_link_cascade` triggers so deleting a project / customer /
+freelancer / employee removes its links (the FK cascades the legacy link
+tables had). `absence` and `compensation_event` gain `integration_slug`
+and a (slug, external id) primary key in place.
 
 Link-table migration: 0023 backfills `personio_project_link`,
 `awork_project_link`, `awork_user_link`, `awork_freelancer_link`,
@@ -317,7 +350,7 @@ All writes are server actions gated on `admin`, audited with
 | # | Phase | Ships as | Risk |
 | --- | --- | --- | --- |
 | 1 | Canonical data model + migrations + backfills + mirror triggers (**done**, 0023) | Behaviour-neutral | High: employee identity change; do on a DB snapshot first |
-| 2 | Adapter extraction (Personio, awork) + core runner + generic credentials loader | Behaviour-neutral | High: sync parity; verify by diffing report outputs before/after on the same snapshot |
+| 2 | Adapter extraction (Personio, awork) + core runner + canonical writes + compat views (**done**, 0024) | Behaviour-neutral | High: sync parity; verified by diffing every report-relevant relation across old sync → migration → new sync |
 | 3 | SecretStore + write-only credential UI + terraform grants | Feature | Medium: IAM change on web task role |
 | 4 | Integrations / bindings / rules settings pages + health check + audit | Feature | Low |
 | 5 | Read side on canonical tables, generic link card, collapsed routes/actions | Refactor, report by report | Medium: each report has a parity test |

@@ -62,10 +62,18 @@ export const LINK_TARGETS: Record<ExternalEntityType, readonly DanteEntityType[]
   company: ["customer"],
 };
 
-/** Provenance of an `external_link` row. */
+/** Provenance of an `external_link` row.
+ *  - `manual`     — set by a person in the UI
+ *  - `auto:email` — auto-link rule, e-mail match
+ *  - `auto:name`  — auto-link rule, name match
+ *  - `source`     — created together with the Dante entity by the sync
+ *                   (a new employee from the HRIS, an imported project)
+ *  - `backfill`   — migrated from a legacy link table (0023)
+ *  - `legacy`     — mirrored from a legacy link table during phase 1 */
 export type LinkOrigin =
   | "manual"
   | "auto:email"
   | "auto:name"
+  | "source"
   | "backfill"
   | "legacy";

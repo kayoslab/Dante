@@ -7,10 +7,13 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
 } from "drizzle-orm/pg-core";
+
+import { integration } from "./integration";
 
 // Latest known state per employee.
 //
@@ -77,7 +80,11 @@ export const team = pgTable("team", {
 export const compensationEvent = pgTable(
   "compensation_event",
   {
-    compensation_id: text().primaryKey(),
+    // Canonical key since migration 0024: (integration, the tool's own id).
+    integration_slug: text()
+      .notNull()
+      .references(() => integration.slug, { onDelete: "cascade" }),
+    compensation_id: text().notNull(),
     employee_id: integer().notNull(),
     effective_from: date({ mode: "string" }),
     amount_value: numeric({ precision: 12, scale: 2 }),
@@ -92,6 +99,7 @@ export const compensationEvent = pgTable(
     last_updated_at: timestamp({ mode: "date" }).notNull(),
   },
   (t) => [
+    primaryKey({ columns: [t.integration_slug, t.compensation_id] }),
     // The as-of salary LATERAL runs once per employee per report month.
     index("compensation_event_employee_from_idx").on(
       t.employee_id,

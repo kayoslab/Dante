@@ -23,10 +23,10 @@ const SCAN_DIRS = [
   path.join(FRONTEND_ROOT, "lib/actions"),
   path.join(FRONTEND_ROOT, "lib/api"),
   path.join(FRONTEND_ROOT, "lib/auth"),
-  // `lib/sync` is the data-ingest tier — sync code legitimately reads
-  // and writes through Drizzle for the typed upsert path. Its own
-  // `check-awork-readonly` covers the write surface from a different
-  // angle; we don't enforce locality there.
+  // `lib/sync` and `lib/integrations` are the data-ingest tier — sync
+  // code legitimately reads and writes through Drizzle for the typed
+  // upsert path. `check-integration-readonly` covers the external write
+  // surface from a different angle; we don't enforce locality there.
 ];
 
 // Files explicitly allowed to touch the DB client (e.g. the audit

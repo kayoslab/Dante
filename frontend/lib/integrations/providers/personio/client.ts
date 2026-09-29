@@ -8,7 +8,7 @@
  *
  * Port of src/dante/client.py.
  */
-import type { PersonioCredentials } from "@/lib/sync/credentials";
+import type { PersonioCredentials } from "@/lib/integrations/core/credentials";
 
 const API_BASE_V1 = "https://api.personio.de/v1";
 const API_BASE_V2 = "https://api.personio.de/v2";

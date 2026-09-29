@@ -16,7 +16,7 @@ import { lt } from "drizzle-orm";
 import type { Client } from "pg";
 
 import { appAuditLog } from "@/lib/db/schema";
-import { syncDrizzle } from "./db";
+import { syncDrizzle } from "@/lib/sync/db";
 
 const DEFAULT_RETENTION_DAYS = 30;
 

@@ -17,7 +17,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 import { audit } from "@/lib/auth/audit";
 import { ForbiddenError, requireSession } from "@/lib/auth/session";
-import { buildAuthorizeUrl } from "@/lib/sync/awork/auth";
+import { buildAuthorizeUrl } from "@/lib/integrations/providers/awork/auth";
 
 export const COOKIE_NAME = "awork_oauth_state";
 const COOKIE_TTL_SECONDS = 10 * 60; // generous window for the user to complete the awork screen

@@ -233,7 +233,9 @@ export const timeEntry = pgTable(
       .notNull()
       .references(() => integration.slug, { onDelete: "cascade" }),
     external_id: text().notNull(),
-    external_person_id: text().notNull(),
+    /** Nullable: awork can report entries without a user; they still
+     *  count toward their project. */
+    external_person_id: text(),
     external_project_id: text(),
     external_task_id: text(),
     work_date: date({ mode: "string" }).notNull(),

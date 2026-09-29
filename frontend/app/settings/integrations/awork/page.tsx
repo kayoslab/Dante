@@ -6,7 +6,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { audit } from "@/lib/auth/audit";
 import { hasRole, requireSession } from "@/lib/auth/session";
-import { getAworkAuthStatus } from "@/lib/sync/awork/auth";
+import { getAworkAuthStatus } from "@/lib/integrations/providers/awork/auth";
 
 export const metadata = { title: "awork integration — Dante" };
 

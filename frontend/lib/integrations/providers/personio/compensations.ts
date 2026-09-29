@@ -1,12 +1,11 @@
-/** Personio v2 /compensations + walk-backward salary history backfill.
- *
- * Port of src/dante/sync.py::sync_compensations + _backfill_salary_history.
+/** Personio v2 /compensations → canonical compensations, plus the
+ * walk-backward salary history backfill that runs in `afterSync`.
  *
  * Snapshot:
- *   GET /v2/compensations → every comp component active today, upsert into
- *   compensation_event (PK: compensation_id, stable across syncs).
+ *   GET /v2/compensations → every comp component active today.
  *
- * Walk-backward (the interesting bit):
+ * Walk-backward (the interesting bit, Personio-specific because it probes
+ * the API with `as_of` dates):
  *   For each (employee, legal_entity) with a current FIXED_SALARY component,
  *   walk backward one day at a time via /v2/compensations?as_of=YYYY-MM-DD
  *   looking for the previous distinct effective_from. Each transition
@@ -14,32 +13,18 @@
  *   uq_salary_event UNIQUE constraint on (employee, effective, new_annual)).
  *
  * Bounded by max(today − lookback_years, employee.hire_date) so we never
- * probe before the employee existed. Hop cap: see MAX_SALARY_HISTORY_HOPS.
+ * probe before the employee existed. Hop cap: MAX_SALARY_HISTORY_HOPS.
  */
-import { sql } from "drizzle-orm";
 import type { Client } from "pg";
 
-import { compensationEvent, salaryChangeEvent } from "@/lib/db/schema";
+import { salaryChangeEvent } from "@/lib/db/schema";
+import type { CanonicalCompensation } from "@/lib/integrations/core/types";
 import { syncDrizzle } from "@/lib/sync/db";
-import type { SyncLogger } from "@/lib/sync/run";
+
 import type { PersonioClient } from "./client";
-import { coerceDate, coerceNumber } from "./_helpers";
+import { coerceDate, coerceNumber } from "./helpers";
 
-const COMPENSATION_COLUMNS = [
-  "compensation_id",
-  "employee_id",
-  "effective_from",
-  "amount_value",
-  "amount_currency",
-  "interval",
-  "category",
-  "type_name",
-  "legal_entity_id",
-  "weekly_working_hours",
-  "full_time_weekly_working_hours",
-] as const;
-
-type CompensationRecord = {
+export type CompensationRecord = {
   id?: unknown;
   effective_from?: unknown;
   interval?: string;
@@ -51,14 +36,14 @@ type CompensationRecord = {
   full_time_weekly_working_hours?: unknown;
 };
 
-function flattenCompensation(item: CompensationRecord): Record<string, unknown> {
+export function flattenCompensation(item: CompensationRecord): CanonicalCompensation | null {
+  if (!item.id || !item.person?.id) return null;
   const amount = item.amount ?? {};
   const type_ = item.type ?? {};
-  const person = item.person ?? {};
   const legal_entity = item.legal_entity ?? {};
   return {
-    compensation_id: item.id ? String(item.id) : null,
-    employee_id: person.id ? Number(person.id) : null,
+    external_id: String(item.id),
+    external_person_id: String(item.person.id),
     effective_from: coerceDate(item.effective_from),
     amount_value: coerceNumber(amount.value),
     amount_currency: amount.currency ?? null,
@@ -67,9 +52,7 @@ function flattenCompensation(item: CompensationRecord): Record<string, unknown> 
     type_name: type_.name ?? null,
     legal_entity_id: legal_entity.id ? String(legal_entity.id) : null,
     weekly_working_hours: coerceNumber(item.weekly_working_hours),
-    full_time_weekly_working_hours: coerceNumber(
-      item.full_time_weekly_working_hours,
-    ),
+    full_time_weekly_working_hours: coerceNumber(item.full_time_weekly_working_hours),
   };
 }
 
@@ -107,60 +90,17 @@ function shiftDays(d: Date, days: number): Date {
   return r;
 }
 
-export async function syncCompensations(
-  conn: Client,
-  client: PersonioClient,
-  sync_run_id: number,
-  log: SyncLogger,
-): Promise<number> {
-  const db = syncDrizzle(conn);
-  const items = (await client.listCompensations()) as CompensationRecord[];
-  const now = new Date();
-  // Build the ON CONFLICT update set once — every non-PK column maps to
-  // `excluded.<col>`. Derived from the column list so a schema change
-  // needs exactly one edit.
-  const updateSet: Record<string, unknown> = {
-    last_seen_sync_run_id: sql`excluded.last_seen_sync_run_id`,
-    last_updated_at: sql`excluded.last_updated_at`,
-  };
-  for (const c of COMPENSATION_COLUMNS) {
-    if (c === "compensation_id") continue;
-    updateSet[c] = sql.raw(`excluded.${c}`);
-  }
-  for (const item of items) {
-    const row = flattenCompensation(item);
-    if (row.compensation_id === null || row.employee_id === null) continue;
-    const insert: Record<string, unknown> = {
-      last_seen_sync_run_id: sync_run_id,
-      last_updated_at: now,
-    };
-    for (const c of COMPENSATION_COLUMNS) {
-      insert[c] = row[c];
-    }
-    await db
-      .insert(compensationEvent)
-      .values(insert as typeof compensationEvent.$inferInsert)
-      .onConflictDoUpdate({
-        target: compensationEvent.compensation_id,
-        set: updateSet,
-      });
-  }
-  const nNew = await backfillSalaryHistory(conn, client);
-  if (nNew > 0) {
-    log(`  salary history: ${nNew} new change event(s) captured`);
-  }
-  return items.length;
-}
-
 /** Hard ceiling on backward walk steps per (employee, legal_entity).
  * A salary changes on calendar-quarter boundaries at most, so 40 hops
- * covers ~10 years even if every quarter saw a change. Stops a runaway
- * loop if `effective_from` data is malformed. */
+ * covers ~10 years even if every quarter saw a change. */
 const MAX_SALARY_HISTORY_HOPS = 40;
 
-async function backfillSalaryHistory(
+/** Returns the number of new salary_change_event rows captured. Reads the
+ * current FIXED_SALARY rows this integration wrote to compensation_event. */
+export async function backfillSalaryHistory(
   conn: Client,
   client: PersonioClient,
+  slug: string,
   lookback_years = 5,
 ): Promise<number> {
   const today = new Date();
@@ -170,6 +110,7 @@ async function backfillSalaryHistory(
 
   const currentRes = await conn.query<{
     employee_id: number;
+    external_person_id: string;
     legal_entity_id: string | null;
     effective_from: string | Date | null;
     amount_value: string | number | null;
@@ -177,12 +118,20 @@ async function backfillSalaryHistory(
     interval: string | null;
     hire_date: string | Date | null;
   }>(
-    `SELECT ce.employee_id, ce.legal_entity_id, ce.effective_from,
+    `SELECT ce.employee_id, l.external_id AS external_person_id,
+            ce.legal_entity_id, ce.effective_from,
             ce.amount_value, ce.amount_currency, ce.interval,
             ec.hire_date
-     FROM compensation_event ce
-     LEFT JOIN employee_current ec ON ec.employee_id = ce.employee_id
-     WHERE ce.category = 'FIXED_SALARY' AND ce.effective_from IS NOT NULL`,
+       FROM compensation_event ce
+       LEFT JOIN employee_current ec ON ec.employee_id = ce.employee_id
+       LEFT JOIN external_link l
+         ON l.integration_slug = ce.integration_slug
+        AND l.entity_type = 'person'
+        AND l.dante_type = 'employee'
+        AND l.dante_id = ce.employee_id
+      WHERE ce.integration_slug = $1
+        AND ce.category = 'FIXED_SALARY' AND ce.effective_from IS NOT NULL`,
+    [slug],
   );
 
   // Cache probe responses — many employees share the same probe date
@@ -192,14 +141,13 @@ async function backfillSalaryHistory(
     const key = isoDay(date);
     let cached = probeCache.get(key);
     if (cached === undefined) {
-      cached = (await client.listCompensations({
-        as_of: key,
-      })) as CompensationRecord[];
+      cached = (await client.listCompensations({ as_of: key })) as CompensationRecord[];
       probeCache.set(key, cached);
     }
     return cached;
   };
 
+  const db = syncDrizzle(conn);
   let nNew = 0;
   for (const r of currentRes.rows) {
     const annual = annualEUR(r.amount_value, r.amount_currency, r.interval);
@@ -209,20 +157,20 @@ async function backfillSalaryHistory(
     const hire = parseISODate(r.hire_date);
     let bound = lookbackCutoff;
     if (hire && hire > bound) bound = hire;
+    // The person id in Personio is what `as_of` probes report; fall back
+    // to the Dante id for rows that predate links (they are equal).
+    const personId = r.external_person_id ?? String(r.employee_id);
 
     let currentAnnual = annual;
     for (let hop = 0; hop < MAX_SALARY_HISTORY_HOPS; hop++) {
       if (eff <= bound) break;
-      const probe = shiftDays(eff, -1);
-      const probeItems = await itemsAt(probe);
+      const probeItems = await itemsAt(shiftDays(eff, -1));
       let earlier: CompensationRecord | null = null;
       for (const it of probeItems) {
         if (it.type?.category !== "FIXED_SALARY") continue;
-        if (String(it.person?.id) !== String(r.employee_id)) continue;
-        if (r.legal_entity_id !== null) {
-          if (String(it.legal_entity?.id) !== String(r.legal_entity_id)) {
-            continue;
-          }
+        if (String(it.person?.id) !== personId) continue;
+        if (r.legal_entity_id !== null && String(it.legal_entity?.id) !== String(r.legal_entity_id)) {
+          continue;
         }
         earlier = it;
         break;
@@ -238,7 +186,6 @@ async function backfillSalaryHistory(
       if (earlierEff === null || earlierAnnual === null) break;
       if (earlierEff >= eff) break; // same period — done
 
-      const db = syncDrizzle(conn);
       const ins = await db
         .insert(salaryChangeEvent)
         .values({

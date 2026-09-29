@@ -6,11 +6,10 @@ import {
   appUser,
   assignment,
   aworkProject,
-  aworkProjectLink,
+  externalLink,
   customer,
   frameworkAgreement,
   personioProject,
-  personioProjectLink,
   project,
   projectRate,
   projectSdm,
@@ -910,18 +909,20 @@ export async function mergeProjects(
       .where(eq(assignment.project_id, source_project_id))
       .returning({ id: assignment.assignment_id });
 
-    // Move Personio + awork link rows (PK is the upstream id, not project_id).
-    const movedPersonio = await tx
-      .update(personioProjectLink)
-      .set({ project_id: target_project_id })
-      .where(eq(personioProjectLink.project_id, source_project_id))
-      .returning({ id: personioProjectLink.personio_project_id });
-
-    const movedAwork = await tx
-      .update(aworkProjectLink)
-      .set({ project_id: target_project_id })
-      .where(eq(aworkProjectLink.project_id, source_project_id))
-      .returning({ id: aworkProjectLink.awork_project_id });
+    // Move external links (keyed by the upstream id, not project_id) —
+    // Personio, awork and any other integration alike.
+    const movedLinks = await tx
+      .update(externalLink)
+      .set({ dante_id: target_project_id })
+      .where(
+        and(
+          eq(externalLink.dante_type, "project"),
+          eq(externalLink.dante_id, source_project_id),
+        ),
+      )
+      .returning({ id: externalLink.external_id, slug: externalLink.integration_slug });
+    const movedPersonio = movedLinks.filter((l) => l.slug === "personio");
+    const movedAwork = movedLinks.filter((l) => l.slug === "awork");
 
     // Drop the now-orphaned source project.
     await tx.delete(project).where(eq(project.project_id, source_project_id));
@@ -1012,39 +1013,76 @@ export async function getPersonioProjectBillable(
 export async function getPersonioLinkProjectId(
   personio_project_id: string,
 ): Promise<number | null> {
-  const [row] = await db
-    .select({ project_id: personioProjectLink.project_id })
-    .from(personioProjectLink)
-    .where(
-      eq(personioProjectLink.personio_project_id, personio_project_id),
-    );
-  return row?.project_id ?? null;
+  return getProjectLinkProjectId("personio", personio_project_id);
 }
 
 export async function insertPersonioProjectLink(input: {
   personio_project_id: string;
   project_id: number;
 }): Promise<void> {
-  await db.insert(personioProjectLink).values({
-    personio_project_id: input.personio_project_id,
-    project_id: input.project_id,
-    mapped_at: new Date(),
-  });
+  await insertProjectLink("personio", input.personio_project_id, input.project_id);
 }
 
 export async function deletePersonioProjectLink(
   project_id: number,
   personio_project_id: string,
 ): Promise<number> {
-  const rows = await db
-    .delete(personioProjectLink)
+  return deleteProjectLink("personio", personio_project_id, project_id);
+}
+
+// ----------------------------------------------------------------------------
+// Generic external project link helpers (external_link, entity 'project').
+// ----------------------------------------------------------------------------
+
+async function getProjectLinkProjectId(
+  integration_slug: string,
+  external_id: string,
+): Promise<number | null> {
+  const [row] = await db
+    .select({ project_id: externalLink.dante_id })
+    .from(externalLink)
     .where(
       and(
-        eq(personioProjectLink.personio_project_id, personio_project_id),
-        eq(personioProjectLink.project_id, project_id),
+        eq(externalLink.integration_slug, integration_slug),
+        eq(externalLink.entity_type, "project"),
+        eq(externalLink.external_id, external_id),
+      ),
+    );
+  return row?.project_id ?? null;
+}
+
+async function insertProjectLink(
+  integration_slug: string,
+  external_id: string,
+  project_id: number,
+): Promise<void> {
+  await db.insert(externalLink).values({
+    integration_slug,
+    entity_type: "project",
+    external_id,
+    dante_type: "project",
+    dante_id: project_id,
+    origin: "manual",
+    mapped_at: new Date(),
+  });
+}
+
+async function deleteProjectLink(
+  integration_slug: string,
+  external_id: string,
+  project_id: number,
+): Promise<number> {
+  const rows = await db
+    .delete(externalLink)
+    .where(
+      and(
+        eq(externalLink.integration_slug, integration_slug),
+        eq(externalLink.entity_type, "project"),
+        eq(externalLink.external_id, external_id),
+        eq(externalLink.dante_id, project_id),
       ),
     )
-    .returning({ id: personioProjectLink.personio_project_id });
+    .returning({ id: externalLink.external_id });
   return rows.length;
 }
 
@@ -1069,36 +1107,19 @@ export async function getAworkProjectName(
 export async function getAworkProjectLinkProjectId(
   awork_project_id: string,
 ): Promise<number | null> {
-  const [row] = await db
-    .select({ project_id: aworkProjectLink.project_id })
-    .from(aworkProjectLink)
-    .where(eq(aworkProjectLink.awork_project_id, awork_project_id));
-  return row?.project_id ?? null;
+  return getProjectLinkProjectId("awork", awork_project_id);
 }
 
 export async function insertAworkProjectLink(input: {
   awork_project_id: string;
   project_id: number;
 }): Promise<void> {
-  await db.insert(aworkProjectLink).values({
-    awork_project_id: input.awork_project_id,
-    project_id: input.project_id,
-    mapped_at: new Date(),
-  });
+  await insertProjectLink("awork", input.awork_project_id, input.project_id);
 }
 
 export async function deleteAworkProjectLink(
   project_id: number,
   awork_project_id: string,
 ): Promise<number> {
-  const rows = await db
-    .delete(aworkProjectLink)
-    .where(
-      and(
-        eq(aworkProjectLink.awork_project_id, awork_project_id),
-        eq(aworkProjectLink.project_id, project_id),
-      ),
-    )
-    .returning({ id: aworkProjectLink.awork_project_id });
-  return rows.length;
+  return deleteProjectLink("awork", awork_project_id, project_id);
 }

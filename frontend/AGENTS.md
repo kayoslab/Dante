@@ -185,18 +185,20 @@ directly when they bypass MFA.
 
 ## awork integration
 
-- **Read-only invariant.** The data-path client (`lib/sync/awork/client.ts`) only exposes `list*` / `get*`. The only POST in the codebase is to awork's OAuth token endpoint, and it lives in `lib/sync/awork/auth.ts`.
-- Enforced by `scripts/check-awork-readonly.ts`, wired into `npm run check`. Adding a new write path requires editing `ALLOWED_POST_FILES` in the script — visible in code review.
+- **Read-only invariant.** The data-path client (`lib/integrations/providers/awork/client.ts`) only exposes `list*` / `get*`. The only POST in the codebase is to awork's OAuth token endpoint, and it lives in `lib/integrations/providers/awork/auth.ts`.
+- Enforced by `scripts/check-integration-readonly.ts`, wired into `npm run check`. Adding a new write path requires adding the file to `writesAllowedIn` on the provider's adapter — visible in code review next to the code it covers.
 
 ## Sync layer
 
+- **Adapters, not per-provider pipelines.** Each external tool is a `ProviderAdapter` under `lib/integrations/providers/<slug>/` that returns canonical records; `lib/integrations/core/runner.ts` decides what runs from the admin-configured `integration_binding` rows and writes everything through `core/upsert.ts`. See `docs/integration-adapters.md` before touching the sync.
+
 - **Typed Drizzle writes.** Sync uses `db.insert(table).values(...).onConflictDoUpdate({ target, set })` so column renames break at compile time. Wrap the standalone `Client` with `syncDrizzle(conn)` at the call site.
-- **`excludedSet([...cols])`** in `lib/sync/_upsert.ts` builds the `set` map for ON CONFLICT updates — derived from a single column list so a schema change needs one edit.
+- **`excludedSet([...cols])`** in `lib/integrations/core/excluded-set.ts` builds the `set` map for ON CONFLICT updates — derived from a single column list so a schema change needs one edit.
 - **Per-employee transactions** via raw `conn.query("BEGIN")` / `COMMIT` — Drizzle's transaction API is fine too, but the raw `BEGIN`/`COMMIT` lets a single bad record roll back without poisoning the rest of the run.
 
 ## Secrets
 
-- **`DANTE_USE_SECRETS_MANAGER=1`** flips `lib/sync/credentials.ts` from env-var reads to Secrets Manager reads. Same code path for LocalStack (via `AWS_ENDPOINT_URL=http://localhost:4566`) and real AWS.
+- **`DANTE_USE_SECRETS_MANAGER=1`** flips `lib/integrations/core/credentials.ts` from env-var reads to Secrets Manager reads. Same code path for LocalStack (via `AWS_ENDPOINT_URL=http://localhost:4566`) and real AWS.
 - Secret name convention: `dante/<env>/<key>` (e.g. `dante/local/personio`).
 - Bootstrap via `scripts/seed-secrets.ts` from `.env`.
 
@@ -408,6 +410,6 @@ For dev-only advisories (devDependencies — drizzle-kit's `@esbuild-kit/esm-loa
 ## Things deliberately deferred
 
 - **Hooks vs server queries.** Every entity has a TanStack hook and a server-side query helper. Most pages prefetch on the server, so hooks only earn their keep where client refetch matters. Drop hooks per-feature when you touch a page — not in bulk.
-- **Large file splits.** `lib/db/_monthly-helpers.ts` (~1088), `components/project/project-monthly-breakdown.tsx` (~740), `lib/sync/awork/housekeeping.ts` (~725), `components/consultant/consultant-monthly-breakdown.tsx` (~591). Split per-feature when next touched (KPI cards out, calc helpers out, table rendering out). Not worth a dedicated refactor pass.
+- **Large file splits.** `lib/db/_monthly-helpers.ts` (~1088), `components/project/project-monthly-breakdown.tsx` (~740), `components/consultant/consultant-monthly-breakdown.tsx` (~591). Split per-feature when next touched (KPI cards out, calc helpers out, table rendering out). Not worth a dedicated refactor pass.
 - **Untyped `db.execute()` reads** (60+ sites use `as Array<Record<string, unknown>>`). The write path is now typed Drizzle (column-rename safe at compile time); the read path catches issues at the next page render rather than runtime. Migrate per-route when touched, not in bulk.
 - **`awork/housekeeping.ts` minor UPDATEs.** The high-drift INSERTs (customer, project, awork_company_link, awork_project_link) are typed Drizzle; the targeted `UPDATE … SET col = $1 WHERE id = $2` statements stayed as raw SQL because the drift risk is small and the conversion adds noise.

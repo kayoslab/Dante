@@ -12,6 +12,13 @@ import {
 
 import { project } from "./billing";
 
+// NOTE (migration 0024): every table in this file is a compatibility VIEW
+// over the canonical tables in ./integration.ts (external_person,
+// external_company, external_project, time_entry, planned_booking,
+// external_link). They are declared as tables so existing readers keep
+// type-checking; do not write to them. Retired in phase 5 of
+// docs/integration-adapters.md.
+
 // awork's "Companies" = customers in their model.
 export const aworkCompany = pgTable("awork_company", {
   awork_company_id: text().primaryKey(),
