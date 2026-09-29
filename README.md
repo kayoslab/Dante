@@ -8,8 +8,10 @@ billable hours.
 Dante is an HR + time-tracking analytics tool for consultancies,
 released as an open-source example implementation by
 [Simon Krüger](https://github.com/kayoslab). It pulls employee records, salaries, absences, and attendances from
-Personio, marries them to time entries from awork, and gives managers the
-numbers they need to run a consultancy without spreadsheets that lie.
+an HR system, marries them to time entries from a project or time-tracking
+tool, and gives managers the numbers they need to run a consultancy without
+spreadsheets that lie. Personio and awork ship as the first two adapters;
+any other tool is one adapter away.
 
 It is named after the poet who wrote about descending through nine circles
 of progressively worse predicaments. If you have ever filled out a timesheet,
@@ -53,17 +55,28 @@ you'd like to send improvements back.
 
 ## What it does
 
-- **Pulls** employee data, compensation history, absences, and project
-  attendances from the Personio API. Stale absences (withdrawn or
-  rejected after Personio dropped them from the feed) get cleaned up
+- **Pulls** from every connected tool through an adapter. Each adapter
+  declares what it provides — employees, absences, compensations,
+  companies, projects, tracked time, planner bookings — and returns
+  records in one canonical shape. The shipped adapters cover **Personio**
+  (employees, compensation history, absences, attendance, the
+  time-tracking project list) and **awork** (companies, users, projects,
+  time entries, planner bookings). Stale records (an absence withdrawn
+  after it was pulled, a planner booking deleted upstream) get cleaned up
   on every run.
-- **Pulls** companies, users, projects, and time entries from the awork API.
-- **Reconciles** the two — links awork users to both Personio employees
-  and external freelancers by email, links awork companies to internal
-  customers by name, derives consultant assignments from logged time.
-- **Records** the bits Personio doesn't track: monthly freelancer hours
-  per project (entered by the project's SDM, auto-filled from awork
-  when a freelancer happens to log there too) and per-project SDM
+- **Lets an admin wire the tools together in Settings**, not in code:
+  which integration feeds which kind of data and in what priority, what
+  happens when two tools report time for the same person on the same day,
+  which auto-link rules run, and which tool's companies and projects are
+  imported as customers and projects. Credentials are entered write-only
+  and never shown again.
+- **Reconciles** the sources — links tool users to employees and external
+  freelancers by e-mail, links tool companies to customers by name, keeps
+  a manual override for every link, and derives consultant assignments
+  from planner bookings.
+- **Records** the bits no HR system tracks: monthly freelancer hours per
+  project (entered by the project's SDM, auto-filled from a time-tracking
+  tool when a freelancer happens to log there too) and per-project SDM
   grants. Freelancer hours drive actuals-based cost; absent an entry
   the calc falls back to planned allocation.
 - **Knows** the German working calendar per employee: federal +
@@ -79,15 +92,15 @@ you'd like to send improvements back.
   - **Service Delivery Managers** are employees who have been granted
     SDM rights on one or more specific projects via `project_sdm`.
     They get manager-equivalent access to *their* projects — assignments,
-    rates, freelancer hours, Personio/awork links, monthly P&L,
+    rates, freelancer hours, integration links, monthly P&L,
     over-budget alerts — but nothing about other projects.
   - **Managers** see all project economics, portfolio margins,
-    consultant utilization, the real Personio absence type
+    consultant utilization, the real absence type
     (including sickness — they need it for planning), salary bands,
     and gender-gap analysis.
   - **Admins** grant and revoke SDM rights, invite users, change
-    roles, audit access, re-authorize awork OAuth, and run the
-    breakglass migrations.
+    roles, audit access, configure integrations (credentials, OAuth,
+    sources & rules), and run the breakglass migrations.
 
 If you are looking for the spreadsheet version of this, the spreadsheet
 version of this is wrong. That's why this exists.
@@ -123,9 +136,9 @@ version of this is wrong. That's why this exists.
         Sync Lambda                  Cognito OIDC
       (every 6h, UTC)                (sign-in + MFA)
               │
-   ┌──────────┴──────────┐
-   ▼                     ▼
- Personio API         awork API
+   ┌──────────┼──────────┐
+   ▼          ▼          ▼
+ Personio   awork   (any adapter)
 ```
 
 - **Frontend + API:** Next.js 16 (App Router, Server Components, Server
@@ -135,12 +148,24 @@ version of this is wrong. That's why this exists.
 - **Database:** RDS PostgreSQL 16, single-AZ on day-one, Multi-AZ flip
   when traffic justifies it. Master credential rotated into Secrets
   Manager and never seen by the operator.
-- **Sync:** A Lambda fires every 6 hours (04:00 / 10:00 / 16:00 / 22:00 UTC), pulls Personio + awork,
-  upserts via typed Drizzle inserts, purges audit log entries older than
-  30 days. Failures throw, surface as CloudWatch `Errors`, land in an
-  SQS DLQ, and trigger SNS alarm emails. The `/settings/sync` button
-  reuses the same Lambda via synchronous invoke — the web-app task role
-  doesn't hold Personio credentials directly.
+- **Integrations:** every external tool is a `ProviderAdapter` under
+  `frontend/lib/integrations/providers/<slug>/` that returns canonical
+  records; a static registry lists them. The core (`lib/integrations/core`)
+  owns everything else: the sync runner that walks the admin's capability
+  bindings, canonical upserts and pruning, link resolution and auto-link
+  rules, the rollups, the import policy, the secret store and the
+  conformance suite. Adapters are read-only against their tool, enforced
+  by a guard in CI. Design: [`docs/integration-adapters.md`](docs/integration-adapters.md);
+  adding one: [`docs/integrations.md`](docs/integrations.md).
+- **Sync:** A Lambda fires every 6 hours (04:00 / 10:00 / 16:00 / 22:00 UTC), pulls every enabled
+  integration through its adapter in capability order, upserts via typed
+  Drizzle inserts, purges audit log entries older than 30 days. A failing
+  integration is isolated and recorded on its row; a run with failures
+  is marked `partial`. Failures of the run itself throw, surface as
+  CloudWatch `Errors`, land in an SQS DLQ, and trigger SNS alarm emails.
+  The `/settings/sync` button and the per-integration "Test connection"
+  reuse the same Lambda via synchronous invoke — the web-app task role
+  never reads static integration credentials.
 - **Auth:** AWS Cognito user pool with hosted UI on the custom domain
   `auth.<domain>` (own ACM cert in `us-east-1` per Cognito
   requirement). MFA is mandatory for every user
@@ -151,15 +176,19 @@ version of this is wrong. That's why this exists.
   after Cognito has already enforced the factor; the JWT cookie carries
   the Cognito access + refresh tokens server-side only (never reaches
   the client) for self-service flows.
-- **Secrets:** AWS Secrets Manager for Personio creds, awork OAuth client
-  + rotating tokens, the Auth.js JWT signing key, and the RDS master
-  credential. The app composes connection strings at boot from the
-  managed RDS secret; nothing sensitive lives in the task definition or
-  CloudWatch. Web-app task role holds awork OAuth tokens (read for
-  status UI, write for the callback) and Cognito client secret only;
-  Personio creds are exclusive to the sync Lambda. The deploy role's
-  Secrets Manager perms are split read-write (only the cognito_client
-  secret terraform manages) vs describe-only on everything else.
+- **Secrets:** integration credentials go through a pluggable secret
+  store — AWS Secrets Manager on this stack (an encrypted table or plain
+  env vars elsewhere) — plus the Auth.js JWT signing key and the RDS
+  master credential in Secrets Manager. Admins enter credentials
+  write-only in Settings; the web-app task role may create, write and
+  describe integration secrets but only *read* OAuth tokens (for the
+  status UI and the callback) and the Cognito client secret. Static
+  credentials such as Personio's are readable by the sync Lambda alone.
+  The app composes connection strings at boot from the managed RDS
+  secret; nothing sensitive lives in the task definition or CloudWatch.
+  The deploy role's Secrets Manager perms are split read-write (only the
+  cognito_client secret terraform manages) vs describe-only on
+  everything else.
 - **Email:** Cognito invitation / reset / MFA-setup emails route through
   SES from `noreply@<domain>` (domain identity verified with
   Easy-DKIM; DKIM CNAMEs in Route 53). SES is in sandbox until AWS
@@ -169,7 +198,7 @@ version of this is wrong. That's why this exists.
   (2000/5min). Optional geo allow-list.
 - **Observability:** App audit rows mirror to CloudWatch as
   `audit_event` log lines; metric filters + alarms fire on spikes in
-  `view_inspect_payload` (Personio raw data reads) and `view_salary`
+  `view_inspect_payload` (raw HR payload reads) and `view_salary`
   reads. Alarm SNS topic is the same one the sync Lambda uses.
 - **State backend:** Terraform state lives in S3 (`dante-tfstate`,
   versioned + SSE-AES256 + TLS-only bucket policy + public-access
@@ -188,7 +217,10 @@ runbooks, the prod bring-up sequence, and the MFA reset path, live in
 ## Repository layout
 
 ```
-frontend/        # Next.js 16 app + sync layer + Drizzle schema
+frontend/        # Next.js 16 app + integrations (adapters + sync core) + Drizzle schema
+  lib/integrations/core/        # runner, upserts, links, rollups, import, secret store, conformance
+  lib/integrations/providers/   # personio/, awork/, _template/
+docs/            # design (integration-adapters.md) + how to add a provider (integrations.md)
 terraform/       # IaC: 10 modules + dev/prod/local environments
 docker-compose.yml   # Local Postgres + LocalStack
 .env.example     # Required + optional environment variables (not committed)
@@ -205,7 +237,8 @@ docker compose up -d
 # 2. Frontend
 cd frontend
 npm install
-cp ../.env.example ../.env   # fill in Personio + awork creds
+cp ../.env.example ../.env   # Personio + awork creds as env vars, or set
+                             # DANTE_SECRET_KEY and enter them in Settings → Integrations
 npm run dev
 
 # 3. (Optional) run the sync against your local DB
@@ -217,8 +250,8 @@ sessions without checking passwords. Roles come from
 `AUTH_DEV_ADMIN_EMAILS` / `AUTH_DEV_MANAGER_EMAILS` in `.env`.
 
 Useful npm scripts:
-- `npm run check` — type-check + awork read-only guard + DB-locality guard + tests
-- `npm run sync` — full pull of Personio + awork
+- `npm run check` — type-check + integration read-only guard + DB-locality guard + tests (incl. the adapter conformance suite)
+- `npm run sync` — full pull of every enabled integration (`--source <slug>` for one)
 - `npm run build:sync-lambda` — bundle the sync Lambda zip
 - `npm run check:integration-readonly` — fails if any provider adapter issues an HTTP write outside the files it declares in `writesAllowedIn` (awork: only `auth.ts`, the OAuth token endpoint)
 - `npm run check:db-locality` — fails if any code outside `lib/db/` opens a `db.execute`/`db.select`/`db.insert`/`db.update`/`db.delete`/`db.transaction` call. API routes, Server Actions and Server Component pages call named query functions from `lib/db/queries/*` only
@@ -237,7 +270,8 @@ Cliff notes:
    Cognito, secrets, ECR, ALB, ACM, DNS, sync Lambda, WAF — but the ECS
    service starts with zero healthy tasks because the image hasn't been
    pushed yet.
-3. Seed Secrets Manager (`AUTH_SECRET`, Personio creds, awork client).
+3. Seed Secrets Manager with `AUTH_SECRET`; integration credentials can be
+   seeded the same way or entered later under Settings → Integrations.
 4. Build + push the container image to ECR.
 5. `terraform apply -var app_image_uri=<repo>:<sha>` rolls the service.
 6. Confirm SNS subscription emails for the alarm topics.
@@ -323,7 +357,7 @@ defaults except the ones CI must supply)
 | `vpc_nat_mode` | `gateway` | `instance` saves ~€30/mo but can't launch on Free Plan accounts. |
 | `vpc_single_nat_gateway` | `true` | One NAT for all AZs vs one per AZ. |
 | `waf_enabled` | `true` | Detach the WAF only for a pentest window. |
-| `sync_lambda_schedule_expression` | every 6 h | EventBridge cron for the Personio + awork sync. |
+| `sync_lambda_schedule_expression` | every 6 h | EventBridge cron for the integration sync. |
 | `domain`, `parent_domain`, `hosted_zone_id`, `github_repository`, `seed_admin_emails`, `sync_lambda_alarm_emails`, `waf_alarm_emails`, `app_image_uri` | *none* | Required; CI passes them from the variables above. |
 
 **Integration credentials** are entered by an admin under Settings →
@@ -348,8 +382,9 @@ is granted.
 
 Issues and pull requests are welcome — see
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for the checks to run and the two
-architectural guards (awork read-only, DB access local to `lib/db/`)
-that CI enforces.
+architectural guards (integrations read-only, DB access local to
+`lib/db/`) that CI enforces. To connect another HR or time-tracking tool,
+start at [`docs/integrations.md`](docs/integrations.md).
 
 ---
 
