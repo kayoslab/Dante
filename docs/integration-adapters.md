@@ -1,10 +1,11 @@
 # Integration adapters — design and build plan
 
-Status: agreed design (2026-09-29). Phase 1 (migration 0023) and phase 2
-(adapter extraction, canonical writes, migration 0024) implemented. The
-code lives under `frontend/lib/integrations/`; `frontend/lib/sync/` keeps
-only the connection helper, the Lambda handler and a re-export of
-`runSync`. Phases 3-6 pending.
+Status: agreed design (2026-09-29). Phases 1 (migration 0023), 2 (adapter
+extraction, canonical writes, migration 0024) and 3 (secret store,
+write-only credential UI, migration 0025) implemented. The code lives
+under `frontend/lib/integrations/`; `frontend/lib/sync/` keeps only the
+connection helper, the Lambda handler and a re-export of `runSync`.
+Phases 4-6 pending.
 
 Dante pulls people from an HRIS and work from a project / time-tracking
 tool. Today those are Personio and awork, and both are hard-wired: the
@@ -271,7 +272,14 @@ Write-only from the admin's point of view. The UI posts a credential, the
 server stores it, the API only ever returns `credential_state`,
 `credential_set_at`, `credential_set_by`.
 
-`SecretStore` interface with two implementations, chosen by deployment env:
+`SecretStore` interface (`lib/integrations/core/secret-store.ts`) with
+three implementations, chosen by deployment env (`DANTE_SECRET_STORE`
+explicit, else `DANTE_USE_SECRETS_MANAGER=1` → Secrets Manager, else
+`DANTE_SECRET_KEY` → encrypted column, else env):
+
+- **env** — the `<SLUG>_<FIELD>` variables in `.env`. Read-only from the
+  UI (the form explains why); OAuth tokens are still rewritten to `.env`
+  in dev.
 
 - **Secrets Manager** (`DANTE_USE_SECRETS_MANAGER=1`, AWS deployments).
   Secret name `dante/<env>/integration/<slug>`. The web-app task role gets
@@ -351,7 +359,7 @@ All writes are server actions gated on `admin`, audited with
 | --- | --- | --- | --- |
 | 1 | Canonical data model + migrations + backfills + mirror triggers (**done**, 0023) | Behaviour-neutral | High: employee identity change; do on a DB snapshot first |
 | 2 | Adapter extraction (Personio, awork) + core runner + canonical writes + compat views (**done**, 0024) | Behaviour-neutral | High: sync parity; verified by diffing every report-relevant relation across old sync → migration → new sync |
-| 3 | SecretStore + write-only credential UI + terraform grants | Feature | Medium: IAM change on web task role |
+| 3 | SecretStore + write-only credential UI + terraform grants (**done**, 0025) | Feature | Medium: IAM change on web task role |
 | 4 | Integrations / bindings / rules settings pages + health check + audit | Feature | Low |
 | 5 | Read side on canonical tables, generic link card, collapsed routes/actions | Refactor, report by report | Medium: each report has a parity test |
 | 6 | Guard, conformance suite, template, contributor docs | Docs / tooling | Low |

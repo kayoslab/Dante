@@ -133,7 +133,9 @@ resource "aws_iam_role" "task" {
 #     pre-launch pen test.
 resource "aws_iam_role_policy" "task_secrets" {
   count = (length(var.additional_secret_arns_readable) == 0 &&
-  length(var.additional_secret_arns_writable) == 0) ? 0 : 1
+    length(var.additional_secret_arns_writable) == 0 &&
+    length(var.additional_secret_arns_describable) == 0 &&
+  length(var.secret_arn_patterns_manageable) == 0) ? 0 : 1
   name = "${local.name}-task-secrets"
   role = aws_iam_role.task.id
 
@@ -149,6 +151,22 @@ resource "aws_iam_role_policy" "task_secrets" {
         Effect   = "Allow"
         Action   = ["secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret"]
         Resource = var.additional_secret_arns_writable
+      }],
+      length(var.additional_secret_arns_describable) == 0 ? [] : [{
+        Effect   = "Allow"
+        Action   = ["secretsmanager:DescribeSecret"]
+        Resource = var.additional_secret_arns_describable
+      }],
+      length(var.secret_arn_patterns_manageable) == 0 ? [] : [{
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:UpdateSecret",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:TagResource",
+        ]
+        Resource = var.secret_arn_patterns_manageable
       }],
       length(var.additional_kms_key_arns_decryptable) == 0 ? [] : [{
         Effect   = "Allow"

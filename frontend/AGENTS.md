@@ -198,9 +198,10 @@ directly when they bypass MFA.
 
 ## Secrets
 
-- **`DANTE_USE_SECRETS_MANAGER=1`** flips `lib/integrations/core/credentials.ts` from env-var reads to Secrets Manager reads. Same code path for LocalStack (via `AWS_ENDPOINT_URL=http://localhost:4566`) and real AWS.
-- Secret name convention: `dante/<env>/<key>` (e.g. `dante/local/personio`).
-- Bootstrap via `scripts/seed-secrets.ts` from `.env`.
+- **Integration credentials go through the secret store** (`lib/integrations/core/secret-store.ts`): `env` (`<SLUG>_<FIELD>` variables, read-only from the UI), `secretsmanager` (`DANTE_USE_SECRETS_MANAGER=1`; same code path for LocalStack via `AWS_ENDPOINT_URL=http://localhost:4566` and real AWS) or `db` (`DANTE_SECRET_KEY`, AES-256-GCM rows in `integration_secret`). `DANTE_SECRET_STORE` overrides the auto-selection.
+- **Write-only from the UI.** Settings → Integrations stores a credential document and never reads it back; the page only shows `credential_state` / `credential_set_at` / `credential_set_by` from the `integration` row. "Test connection" runs in the sync Lambda in prod (`mode: "health_check"`), because the web-app task role can write and describe the Personio secret but must never read it.
+- Secret name convention: `dante/<env>/<key>` — `personio`, `awork/client`, `awork/tokens` for the original two integrations, `integration/<slug>/<kind>` for every other one (containers created on first save; IAM grants are prefix-scoped).
+- Bootstrap via `scripts/seed-secrets.ts` from `.env`, or enter credentials in the UI.
 
 ## Logging
 

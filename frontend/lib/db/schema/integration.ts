@@ -64,6 +64,25 @@ export const integration = pgTable("integration", {
   updated_at: timestamp({ mode: "date" }).notNull().defaultNow(),
 });
 
+/** Backing rows for the database flavour of the secret store — one
+ *  encrypted document per (integration, kind). Never read by the app
+ *  directly; see lib/integrations/core/secret-store.ts. */
+export const integrationSecret = pgTable(
+  "integration_secret",
+  {
+    integration_slug: text()
+      .notNull()
+      .references(() => integration.slug, { onDelete: "cascade" }),
+    kind: text().notNull().$type<"credentials" | "tokens">(),
+    ciphertext: text().notNull(),
+    iv: text().notNull(),
+    tag: text().notNull(),
+    key_version: integer().notNull().default(1),
+    updated_at: timestamp({ mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.integration_slug, t.kind] })],
+);
+
 /** The logical connection: which integration feeds which capability, and
  *  in what order when several do. `priority` 0 is the primary source. */
 export const integrationBinding = pgTable(

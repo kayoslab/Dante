@@ -430,7 +430,12 @@ module "sync_lambda" {
   # refresh flow PutSecretValues the rotated refresh_token back each run.
   # Reads of Personio creds + awork client are scoped via secret_arns.
   writable_secret_arns = [module.secrets.awork_tokens_secret_arn]
-  kms_key_arn          = null
+  # Integrations added through the settings UI store their credentials in
+  # on-demand containers under this prefix (phase 3 of
+  # docs/integration-adapters.md); the sync reads them like the
+  # pre-created ones above.
+  secret_arn_patterns_readable = [local.integration_secret_arn_pattern]
+  kms_key_arn                  = null
 
   # RDS-managed master credential — still wired in as a break-glass
   # fallback. The Lambda's runtime prefers IAM auth (rds_iam_db_user_arns
@@ -496,6 +501,13 @@ module "ecr" {
 }
 
 data "aws_caller_identity" "current" {}
+
+locals {
+  # `dante/prod/integration/<slug>/<kind>` — the on-demand secret containers
+  # for integrations the settings UI configures. Secrets Manager appends a
+  # random suffix to every ARN, hence the trailing wildcard.
+  integration_secret_arn_pattern = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:dante/prod/integration/*"
+}
 
 # CVE scanning on ECR pushes.
 #
@@ -705,7 +717,24 @@ module "app" {
   # 401s in CloudWatch).
   additional_secret_arns_writable = [
     module.secrets.awork_tokens_secret_arn,
+    # Settings → Integrations stores Personio / awork credentials
+    # write-only: the app may overwrite them but still cannot read
+    # Personio's back (no GetSecretValue on it above).
+    module.secrets.personio_secret_arn,
+    module.secrets.awork_client_secret_arn,
   ]
+
+  # Credential status in the settings UI (present? last changed?) without
+  # reading the values.
+  additional_secret_arns_describable = [
+    module.secrets.personio_secret_arn,
+    module.secrets.awork_client_secret_arn,
+    module.secrets.awork_tokens_secret_arn,
+  ]
+
+  # New integrations get their own containers under `integration/`,
+  # created by the app on first save. Write + describe only.
+  secret_arn_patterns_manageable = [local.integration_secret_arn_pattern]
 
   # Sync Lambda is invoked synchronously by `runSyncAction` for the
   # /settings sync button. Scoped to this exact function ARN — the

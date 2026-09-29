@@ -54,6 +54,7 @@ data "aws_iam_policy_document" "secrets" {
     actions = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
     resources = concat(
       var.secret_arns,
+      var.secret_arn_patterns_readable,
       var.database_secret_arn == null ? [] : [var.database_secret_arn],
     )
   }

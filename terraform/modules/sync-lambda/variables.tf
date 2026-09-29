@@ -25,6 +25,12 @@ variable "secret_arns" {
   type        = list(string)
 }
 
+variable "secret_arn_patterns_readable" {
+  description = "Secrets Manager ARN patterns (wildcards allowed) the Lambda may read in addition to `secret_arns` — the on-demand `dante/<env>/integration/*` containers the settings UI creates for integrations Terraform does not pre-create."
+  type        = list(string)
+  default     = []
+}
+
 variable "writable_secret_arns" {
   description = "Subset of Secrets Manager ARNs the Lambda may write to via PutSecretValue. Today only the awork rotating-tokens secret — the OAuth refresh on every sync writes the rotated tokens back. Keep this list as small as possible; reads are governed separately by `secret_arns`."
   type        = list(string)

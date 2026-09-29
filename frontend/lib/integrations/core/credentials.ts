@@ -1,72 +1,14 @@
-/** Secret loading for the sync layer.
+/** Credential access for adapters, on top of the secret store.
  *
- * Resolution order (per credential):
- *   1. AWS Secrets Manager — if `DANTE_USE_SECRETS_MANAGER=1` is set.
- *   2. Environment variables (`.env` in dev, ECS task env in prod-as-fallback).
+ * Adapters never touch the store directly: they ask for the credential
+ * document of their integration and get back the fields an admin entered
+ * (or, with the env store, the matching `<SLUG>_<FIELD>` variables). The
+ * required-field check produces one clear error naming the store, so a
+ * missing credential is diagnosable from the sync log alone.
  *
- * The Secrets Manager path runs identical code in dev (LocalStack via
- * AWS_ENDPOINT_URL) and prod (real AWS). Bootstrap stays simple: seed
- * LocalStack with `scripts/seed-secrets.ts` from your `.env`, then flip
- * DANTE_USE_SECRETS_MANAGER on and the env vars become unused.
- *
- * awork tokens get rotated on every sync. In env mode they're rewritten
- * to `.env`; in Secrets Manager mode they're PutSecretValue'd in place.
+ * OAuth tokens (awork) are a second document, rotated on every sync.
  */
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { config as loadEnv } from "dotenv";
-import {
-  GetSecretValueCommand,
-  PutSecretValueCommand,
-  ResourceNotFoundException,
-} from "@aws-sdk/client-secrets-manager";
-
-import { secretsManager } from "@/lib/aws/clients";
-
-let envLoaded = false;
-function ensureEnv() {
-  if (envLoaded) return;
-  loadEnv({ path: "../.env" });
-  loadEnv();
-  envLoaded = true;
-}
-
-function useSecretsManager(): boolean {
-  return process.env.DANTE_USE_SECRETS_MANAGER === "1";
-}
-
-/** Secret name convention: `dante/<env>/<key>`. Default env = "local". */
-function secretName(key: string): string {
-  const env = process.env.DANTE_ENV?.trim() || "local";
-  return `dante/${env}/${key}`;
-}
-
-async function readJsonSecret<T>(key: string): Promise<T | null> {
-  try {
-    const res = await secretsManager.send(
-      new GetSecretValueCommand({ SecretId: secretName(key) }),
-    );
-    if (!res.SecretString) return null;
-    return JSON.parse(res.SecretString) as T;
-  } catch (err) {
-    if (err instanceof ResourceNotFoundException) return null;
-    throw err;
-  }
-}
-
-async function writeJsonSecret(key: string, value: unknown): Promise<void> {
-  await secretsManager.send(
-    new PutSecretValueCommand({
-      SecretId: secretName(key),
-      SecretString: JSON.stringify(value),
-    }),
-  );
-}
-
-export type PersonioCredentials = {
-  client_id: string;
-  client_secret: string;
-};
+import { getSecretStore, type SecretDocument } from "./secret-store";
 
 export class CredentialsMissingError extends Error {
   constructor(message: string) {
@@ -75,130 +17,115 @@ export class CredentialsMissingError extends Error {
   }
 }
 
-export async function loadPersonioCredentials(): Promise<PersonioCredentials> {
-  if (useSecretsManager()) {
-    const sm = await readJsonSecret<PersonioCredentials>("personio");
-    if (sm?.client_id && sm?.client_secret) return sm;
+/** Load the credential document of `slug` and check that every key in
+ *  `required` is a non-empty string. Other keys pass through untouched. */
+export async function loadIntegrationCredentials(
+  slug: string,
+  required: readonly string[],
+): Promise<Record<string, string | null>> {
+  const store = getSecretStore();
+  const doc = await store.get(slug, "credentials");
+  if (!doc) {
     throw new CredentialsMissingError(
-      `Personio credentials not found in Secrets Manager at ${secretName("personio")}. ` +
-        `Seed it with: tsx scripts/seed-secrets.ts`,
+      `No credentials stored for integration "${slug}" (secret store: ${store.kind}). ` +
+        hint(store.kind),
     );
   }
-  ensureEnv();
-  const client_id = process.env.PERSONIO_CLIENT_ID;
-  const client_secret = process.env.PERSONIO_CLIENT_SECRET;
-  if (!client_id || !client_secret) {
+  const out: Record<string, string | null> = {};
+  for (const [k, v] of Object.entries(doc)) {
+    out[k] = v === null || v === undefined || v === "" ? null : String(v);
+  }
+  const missing = required.filter((k) => !out[k]);
+  if (missing.length > 0) {
     throw new CredentialsMissingError(
-      "Personio credentials not found. Set PERSONIO_CLIENT_ID and " +
-        "PERSONIO_CLIENT_SECRET in .env, or flip DANTE_USE_SECRETS_MANAGER=1.",
+      `Credentials for integration "${slug}" are missing ${missing.join(", ")} (secret store: ${store.kind}). ` +
+        hint(store.kind),
     );
   }
-  return { client_id, client_secret };
+  return out;
 }
+
+function hint(kind: string): string {
+  switch (kind) {
+    case "env":
+      return "Set the <SLUG>_<FIELD> variables in .env (e.g. PERSONIO_CLIENT_ID), or enable a writable store and enter them under Settings → Integrations.";
+    case "secretsmanager":
+      return "Enter them under Settings → Integrations, or seed the secret with scripts/seed-secrets.ts.";
+    default:
+      return "Enter them under Settings → Integrations.";
+  }
+}
+
+// --- Personio ----------------------------------------------------------------
+
+export type PersonioCredentials = { client_id: string; client_secret: string };
+
+export async function loadPersonioCredentials(): Promise<PersonioCredentials> {
+  const c = await loadIntegrationCredentials("personio", ["client_id", "client_secret"]);
+  return { client_id: c.client_id!, client_secret: c.client_secret! };
+}
+
+// --- awork -------------------------------------------------------------------
 
 export type AworkClientCredentials = {
   client_id: string;
-  client_secret: string | null; // null for Public clients (PKCE only)
+  client_secret: string | null; // null for public clients (PKCE only)
 };
 
 export async function loadAworkClientCredentials(): Promise<AworkClientCredentials> {
-  if (useSecretsManager()) {
-    const sm = await readJsonSecret<AworkClientCredentials>("awork/client");
-    if (sm?.client_id) {
-      return { client_id: sm.client_id, client_secret: sm.client_secret ?? null };
-    }
-    throw new CredentialsMissingError(
-      `awork client credentials not found in Secrets Manager at ${secretName("awork/client")}.`,
-    );
-  }
-  ensureEnv();
-  const client_id = process.env.AWORK_CLIENT_ID;
-  if (!client_id) {
-    throw new CredentialsMissingError(
-      "awork client_id not found. Set AWORK_CLIENT_ID in .env.",
-    );
-  }
-  return {
-    client_id,
-    client_secret: process.env.AWORK_CLIENT_SECRET || null,
-  };
+  const c = await loadIntegrationCredentials("awork", ["client_id"]);
+  return { client_id: c.client_id!, client_secret: c.client_secret ?? null };
 }
 
-/** awork OAuth tokens — refreshed and rewritten on each sync. */
-export type AworkTokens = {
+/** OAuth tokens — refreshed and rewritten on each sync. */
+export type OAuthTokens = {
   access_token: string;
   refresh_token: string;
   expires_at: number; // unix seconds
 };
+export type AworkTokens = OAuthTokens;
 
-export async function loadAworkTokens(): Promise<AworkTokens | null> {
-  if (useSecretsManager()) {
-    const sm = await readJsonSecret<AworkTokens>("awork/tokens");
-    if (!sm) return null;
-    if (!sm.access_token || !sm.refresh_token || !Number.isFinite(sm.expires_at)) {
-      return null;
-    }
-    return sm;
-  }
-  ensureEnv();
-  const access_token = process.env.AWORK_ACCESS_TOKEN;
-  const refresh_token = process.env.AWORK_REFRESH_TOKEN;
-  const expires_at_str = process.env.AWORK_EXPIRES_AT;
-  if (!access_token || !refresh_token || !expires_at_str) return null;
-  const expires_at = Number.parseInt(expires_at_str, 10);
-  if (!Number.isFinite(expires_at)) return null;
+function parseTokens(doc: SecretDocument | null): OAuthTokens | null {
+  if (!doc) return null;
+  const access_token = doc.access_token;
+  const refresh_token = doc.refresh_token;
+  const expires_at = Number(doc.expires_at);
+  if (typeof access_token !== "string" || typeof refresh_token !== "string") return null;
+  if (!access_token || !refresh_token || !Number.isFinite(expires_at)) return null;
   return { access_token, refresh_token, expires_at };
 }
 
-/** Persist rotated awork tokens. Secrets Manager mode updates the secret;
- * env mode rewrites .env (legacy dev flow). */
-export async function storeAworkTokens(t: AworkTokens): Promise<void> {
-  if (useSecretsManager()) {
-    await writeJsonSecret("awork/tokens", t);
-    return;
-  }
-  // Prod guard: writing tokens to disk (the .env fallback) leaks them
-  // into the Lambda container's ephemeral storage, where they outlive
-  // the invocation and may surface in forensic dumps. In prod the only
-  // legitimate token store is Secrets Manager — fail loudly rather than
-  // silently degrading.
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "storeAworkTokens: refusing to write tokens to .env in production. " +
-        "Set DANTE_USE_SECRETS_MANAGER=1 on the Lambda environment.",
-    );
-  }
-  // Prefer the repo-root .env when present (dev layout), otherwise local.
-  const candidates = [path.resolve("../.env"), path.resolve(".env")];
-  let target = candidates[0];
-  for (const c of candidates) {
-    try {
-      await fs.access(c);
-      target = c;
-      break;
-    } catch {
-      /* skip */
-    }
-  }
-  let body = "";
+export async function loadOAuthTokens(slug: string): Promise<OAuthTokens | null> {
+  return parseTokens(await getSecretStore().get(slug, "tokens"));
+}
+
+export async function storeOAuthTokens(slug: string, t: OAuthTokens): Promise<void> {
+  await getSecretStore().put(slug, "tokens", t);
+}
+
+export const loadAworkTokens = (): Promise<AworkTokens | null> => loadOAuthTokens("awork");
+export const storeAworkTokens = (t: AworkTokens): Promise<void> => storeOAuthTokens("awork", t);
+
+// --- Status for the settings UI ---------------------------------------------
+
+export type OAuthStatus =
+  | { state: "missing_client"; reason: string }
+  | { state: "no_tokens" }
+  | { state: "authorized"; expires_at: number; is_expired: boolean };
+
+/** Read-only summary of an OAuth integration's connection. Never throws —
+ *  the settings page needs to render either way. */
+export async function oauthStatus(slug: string, requiredClientFields: readonly string[]): Promise<OAuthStatus> {
   try {
-    body = await fs.readFile(target, "utf-8");
-  } catch {
-    /* new file */
+    await loadIntegrationCredentials(slug, requiredClientFields);
+  } catch (err) {
+    return { state: "missing_client", reason: err instanceof Error ? err.message : String(err) };
   }
-  const lines = body.split("\n");
-  const setKv = (key: string, value: string) => {
-    const idx = lines.findIndex((l) => l.startsWith(`${key}=`));
-    const kv = `${key}=${value}`;
-    if (idx === -1) lines.push(kv);
-    else lines[idx] = kv;
+  const tokens = await loadOAuthTokens(slug);
+  if (!tokens) return { state: "no_tokens" };
+  return {
+    state: "authorized",
+    expires_at: tokens.expires_at,
+    is_expired: Date.now() / 1000 >= tokens.expires_at,
   };
-  setKv("AWORK_ACCESS_TOKEN", t.access_token);
-  setKv("AWORK_REFRESH_TOKEN", t.refresh_token);
-  setKv("AWORK_EXPIRES_AT", String(t.expires_at));
-  await fs.writeFile(target, lines.join("\n"));
-  // Keep process env in sync so the rest of this run uses the new values.
-  process.env.AWORK_ACCESS_TOKEN = t.access_token;
-  process.env.AWORK_REFRESH_TOKEN = t.refresh_token;
-  process.env.AWORK_EXPIRES_AT = String(t.expires_at);
 }

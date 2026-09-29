@@ -16,6 +16,7 @@
 import {
   loadAworkClientCredentials,
   loadAworkTokens,
+  oauthStatus,
   storeAworkTokens,
   type AworkTokens,
   type AworkClientCredentials,
@@ -160,27 +161,6 @@ export async function exchangeAuthorizationCode(opts: {
   });
 }
 
-/** Read-only summary for the settings UI. Never throws — returns a
- * structured "not configured" state instead, since the page needs to
- * render either way. */
-export async function getAworkAuthStatus(): Promise<
-  | { state: "missing_client"; reason: string }
-  | { state: "no_tokens" }
-  | { state: "authorized"; expires_at: number; is_expired: boolean }
-> {
-  try {
-    await loadAworkClientCredentials();
-  } catch (err) {
-    return {
-      state: "missing_client",
-      reason: err instanceof Error ? err.message : String(err),
-    };
-  }
-  const tokens = await loadAworkTokens();
-  if (!tokens) return { state: "no_tokens" };
-  return {
-    state: "authorized",
-    expires_at: tokens.expires_at,
-    is_expired: !isTokenValid(tokens, 0),
-  };
-}
+/** Read-only summary for the settings UI. Generic over OAuth integrations
+ * now — see `oauthStatus` in the core credentials module. */
+export const getAworkAuthStatus = () => oauthStatus("awork", ["client_id"]);

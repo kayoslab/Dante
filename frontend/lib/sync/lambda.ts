@@ -26,6 +26,13 @@ export type SyncEvent = Partial<SyncOptions> & {
   /** Forces `DANTE_USE_SECRETS_MANAGER=1` for this invocation. Useful
    * when re-running an old container with a partial env. */
   use_secrets_manager?: boolean;
+  /** `health_check` runs one integration's connection test instead of a
+   * sync and returns its `HealthCheckResult`. Used by the settings UI's
+   * "Test connection" button, which has to run here because the web
+   * app's task role cannot read static credentials. */
+  mode?: "sync" | "health_check";
+  /** Integration slug for `mode: "health_check"`. */
+  integration?: string;
 };
 
 export type SyncResult = {
@@ -47,6 +54,22 @@ export async function handler(
   }
 
   const request_id = context?.awsRequestId;
+
+  if (event.mode === "health_check") {
+    const slug = event.integration ?? "";
+    logger.info("health_check_start", { request_id, integration: slug });
+    const { runHealthCheck } = await import("@/lib/integrations/core/health");
+    const result = await runHealthCheck(slug);
+    logger.info("health_check_complete", {
+      request_id,
+      integration: slug,
+      ok: result.ok,
+      duration_ms: result.duration_ms,
+    });
+    // Returned as-is; the settings action parses it. Not a SyncResult.
+    return result as unknown as SyncResult;
+  }
+
   let log_lines = 0;
   const opts: SyncOptions = {
     source: event.source,

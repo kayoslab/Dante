@@ -116,6 +116,18 @@ variable "additional_secret_arns_readable" {
   default     = []
 }
 
+variable "additional_secret_arns_describable" {
+  description = "Secrets Manager ARNs the task role may DescribeSecret (metadata only — is a value present, when did it last change) without reading the value. Used by the settings UI to show credential status for secrets the app must never read (e.g. Personio)."
+  type        = list(string)
+  default     = []
+}
+
+variable "secret_arn_patterns_manageable" {
+  description = "Secrets Manager ARN patterns (wildcards allowed) the task role may CREATE and WRITE but not read — the on-demand `dante/<env>/integration/*` containers the settings UI stores credentials into for integrations Terraform does not pre-create."
+  type        = list(string)
+  default     = []
+}
+
 variable "additional_secret_arns_writable" {
   description = "Secrets Manager ARNs the task role can WRITE but not READ. Use for rotating tokens the app updates but doesn't need to load back from Secrets Manager (e.g. awork OAuth tokens stored after the interactive callback). An RCE'd app can overwrite these but cannot exfiltrate them."
   type        = list(string)

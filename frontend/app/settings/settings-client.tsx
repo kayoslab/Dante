@@ -73,15 +73,14 @@ export function SettingsClient() {
             <div className="flex items-center gap-3">
               <Plug className="size-5 text-muted-foreground" />
               <div>
-                <div className="text-sm font-medium">awork integration</div>
+                <div className="text-sm font-medium">Integrations</div>
                 <div className="text-xs text-muted-foreground">
-                  Re-authorize the awork OAuth token when the 30-day refresh
-                  expires.
+                  Connected tools, credentials, authorization status.
                 </div>
               </div>
             </div>
             <Link
-              href="/settings/integrations/awork"
+              href="/settings/integrations"
               className={buttonVariants({ size: "sm", variant: "outline" })}
             >
               Open

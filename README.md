@@ -325,6 +325,14 @@ defaults except the ones CI must supply)
 | `sync_lambda_schedule_expression` | every 6 h | EventBridge cron for the Personio + awork sync. |
 | `domain`, `parent_domain`, `hosted_zone_id`, `github_repository`, `seed_admin_emails`, `sync_lambda_alarm_emails`, `waf_alarm_emails`, `app_image_uri` | *none* | Required; CI passes them from the variables above. |
 
+**Integration credentials** are entered by an admin under Settings →
+Integrations and stored write-only. Where they land is decided per
+deployment: AWS Secrets Manager when `DANTE_USE_SECRETS_MANAGER=1` (the
+AWS stack), an AES-256-GCM encrypted table when `DANTE_SECRET_KEY` is set
+(self-hosted; `openssl rand -base64 32`), otherwise the `<SLUG>_<FIELD>`
+variables in `.env` (local development; read-only from the UI). See
+`.env.example` and `docs/integration-adapters.md`.
+
 **One account-level item no variable can fix:** a fresh AWS account has
 SES in **sandbox**, so Cognito invitation / reset emails only reach
 addresses individually verified as SES identities (or any mailbox on
