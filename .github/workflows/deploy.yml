@@ -97,18 +97,18 @@ jobs:
       # instruction) inside the Node build worker during the emulated arm64
       # `next build`, failing deploys with no code cause. Pinning overrides
       # the runner's QEMU with a stable one.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         with:
           image: tonistiigi/binfmt:qemu-v8.1.5
           platforms: linux/arm64
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         with:
           platforms: linux/arm64
 
       - name: Build + push container
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
