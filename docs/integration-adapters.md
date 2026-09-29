@@ -3,11 +3,12 @@
 Status: agreed design (2026-09-29). Phases 1 (migration 0023), 2 (adapter
 extraction, canonical writes, migration 0024), 3 (secret store,
 write-only credential UI, migration 0025), 4 (integrations, sources &
-rules settings) and 5 (read side on the canonical tables, generic links,
-migration 0026) implemented. The code lives
+rules settings), 5 (read side on the canonical tables, generic links,
+migration 0026) and 6 (template provider, conformance suite, contributor
+guide `docs/integrations.md`) implemented — the plan is complete. The code lives
 under `frontend/lib/integrations/`; `frontend/lib/sync/` keeps only the
 connection helper, the Lambda handler and a re-export of `runSync`.
-Phase 6 pending.
+
 
 Dante pulls people from an HRIS and work from a project / time-tracking
 tool. Today those are Personio and awork, and both are hard-wired: the
@@ -389,7 +390,7 @@ integration that provides the entity's capability.
 | 3 | SecretStore + write-only credential UI + terraform grants (**done**, 0025) | Feature | Medium: IAM change on web task role |
 | 4 | Integrations / bindings / rules settings pages + health check + audit (**done**) | Feature | Low |
 | 5 | Read side on canonical tables, generic link card, collapsed routes/actions (**done**, 0026) | Refactor | Medium: verified by a 75-call read-side harness diffed before/after |
-| 6 | Guard, conformance suite, template, contributor docs | Docs / tooling | Low |
+| 6 | Guard, conformance suite (`core/conformance.ts` + `core/canonical-schemas.ts`), template (`providers/_template`), contributor docs (`docs/integrations.md`) (**done**) | Docs / tooling | Low |
 
 Phases 1 and 2 ship together as one release with no visible change. 3 and 4
 are independent after that. 5 can go one report at a time. 6 lands with or

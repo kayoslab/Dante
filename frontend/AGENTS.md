@@ -190,7 +190,7 @@ directly when they bypass MFA.
 
 ## Sync layer
 
-- **Adapters, not per-provider pipelines.** Each external tool is a `ProviderAdapter` under `lib/integrations/providers/<slug>/` that returns canonical records; `lib/integrations/core/runner.ts` decides what runs from the admin-configured `integration_binding` rows and writes everything through `core/upsert.ts`. See `docs/integration-adapters.md` before touching the sync.
+- **Adapters, not per-provider pipelines.** Each external tool is a `ProviderAdapter` under `lib/integrations/providers/<slug>/` that returns canonical records; `lib/integrations/core/runner.ts` decides what runs from the admin-configured `integration_binding` rows and writes everything through `core/upsert.ts`. See `docs/integration-adapters.md` before touching the sync, and `docs/integrations.md` to add a provider (copy `providers/_template`, register, run the conformance test).
 
 - **Typed Drizzle writes.** Sync uses `db.insert(table).values(...).onConflictDoUpdate({ target, set })` so column renames break at compile time. Wrap the standalone `Client` with `syncDrizzle(conn)` at the call site.
 - **`excludedSet([...cols])`** in `lib/integrations/core/excluded-set.ts` builds the `set` map for ON CONFLICT updates — derived from a single column list so a schema change needs one edit.

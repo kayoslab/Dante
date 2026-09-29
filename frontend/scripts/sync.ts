@@ -4,7 +4,7 @@
  * Usage:
  *   bun run scripts/sync.ts                  # all sources, full window
  *   bun run scripts/sync.ts --source personio
- *   bun run scripts/sync.ts --source awork --skip-awork-maintenance
+ *   bun run scripts/sync.ts --source awork --skip-maintenance
  *   bun run scripts/sync.ts --absence-days 90 --skip-attendances
  *
  * Same flag surface as the Python CLI so existing muscle memory + cron
@@ -25,10 +25,10 @@ function parseArgs(argv: string[]): SyncOptions {
       case "--source":
       case "-s": {
         const v = next();
-        if (v !== "all" && v !== "personio" && v !== "awork") {
-          throw new Error(`--source must be all|personio|awork (got ${v})`);
+        if (v !== "all" && !/^[a-z][a-z0-9_-]*(,[a-z][a-z0-9_-]*)*$/.test(v)) {
+          throw new Error(`--source must be "all" or integration slug(s), comma-separated (got ${v})`);
         }
-        opts.source = v;
+        opts.source = v === "all" ? "all" : v.split(",");
         break;
       }
       case "--absence-days":
@@ -52,14 +52,15 @@ function parseArgs(argv: string[]): SyncOptions {
       case "--skip-time-entries":
         opts.skip_time_entries = true;
         break;
+      case "--skip-maintenance":
       case "--skip-awork-maintenance":
-        opts.skip_awork_maintenance = true;
+        opts.skip_maintenance = true;
         break;
       case "--help":
       case "-h":
         console.log(`Usage: bun run scripts/sync.ts [options]
 
-  --source, -s [all|personio|awork]   (default: all)
+  --source, -s all|<slug>[,<slug>]    integration slug(s) from Settings (default: all)
   --absence-days N                    (default: 365)
   --attendance-days N                 (default: 365)
   --time-entry-days N                 (default: 365)
@@ -67,7 +68,7 @@ function parseArgs(argv: string[]): SyncOptions {
   --skip-attendances
   --skip-compensations
   --skip-time-entries
-  --skip-awork-maintenance`);
+  --skip-maintenance                  (skip import policy, refresh and provider hooks)`);
         process.exit(0);
         break;
       default:

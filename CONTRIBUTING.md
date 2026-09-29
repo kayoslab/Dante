@@ -54,6 +54,15 @@ lint noise:
 Keep those intact. If a change genuinely needs to move one of those
 boundaries, say so in the PR description and explain why.
 
+## Adding an integration
+
+Personio and awork are adapters, not special cases. To connect another HR
+or time-tracking tool, copy `frontend/lib/integrations/providers/_template`,
+implement the pull methods for the capabilities the tool provides, register
+it, and run the conformance test — see
+[`docs/integrations.md`](docs/integrations.md). Adapters stay read-only
+against the external tool; the guard in `npm run check` enforces it.
+
 ## Forks never deploy
 
 The deploy workflow is an explicit opt-in: every job is skipped unless

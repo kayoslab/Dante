@@ -43,8 +43,9 @@ them. Dante shows one complete, production-grade way to close that gap:
 
 The concrete integrations (Personio, awork, Cognito, the German
 working-calendar rules) reflect the environment it was first built for. If yours
-differs, the intended path is to fork this repository, swap the adapter
-that doesn't match, and keep the rest. The repository is MIT-licensed
+differs, the intended path is to fork this repository, add an adapter for
+your tool (see [`docs/integrations.md`](docs/integrations.md) — one folder,
+one test, no changes to the core), bind it in Settings, and keep the rest. The repository is MIT-licensed
 precisely so that you can. See [`CONTRIBUTING.md`](CONTRIBUTING.md) if
 you'd like to send improvements back.
 
