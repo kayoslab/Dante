@@ -28,8 +28,18 @@ import { getValidAccessToken } from "./auth";
 import { aworkClient, type AworkClient } from "./client";
 import { aworkUserStatus, type AworkCustomFieldValue, type AworkProject } from "./schemas";
 
-const AworkConfigSchema = z.object({}).passthrough();
-type AworkConfig = z.infer<typeof AworkConfigSchema>;
+export const AworkConfigSchema = z
+  .object({
+    oauth_scope: z
+      .string()
+      .min(1)
+      .describe(
+        "OAuth scope requested at authorization. awork's default for a read-only integration is offline_access.",
+      )
+      .default("offline_access"),
+  })
+  .passthrough();
+export type AworkConfig = z.infer<typeof AworkConfigSchema>;
 
 const TOKEN_URL = "https://api.awork.com/api/v1/accounts/token";
 const AUTHORIZE_URL = "https://api.awork.com/api/v1/accounts/authorize";
@@ -139,13 +149,17 @@ export const aworkAdapter: ProviderAdapter<AworkClient, AworkConfig> = {
     ],
     authorizeUrl: AUTHORIZE_URL,
     tokenUrl: TOKEN_URL,
-    scope: "offline_access",
+    scope: AworkConfigSchema.parse({}).oauth_scope,
   },
   configSchema: AworkConfigSchema,
   capabilities: ["external_contributors", "companies", "projects", "time_entries", "planned_bookings"],
   writesAllowedIn: ["auth.ts"],
 
-  async createClient() {
+  async createClient({ config }) {
+    // The OAuth scope is read at authorization time by the /auth/awork/start
+    // route (from the integration row); the data client needs nothing from
+    // config today.
+    void config;
     return aworkClient;
   },
 

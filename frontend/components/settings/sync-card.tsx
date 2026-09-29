@@ -13,13 +13,9 @@ import {
   type RunSyncSuccess,
 } from "@/lib/actions/sync";
 
-type Source = "all" | "personio" | "awork";
+type Source = string;
 
-const SOURCE_LABEL: Record<Source, string> = {
-  all: "Sync all",
-  personio: "Personio only",
-  awork: "awork only",
-};
+export type SyncSource = { slug: string; label: string };
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -30,7 +26,10 @@ function formatDuration(ms: number): string {
   return `${m}m ${rs}s`;
 }
 
-export function SyncCard() {
+export function SyncCard({ sources }: { sources: SyncSource[] }) {
+  const SOURCE_LABEL: Record<Source, string> = { all: "Sync all" };
+  for (const s of sources) SOURCE_LABEL[s.slug] = `${s.label} only`;
+  const labelOf = (s: Source) => SOURCE_LABEL[s] ?? s;
   const [output, setOutput] = useState<{
     source: Source;
     duration_ms: number;
@@ -48,7 +47,7 @@ export function SyncCard() {
     onSuccess: (data) => {
       setOutput(data);
       toast.success(
-        `${SOURCE_LABEL[data.source]} finished in ${formatDuration(data.duration_ms)}`,
+        `${labelOf(data.source)} finished in ${formatDuration(data.duration_ms)}`,
       );
     },
     onError: (e) => {
@@ -75,7 +74,7 @@ export function SyncCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap gap-2">
-          {(["all", "personio", "awork"] as const).map((source) => {
+          {["all", ...sources.map((s) => s.slug)].map((source) => {
             const thisIsRunning = runningSource === source;
             const otherIsRunning = isRunning && !thisIsRunning;
             return (
@@ -91,7 +90,7 @@ export function SyncCard() {
                   <RefreshCwIcon className="size-4" />
                 )}
                 <span className={otherIsRunning ? "opacity-60" : ""}>
-                  {SOURCE_LABEL[source]}
+                  {labelOf(source)}
                 </span>
               </Button>
             );
@@ -100,7 +99,7 @@ export function SyncCard() {
 
         {isRunning && runningSource && (
           <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-            Running {SOURCE_LABEL[runningSource]}… this can take a couple
+            Running {labelOf(runningSource)}… this can take a couple
             minutes for a full sync. The window stays open; output appears
             below when finished.
           </div>
@@ -110,7 +109,7 @@ export function SyncCard() {
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>
-                Last run: {SOURCE_LABEL[output.source]}
+                Last run: {labelOf(output.source)}
                 {output.duration_ms > 0 &&
                   ` · ${formatDuration(output.duration_ms)}`}
               </span>

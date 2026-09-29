@@ -3,6 +3,7 @@ import { forbidden } from "next/navigation";
 
 import { SyncCard } from "@/components/settings/sync-card";
 import { hasRole, requireSession } from "@/lib/auth/session";
+import { listIntegrations } from "@/lib/db/queries/integration";
 
 export const metadata = { title: "Run sync — Dante" };
 
@@ -13,6 +14,9 @@ export const dynamic = "force-dynamic";
 export default async function SyncPage() {
   const ctx = await requireSession();
   if (!hasRole(ctx, "admin")) forbidden();
+  const sources = (await listIntegrations())
+    .filter((i) => i.enabled)
+    .map((i) => ({ slug: i.slug, label: i.display_name }));
 
   return (
     <div className="space-y-6">
@@ -28,7 +32,7 @@ export default async function SyncPage() {
         </h1>
       </div>
 
-      <SyncCard />
+      <SyncCard sources={sources} />
     </div>
   );
 }

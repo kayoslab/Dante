@@ -17,6 +17,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 import { audit } from "@/lib/auth/audit";
 import { ForbiddenError, requireSession } from "@/lib/auth/session";
+import { getIntegration } from "@/lib/db/queries/integration";
 import { buildAuthorizeUrl } from "@/lib/integrations/providers/awork/auth";
 
 export const COOKIE_NAME = "awork_oauth_state";
@@ -62,10 +63,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const publicOrigin = process.env.NEXTAUTH_URL ?? req.nextUrl.origin;
   const redirect_uri = new URL("/auth/awork/callback", publicOrigin).toString();
 
+  const integration = await getIntegration("awork");
+  const scope = integration?.config.oauth_scope;
   const authorizeUrl = await buildAuthorizeUrl({
     redirect_uri,
     code_challenge: challenge,
     state,
+    scope: typeof scope === "string" ? scope : null,
   });
 
   await audit(ctx, {

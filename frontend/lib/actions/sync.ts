@@ -34,11 +34,13 @@ import {
 } from "./_action-helpers";
 
 const RunSyncSchema = z.object({
-  source: z.enum(["all", "personio", "awork"]),
+  /** "all" or the slug of a configured integration (the runner ignores
+   *  anything that isn't enabled). */
+  source: z.union([z.literal("all"), z.string().regex(/^[a-z][a-z0-9_-]*$/)]),
 });
 
 export type RunSyncSuccess = {
-  source: "all" | "personio" | "awork";
+  source: string;
   duration_ms: number;
   log: string;
 };

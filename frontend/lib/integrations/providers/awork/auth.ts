@@ -25,11 +25,11 @@ import {
 const TOKEN_URL = "https://api.awork.com/api/v1/accounts/token";
 const AUTHORIZE_URL = "https://api.awork.com/api/v1/accounts/authorize";
 
-/** OAuth scope. awork's default for our integration is read-only on
- * companies, users, projects, and time entries. Override via env if the
- * awork app registration uses a different scope string. */
-function aworkOauthScope(): string {
-  return process.env.AWORK_OAUTH_SCOPE?.trim() || "offline_access";
+/** OAuth scope. Set per integration in Settings (`oauth_scope` in the
+ * awork integration's config); `AWORK_OAUTH_SCOPE` in the env remains an
+ * override for deployments that predate the settings UI. */
+function aworkOauthScope(configured?: string | null): string {
+  return process.env.AWORK_OAUTH_SCOPE?.trim() || configured?.trim() || "offline_access";
 }
 
 export class AworkNotAuthorizedError extends Error {
@@ -129,6 +129,8 @@ export async function buildAuthorizeUrl(opts: {
   redirect_uri: string;
   code_challenge: string;
   state: string;
+  /** `oauth_scope` from the integration's config, if set. */
+  scope?: string | null;
 }): Promise<string> {
   const creds = await loadAworkClientCredentials();
   const params = new URLSearchParams({
@@ -138,7 +140,7 @@ export async function buildAuthorizeUrl(opts: {
     code_challenge: opts.code_challenge,
     code_challenge_method: "S256",
     state: opts.state,
-    scope: aworkOauthScope(),
+    scope: aworkOauthScope(opts.scope),
   });
   return `${AUTHORIZE_URL}?${params.toString()}`;
 }

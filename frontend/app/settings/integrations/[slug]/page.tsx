@@ -6,10 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CredentialForm } from "@/components/settings/credential-form";
+import { EnableSwitch } from "@/components/settings/integration-controls";
+import { IntegrationSettingsForm } from "@/components/settings/integration-settings-form";
 import { TestConnectionButton } from "@/components/settings/test-connection-button";
 import { audit } from "@/lib/auth/audit";
 import { hasRole, requireSession } from "@/lib/auth/session";
-import { getIntegration } from "@/lib/db/queries/integration";
+import { getIntegration, listBindings } from "@/lib/db/queries/integration";
+import { CAPABILITY_LABELS } from "@/lib/integrations/core/capabilities";
+import { describeConfigSchema } from "@/lib/integrations/core/config-form";
 import { oauthStatus } from "@/lib/integrations/core/credentials";
 import { getAdapter } from "@/lib/integrations/core/registry";
 import { getSecretStore } from "@/lib/integrations/core/secret-store";
@@ -49,6 +53,8 @@ export default async function IntegrationPage({
   await audit(ctx, { action: "view_integration", target_type: "integration", target_id: slug });
 
   const store = getSecretStore();
+  const configFields = describeConfigSchema(adapter.configSchema);
+  const bindings = (await listBindings()).filter((b) => b.integration_slug === slug);
   const isOAuth = adapter.auth.kind === "oauth2_pkce";
   const oauth = isOAuth
     ? await oauthStatus(
@@ -106,10 +112,8 @@ export default async function IntegrationPage({
           <CardTitle>Status</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={row.enabled ? "secondary" : "outline"}>
-              {row.enabled ? "Enabled" : "Disabled"}
-            </Badge>
+          <div className="flex flex-wrap items-center gap-3">
+            <EnableSwitch slug={slug} enabled={row.enabled} />
             <CredentialStateBadge state={row.credential_state} />
             {oauth && (
               <Badge
@@ -158,6 +162,44 @@ export default async function IntegrationPage({
             )}
           </dl>
           <TestConnectionButton slug={slug} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Settings</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <IntegrationSettingsForm
+            slug={slug}
+            displayName={row.display_name}
+            fields={configFields}
+            config={row.config}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Provides</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <ul className="grid gap-1 sm:grid-cols-2">
+            {adapter.capabilities.map((c) => {
+              const b = bindings.find((x) => x.capability === c);
+              return (
+                <li key={c} className="flex items-center justify-between rounded border px-2 py-1">
+                  <span>{CAPABILITY_LABELS[c].label}</span>
+                  <Badge variant={b ? "secondary" : "outline"}>
+                    {b ? (b.priority === 0 ? "primary" : `priority ${b.priority + 1}`) : "not bound"}
+                  </Badge>
+                </li>
+              );
+            })}
+          </ul>
+          <Link href="/settings/integrations/bindings" className="text-xs underline">
+            Edit sources &amp; rules
+          </Link>
         </CardContent>
       </Card>
 

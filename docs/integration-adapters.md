@@ -1,11 +1,12 @@
 # Integration adapters — design and build plan
 
 Status: agreed design (2026-09-29). Phases 1 (migration 0023), 2 (adapter
-extraction, canonical writes, migration 0024) and 3 (secret store,
-write-only credential UI, migration 0025) implemented. The code lives
+extraction, canonical writes, migration 0024), 3 (secret store,
+write-only credential UI, migration 0025) and 4 (integrations, sources &
+rules settings) implemented. The code lives
 under `frontend/lib/integrations/`; `frontend/lib/sync/` keeps only the
 connection helper, the Lambda handler and a re-export of `runSync`.
-Phases 4-6 pending.
+Phases 5-6 pending.
 
 Dante pulls people from an HRIS and work from a project / time-tracking
 tool. Today those are Personio and awork, and both are hard-wired: the
@@ -313,7 +314,14 @@ OAuth provider gets refresh + re-authorise for free.
 - Capabilities this integration provides, each with "is primary / priority"
   as shown in the bindings.
 
-`/settings/integrations/bindings` (the logical connection):
+`/settings/integrations/bindings` (the logical connection; shipped as
+"Sources & rules"). Rule shapes live in `lib/integrations/core/rules.ts`
+(`RULE_CATALOG`: zod schema + label + fallback per key); the config form
+is rendered from the adapter's `configSchema` by
+`lib/integrations/core/config-form.ts` (string / number / boolean / enum,
+anything else as JSON). Bindings are replaced per capability in one
+transaction; every write is audited (`binding_changed`, `rule_changed`,
+`integration_added` / `_updated` / `_enabled` / `_disabled`):
 
 - One row per capability: source integration(s) in priority order.
 - Reconciliation rules per capability, e.g. `time_entries.overlap_policy =
@@ -360,7 +368,7 @@ All writes are server actions gated on `admin`, audited with
 | 1 | Canonical data model + migrations + backfills + mirror triggers (**done**, 0023) | Behaviour-neutral | High: employee identity change; do on a DB snapshot first |
 | 2 | Adapter extraction (Personio, awork) + core runner + canonical writes + compat views (**done**, 0024) | Behaviour-neutral | High: sync parity; verified by diffing every report-relevant relation across old sync → migration → new sync |
 | 3 | SecretStore + write-only credential UI + terraform grants (**done**, 0025) | Feature | Medium: IAM change on web task role |
-| 4 | Integrations / bindings / rules settings pages + health check + audit | Feature | Low |
+| 4 | Integrations / bindings / rules settings pages + health check + audit (**done**) | Feature | Low |
 | 5 | Read side on canonical tables, generic link card, collapsed routes/actions | Refactor, report by report | Medium: each report has a parity test |
 | 6 | Guard, conformance suite, template, contributor docs | Docs / tooling | Low |
 

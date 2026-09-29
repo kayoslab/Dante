@@ -36,6 +36,27 @@ export const CAPABILITY_ORDER = [
 
 export type Capability = (typeof CAPABILITY_ORDER)[number];
 
+/** Labels for the settings UI. */
+export const CAPABILITY_LABELS: Record<Capability, { label: string; description: string }> = {
+  people: {
+    label: "Employees",
+    description: "The HRIS view of the company's people. The primary source creates employees.",
+  },
+  external_contributors: {
+    label: "External contributors",
+    description: "Persons in a delivery tool who may be linked to employees or freelancers.",
+  },
+  companies: { label: "Companies", description: "Customer-side organisations." },
+  projects: {
+    label: "Projects",
+    description: "Projects as the tool sees them — delivery projects and time-attribution lists alike.",
+  },
+  absences: { label: "Absences", description: "Time-off records." },
+  compensations: { label: "Compensations", description: "Salary and compensation events." },
+  time_entries: { label: "Tracked time", description: "Attendance periods and time entries." },
+  planned_bookings: { label: "Planned bookings", description: "Forward-looking planner entries." },
+};
+
 export const CAPABILITIES: ReadonlySet<Capability> = new Set(CAPABILITY_ORDER);
 
 export function isCapability(value: unknown): value is Capability {

@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { forbidden } from "next/navigation";
 
-import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AddIntegrationDialog } from "@/components/settings/add-integration-dialog";
+import { EnableSwitch } from "@/components/settings/integration-controls";
 import { audit } from "@/lib/auth/audit";
 import { hasRole, requireSession } from "@/lib/auth/session";
 import { listIntegrations } from "@/lib/db/queries/integration";
-import { getAdapter } from "@/lib/integrations/core/registry";
+import { getAdapter, PROVIDERS } from "@/lib/integrations/core/registry";
 import { getSecretStore } from "@/lib/integrations/core/secret-store";
 
 import { CredentialStateBadge, formatWhen } from "./_status";
@@ -24,6 +25,11 @@ export default async function IntegrationsPage() {
 
   const rows = await listIntegrations();
   const store = getSecretStore();
+  const providers = PROVIDERS.map((p) => ({
+    slug: p.slug,
+    displayName: p.displayName,
+    capabilities: [...p.capabilities],
+  }));
 
   return (
     <div className="space-y-6">
@@ -36,6 +42,19 @@ export default async function IntegrationsPage() {
           The external tools Dante pulls from. Credentials are stored write-only in the{" "}
           <span className="font-medium">{store.kind}</span> secret store — {store.describe()}
         </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Link
+          href="/settings/integrations/bindings"
+          className={buttonVariants({ size: "sm", variant: "outline" })}
+        >
+          Sources &amp; rules
+        </Link>
+        <Link href="/settings/sync" className={buttonVariants({ size: "sm", variant: "outline" })}>
+          Run sync
+        </Link>
+        <AddIntegrationDialog providers={providers} />
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -52,9 +71,7 @@ export default async function IntegrationsPage() {
                       {adapter?.capabilities.join(", ")}
                     </div>
                   </div>
-                  <Badge variant={row.enabled ? "secondary" : "outline"}>
-                    {row.enabled ? "Enabled" : "Disabled"}
-                  </Badge>
+                  <EnableSwitch slug={row.slug} enabled={row.enabled} />
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <CredentialStateBadge state={row.credential_state} />
