@@ -10,3 +10,4 @@ export * from "./awork";
 export * from "./billing";
 export * from "./auth";
 export * from "./calendar";
+export * from "./integration";

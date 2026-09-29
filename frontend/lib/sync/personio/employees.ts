@@ -99,6 +99,13 @@ export async function syncEmployees(
       }
     }
 
+    // employee_id is a Dante-owned identity since migration 0023, but this
+    // sync still inserts Personio's ids explicitly. Explicit inserts don't
+    // advance the sequence, so push it past the highest id we just wrote —
+    // otherwise a later generated id (a non-Personio HRIS, phase 2) could
+    // collide with a Personio id that arrived after the migration.
+    await bumpEmployeeIdSequence(conn);
+
     await db
       .update(syncRun)
       .set({ completed_at: new Date(), employees_seen: employees.length, status: "completed" })
@@ -116,6 +123,20 @@ export async function syncEmployees(
       .where(sql`${syncRun.sync_run_id} = ${sync_run_id}`);
     throw err;
   }
+}
+
+/** Advance the employee_current.employee_id identity sequence past the
+ * highest id currently in the table. Idempotent; safe to call after any
+ * batch of explicit-id inserts. `false` = "not yet called", so the next
+ * generated id is exactly max + 1. */
+export async function bumpEmployeeIdSequence(conn: Client): Promise<void> {
+  await conn.query(`
+    SELECT setval(
+      pg_get_serial_sequence('employee_current', 'employee_id'),
+      COALESCE((SELECT MAX(employee_id) FROM employee_current), 0) + 1,
+      false
+    )
+  `);
 }
 
 function buildEmployeeCurrentInsert(

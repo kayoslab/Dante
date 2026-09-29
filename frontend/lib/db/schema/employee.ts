@@ -12,10 +12,17 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 
-// Latest known state per employee. employee_id is Personio's own id (not
-// generated). Upserted by sync.py on every run.
+// Latest known state per employee.
+//
+// `employee_id` is a Dante-owned identity since migration 0023. Every
+// existing value equals the Personio person id it was seeded from (the
+// sequence starts above the historical maximum), and the Personio link is
+// recorded in `external_link ('personio','person')`. A future non-Personio
+// HRIS mints fresh ids from the sequence. The Personio sync still inserts
+// explicit ids for now and bumps the sequence afterwards
+// (`bumpEmployeeIdSequence`) so generated ids can never collide.
 export const employeeCurrent = pgTable("employee_current", {
-  employee_id: integer().primaryKey(),
+  employee_id: integer().generatedByDefaultAsIdentity().primaryKey(),
   first_name: text(),
   last_name: text(),
   email: text(),
