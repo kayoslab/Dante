@@ -24,7 +24,7 @@ import { syncDrizzle } from "@/lib/sync/db";
 
 import { insertLink } from "./links";
 
-/** HTML → plain text. Same passes as lib/actions/awork-import.ts::stripHtml. */
+/** HTML → plain text (source project descriptions → Dante notes). */
 export function stripHtml(html: string | null | undefined): string | null {
   if (!html) return null;
   let cleaned = html.replace(/<\/(p|li|h[1-6]|div|br\/?)\s*>/gi, "\n");

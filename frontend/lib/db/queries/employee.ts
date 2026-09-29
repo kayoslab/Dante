@@ -3,8 +3,6 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "../client";
 import { roleTierFromAlias } from "../_sql-fragments";
 import {
-  aworkUser,
-  externalLink,
   employeeCurrent,
 } from "../schema";
 
@@ -212,56 +210,6 @@ export async function getEmployeeAllocations(
   }));
 }
 
-export type EmployeeAworkLinkRow = {
-  awork_user_id: unknown;
-  first_name: unknown;
-  last_name: unknown;
-  email: unknown;
-  n_time_entries: number;
-  mapped_to_employee_id: number;
-  mapped_to_employee_name: null;
-  position: null;
-  title: null;
-  is_archived: null;
-  is_deactivated: null;
-  is_external: null;
-};
-
-export async function getEmployeeAworkLinks(
-  employee_id: number,
-): Promise<EmployeeAworkLinkRow[]> {
-  const r = await db.execute(sql`
-    SELECT au.awork_user_id, au.first_name, au.last_name, au.email,
-           COALESCE(t.n_entries, 0)::int AS n_entries
-    FROM awork_user_link link
-    JOIN awork_user au ON au.awork_user_id = link.awork_user_id
-    LEFT JOIN (
-      SELECT awork_user_id, COUNT(*) AS n_entries
-      FROM awork_time_entry GROUP BY awork_user_id
-    ) t ON t.awork_user_id = link.awork_user_id
-    WHERE link.employee_id = ${employee_id}
-    ORDER BY au.last_name
-  `);
-
-  return (r.rows as Array<Record<string, unknown>>).map((row) => ({
-    awork_user_id: row.awork_user_id,
-    first_name: row.first_name,
-    last_name: row.last_name,
-    email: row.email,
-    n_time_entries: Number(row.n_entries ?? 0),
-    mapped_to_employee_id: employee_id,
-    mapped_to_employee_name: null,
-    position: null,
-    title: null,
-    is_archived: null,
-    is_deactivated: null,
-    is_external: null,
-  }));
-}
-
-// ----------------------------------------------------------------------------
-// awork_user_link write-side helpers.
-// ----------------------------------------------------------------------------
 
 export async function employeeExists(employee_id: number): Promise<boolean> {
   const rows = await db
@@ -269,72 +217,4 @@ export async function employeeExists(employee_id: number): Promise<boolean> {
     .from(employeeCurrent)
     .where(eq(employeeCurrent.employee_id, employee_id));
   return rows.length > 0;
-}
-
-/** Look up an awork user's display name parts. `null` when the
- * upstream awork user row does not exist. */
-export async function getAworkUserName(
-  awork_user_id: string,
-): Promise<{ first_name: string | null; last_name: string | null } | null> {
-  const [row] = await db
-    .select({
-      first_name: aworkUser.first_name,
-      last_name: aworkUser.last_name,
-    })
-    .from(aworkUser)
-    .where(eq(aworkUser.awork_user_id, awork_user_id));
-  return row ?? null;
-}
-
-/** Is this awork user already linked? Returns the linked
- * `employee_id` or `null`. */
-export async function getAworkUserLinkEmployeeId(
-  awork_user_id: string,
-): Promise<number | null> {
-  const [row] = await db
-    .select({ employee_id: externalLink.dante_id })
-    .from(externalLink)
-    .where(
-      and(
-        eq(externalLink.integration_slug, "awork"),
-        eq(externalLink.entity_type, "person"),
-        eq(externalLink.external_id, awork_user_id),
-        eq(externalLink.dante_type, "employee"),
-      ),
-    );
-  return row?.employee_id ?? null;
-}
-
-export async function insertAworkUserLink(input: {
-  awork_user_id: string;
-  employee_id: number;
-}): Promise<void> {
-  await db.insert(externalLink).values({
-    integration_slug: "awork",
-    entity_type: "person",
-    external_id: input.awork_user_id,
-    dante_type: "employee",
-    dante_id: input.employee_id,
-    origin: "manual",
-    mapped_at: new Date(),
-  });
-}
-
-export async function deleteAworkUserLink(
-  employee_id: number,
-  awork_user_id: string,
-): Promise<number> {
-  const rows = await db
-    .delete(externalLink)
-    .where(
-      and(
-        eq(externalLink.integration_slug, "awork"),
-        eq(externalLink.entity_type, "person"),
-        eq(externalLink.external_id, awork_user_id),
-        eq(externalLink.dante_type, "employee"),
-        eq(externalLink.dante_id, employee_id),
-      ),
-    )
-    .returning({ id: externalLink.external_id });
-  return rows.length;
 }

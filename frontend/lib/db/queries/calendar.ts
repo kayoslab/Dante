@@ -3,8 +3,8 @@
  *
  *   1. `listCalendarEmployees`  — who's visible on the grid
  *   2. `listCalendarAssignments` — day-expanded manual assignments
- *   3. `listCalendarTrackedTime` — Personio + awork actuals
- *   4. `listCalendarPlannedBookings` — awork planner per-day breakdown
+ *   3. `listCalendarTrackedTime` — actuals from every time-entry source
+ *   4. `listCalendarPlannedBookings` — planner per-day breakdown
  *   5. `listCalendarAbsences` — vacation / sick / etc. day-expanded
  *
  * Per-role field stripping (daily_rate, hire_date, role_tier, the
@@ -148,78 +148,59 @@ export type CalendarTrackedRow = {
   work_date: string;
   project_name: string;
   minutes: number;
-  source: "personio" | "awork";
+  /** The integration the time came from (its slug). */
+  source: string;
+  /** True when the source is the primary `people` integration — the HRIS
+   *  whose attendance is the calendar's corner number. */
+  is_attendance: boolean;
   dante_project_id: number | null;
-  awork_project_id: string | null;
+  external_project_id: string | null;
 };
 
-/** Per-day tracked time, union of Personio attendance + awork time
- * entries. Awork rows carry both their native `awork_project_id` and
- * the linked `dante_project_id` (when mapped) so the per-cell load math
- * in the route can collapse manual + tracked into a single project key.
+/** Per-day tracked time from every integration bound to `time_entries`.
+ * Rows carry both the source's own project id and the linked
+ * `dante_project_id` (when mapped) so the per-cell load math in the route
+ * can collapse manual + tracked into a single project key.
  *
- * NOTE: deliberately NOT day-level-reconciled against awork (unlike the
- * tracked-hours/forecast reports). The calendar's Personio corner number is
- * a standalone signal — it should always show the raw Personio-tracked hours
- * so a manager can see whether someone logged time in Personio *in addition*
- * to awork (an overtime / double-tracking check). Personio only feeds the
- * cell LOAD as a past-day fallback when the cell has NO awork time at all
- * (see lib/api/_calendar-load.ts), so there is no double-count to
- * reconcile here. */
+ * `is_attendance` marks the HRIS (primary `people` source): its hours are
+ * the calendar's corner number, a standalone signal that always shows the
+ * raw attendance so a manager can see whether someone logged time there
+ * *in addition* to the delivery tool (an overtime / double-tracking
+ * check). Attendance only feeds the cell LOAD as a past-day fallback when
+ * the cell has NO delivery-tool time at all (see lib/api/_calendar-load.ts),
+ * so this query deliberately does NOT reconcile overlapping days. */
 export async function listCalendarTrackedTime(opts: {
   start: string;
   end: string;
 }): Promise<CalendarTrackedRow[]> {
   const r = await db.execute(sql`
-    WITH personio AS (
-      SELECT a.employee_id, a.work_date,
-             COALESCE(pp.name, 'Untagged') AS project_name,
-             SUM(a.duration_minutes) AS minutes,
-             'personio' AS source
-      FROM attendance a
-      LEFT JOIN personio_project pp ON pp.personio_project_id = a.project_id
-      WHERE a.work_date BETWEEN ${opts.start}::date AND ${opts.end}::date
-      GROUP BY a.employee_id, a.work_date, pp.name
-    ),
-    awork AS (
-      SELECT ul.employee_id, t.work_date,
-             COALESCE(ap.name, 'Untagged') AS project_name,
-             -- Dante project_id when the awork project is mapped to a
-             -- Dante project (used to merge with manual assignment
-             -- allocations at the load-calculation step). NULL when
-             -- the awork project isn't linked.
-             apl.project_id AS dante_project_id,
-             t.awork_project_id,
-             SUM(t.duration_minutes) AS minutes,
-             'awork' AS source
-      FROM awork_time_entry t
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      LEFT JOIN awork_project ap ON ap.awork_project_id = t.awork_project_id
-      LEFT JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-      WHERE t.work_date BETWEEN ${opts.start}::date AND ${opts.end}::date
-      GROUP BY ul.employee_id, t.work_date, ap.name, apl.project_id, t.awork_project_id
+    WITH hris AS (
+      SELECT integration_slug FROM integration_binding
+      WHERE capability = 'people' AND priority = 0 AND enabled
     )
-    SELECT employee_id, work_date, project_name, minutes, source,
-           dante_project_id, awork_project_id
-    FROM (
-      SELECT employee_id, work_date, project_name, minutes, source,
-             NULL::integer AS dante_project_id, NULL::text AS awork_project_id
-      FROM personio
-      UNION ALL
-      SELECT employee_id, work_date, project_name, minutes, source,
-             dante_project_id, awork_project_id
-      FROM awork
-    ) u
-    ORDER BY employee_id, work_date
+    SELECT r.employee_id, r.work_date,
+           COALESCE(r.external_project_name, 'Untagged') AS project_name,
+           SUM(r.duration_minutes) AS minutes,
+           r.integration_slug AS source,
+           (r.integration_slug IN (SELECT integration_slug FROM hris)) AS is_attendance,
+           r.project_id AS dante_project_id,
+           r.external_project_id
+    FROM time_entry_resolved r
+    WHERE r.employee_id IS NOT NULL
+      AND r.work_date BETWEEN ${opts.start}::date AND ${opts.end}::date
+    GROUP BY r.employee_id, r.work_date, r.external_project_name, r.integration_slug,
+             r.project_id, r.external_project_id
+    ORDER BY r.employee_id, r.work_date
   `);
   return (r.rows as Array<Record<string, unknown>>).map((row) => ({
     employee_id: (row.employee_id as number | null) ?? null,
     work_date: row.work_date as string,
     project_name: row.project_name as string,
     minutes: Number(row.minutes ?? 0),
-    source: row.source as "personio" | "awork",
+    source: row.source as string,
+    is_attendance: Boolean(row.is_attendance),
     dante_project_id: (row.dante_project_id as number | null) ?? null,
-    awork_project_id: (row.awork_project_id as string | null) ?? null,
+    external_project_id: (row.external_project_id as string | null) ?? null,
   }));
 }
 
@@ -228,7 +209,7 @@ export type CalendarPlannedRow = {
   day: string;
   project_name: string;
   dante_project_id: number | null;
-  awork_project_id: string | null;
+  external_project_id: string | null;
   per_day_seconds: number;
 };
 
@@ -245,38 +226,36 @@ export async function listCalendarPlannedBookings(opts: {
 }): Promise<CalendarPlannedRow[]> {
   const r = await db.execute(sql`
     SELECT
-      ul.employee_id,
+      b.employee_id,
       d::date AS day,
-      COALESCE(ap.name, 'Untagged') AS project_name,
-      apl.project_id AS dante_project_id,
-      tb.awork_project_id,
-      tb.duration_seconds * 1.0 / GREATEST(
+      COALESCE(b.external_project_name, 'Untagged') AS project_name,
+      b.project_id AS dante_project_id,
+      b.external_project_id,
+      b.duration_seconds * 1.0 / GREATEST(
         (
           SELECT COUNT(*)
-          FROM generate_series(tb.start_date, tb.end_date, '1 day'::interval) gd
+          FROM generate_series(b.start_date, b.end_date, '1 day'::interval) gd
           WHERE EXTRACT(DOW FROM gd) NOT IN (0, 6)
         ),
         1
       ) AS per_day_seconds
-    FROM awork_time_booking tb
-    JOIN awork_user_link ul ON ul.awork_user_id = tb.awork_user_id
-    LEFT JOIN awork_project ap ON ap.awork_project_id = tb.awork_project_id
-    LEFT JOIN awork_project_link apl ON apl.awork_project_id = tb.awork_project_id
+    FROM planned_booking_resolved b
     CROSS JOIN LATERAL generate_series(
-      GREATEST(tb.start_date, ${opts.start}::date),
-      LEAST(tb.end_date, ${opts.end}::date),
+      GREATEST(b.start_date, ${opts.start}::date),
+      LEAST(b.end_date, ${opts.end}::date),
       '1 day'::interval
     ) d
-    WHERE EXTRACT(DOW FROM d) NOT IN (0, 6)
-      AND tb.end_date >= ${opts.start}::date
-      AND tb.start_date <= ${opts.end}::date
+    WHERE b.employee_id IS NOT NULL
+      AND EXTRACT(DOW FROM d) NOT IN (0, 6)
+      AND b.end_date >= ${opts.start}::date
+      AND b.start_date <= ${opts.end}::date
   `);
   return (r.rows as Array<Record<string, unknown>>).map((row) => ({
     employee_id: (row.employee_id as number | null) ?? null,
     day: row.day as string,
     project_name: row.project_name as string,
     dante_project_id: (row.dante_project_id as number | null) ?? null,
-    awork_project_id: (row.awork_project_id as string | null) ?? null,
+    external_project_id: (row.external_project_id as string | null) ?? null,
     per_day_seconds: Number(row.per_day_seconds ?? 0),
   }));
 }

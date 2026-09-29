@@ -25,9 +25,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useCreateCustomer } from "@/lib/api/customers";
 import {
-  useAworkCompanies,
-  useImportCustomerFromAwork,
-} from "@/lib/api/awork";
+  useExternalRecords,
+  useImportCustomer,
+  useIntegrations,
+} from "@/lib/api/integrations";
 import { cn } from "@/lib/utils";
 
 const schema = z.object({
@@ -36,11 +37,15 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-type Tab = "manual" | "awork";
+type Tab = "manual" | "import";
 
 export function AddCustomerDialog() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("manual");
+  const integrations = useIntegrations();
+  const source = integrations.data?.import_source?.customers
+    ? integrations.data.import_source
+    : null;
 
   return (
     <Dialog
@@ -62,7 +67,7 @@ export function AddCustomerDialog() {
         <DialogHeader>
           <DialogTitle>Add Customer</DialogTitle>
           <DialogDescription>
-            Create a fresh customer or import an awork company directly.
+            Create a fresh customer or import a company from a connected tool.
           </DialogDescription>
         </DialogHeader>
 
@@ -70,16 +75,20 @@ export function AddCustomerDialog() {
           <TabButton active={tab === "manual"} onClick={() => setTab("manual")}>
             Manual
           </TabButton>
-          <TabButton active={tab === "awork"} onClick={() => setTab("awork")}>
-            <Download className="mr-1.5 h-3.5 w-3.5" />
-            Import from awork
-          </TabButton>
+          {source && (
+            <TabButton active={tab === "import"} onClick={() => setTab("import")}>
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              Import from {source.display_name}
+            </TabButton>
+          )}
         </div>
 
         {tab === "manual" ? (
           <ManualTab onDone={() => setOpen(false)} />
         ) : (
-          <AworkImportTab onDone={() => setOpen(false)} />
+          (source ? (
+          <ImportTab source={source} onDone={() => setOpen(false)} />
+        ) : null)
         )}
       </DialogContent>
     </Dialog>
@@ -168,10 +177,16 @@ function ManualTab({ onDone }: { onDone: () => void }) {
   );
 }
 
-function AworkImportTab({ onDone }: { onDone: () => void }) {
+function ImportTab({
+  source,
+  onDone,
+}: {
+  source: { slug: string; display_name: string };
+  onDone: () => void;
+}) {
   const [q, setQ] = useState("");
-  const list = useAworkCompanies({ mapped: false });
-  const imp = useImportCustomerFromAwork();
+  const list = useExternalRecords(source.slug, { type: "company", mapped: false, include_archived: true });
+  const imp = useImportCustomer();
 
   const filtered = useMemo(() => {
     if (q.length < 2) return list.data ?? [];
@@ -183,7 +198,7 @@ function AworkImportTab({ onDone }: { onDone: () => void }) {
 
   async function importCompany(id: string, name: string) {
     try {
-      await imp.mutateAsync({ awork_company_id: id });
+      await imp.mutateAsync({ integration_slug: source.slug, external_id: id });
       toast.success(`Imported "${name}" as a new customer`);
       onDone();
     } catch (err) {
@@ -194,7 +209,7 @@ function AworkImportTab({ onDone }: { onDone: () => void }) {
   return (
     <div className="space-y-3 py-4">
       <Input
-        placeholder="Filter awork companies by name…"
+        placeholder={`Filter ${source.display_name} companies by name…`}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         autoFocus
@@ -209,15 +224,15 @@ function AworkImportTab({ onDone }: { onDone: () => void }) {
         )}
         {!list.isLoading && filtered.length === 0 && (
           <p className="p-4 text-sm text-muted-foreground">
-            No unmapped awork companies match. (After `dante awork sync`
-            you&apos;ll see the latest catalog.)
+            No unmapped {source.display_name} companies match. (Run a sync to
+            refresh the catalog.)
           </p>
         )}
         {filtered.length > 0 && (
           <ul className="divide-y text-sm">
             {filtered.slice(0, 200).map((c) => (
               <li
-                key={c.awork_company_id}
+                key={c.external_id}
                 className="flex items-center justify-between gap-3 px-3 py-2 hover:bg-muted/40"
               >
                 <div className="min-w-0">
@@ -228,16 +243,13 @@ function AworkImportTab({ onDone }: { onDone: () => void }) {
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground tabular-nums">
-                    {c.projects_count ?? 0} awork projects
-                    {(c.projects_in_progress_count ?? 0) > 0 && (
-                      <> ({c.projects_in_progress_count} active)</>
-                    )}
+                    {c.n_entries} {source.display_name} projects
                   </div>
                 </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => importCompany(c.awork_company_id, c.name ?? "")}
+                  onClick={() => importCompany(c.external_id, c.name ?? "")}
                   disabled={imp.isPending}
                 >
                   Import
@@ -248,8 +260,8 @@ function AworkImportTab({ onDone }: { onDone: () => void }) {
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        Imports create a new customer named after the awork company and link
-        them so future awork project imports auto-pick the right customer.
+        Imports create a new customer named after the source company and link
+        them so future project imports auto-pick the right customer.
       </p>
     </div>
   );

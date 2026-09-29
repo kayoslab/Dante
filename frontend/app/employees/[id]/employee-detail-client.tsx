@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { QueryGuard } from "@/components/ui/query-guard";
 
-import { EmployeeAworkLinkCard } from "@/components/employee/employee-awork-link-card";
+import { EntityLinkCards } from "@/components/integrations/entity-link-cards";
 import { EmployeeFlagsCard } from "@/components/employee/employee-flags-card";
 import { EmployeeSalaryChart } from "@/components/employee/employee-salary-chart";
 import { InspectDialog } from "@/components/employee/inspect-dialog";
@@ -229,10 +229,10 @@ function EmployeeBody({ data }: { data: EmployeeDetail }) {
           </Card>
         </div>
 
-        {/* Right: flags + salary chart + awork link */}
+        {/* Right: flags + salary chart + integration links */}
         <div className="space-y-6">
           <EmployeeFlagsCard employee={data} />
-          <EmployeeAworkLinkCard employeeId={data.employee_id} />
+          <EntityLinkCards danteType="employee" danteId={data.employee_id} />
           <EmployeeSalaryChart employeeId={data.employee_id} />
         </div>
       </div>

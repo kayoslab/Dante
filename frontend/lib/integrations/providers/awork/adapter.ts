@@ -180,7 +180,9 @@ export const aworkAdapter: ProviderAdapter<AworkClient, AworkConfig> = {
       last_name: item.lastName ?? null,
       email: emailFromContactInfos(item.userContactInfos),
       status: aworkUserStatus(item.status),
-      is_active: !(item.isArchived ?? false) && !(item.isDeactivated ?? false),
+      // "Archived" is the only state that hides a user from link pickers;
+      // deactivated-but-not-archived users keep their history visible.
+      is_active: !(item.isArchived ?? false),
       is_external: item.isExternal ?? null,
       extra: {
         position: item.position ?? null,

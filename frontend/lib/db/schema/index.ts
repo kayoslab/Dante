@@ -5,8 +5,7 @@
 
 export * from "./sync";
 export * from "./employee";
-export * from "./personio";
-export * from "./awork";
+export * from "./absence";
 export * from "./billing";
 export * from "./auth";
 export * from "./calendar";

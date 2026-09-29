@@ -5,11 +5,9 @@ import { db } from "../client";
 import {
   appUser,
   assignment,
-  aworkProject,
   externalLink,
   customer,
   frameworkAgreement,
-  personioProject,
   project,
   projectRate,
   projectSdm,
@@ -319,92 +317,6 @@ export async function getProjectHeader(
   };
 }
 
-export type ProjectAworkLinkRow = {
-  awork_project_id: unknown;
-  name: unknown;
-  project_key: unknown;
-  awork_company_id: unknown;
-  awork_company_name: string | null;
-  mapped_to_project_id: number;
-  mapped_to_project_name: null;
-  mapped_to_customer_name: null;
-  is_billable_by_default: null;
-  is_external: null;
-  n_time_entries: number;
-};
-
-export async function listProjectAworkLinks(
-  project_id: number,
-): Promise<ProjectAworkLinkRow[]> {
-  const r = await db.execute(sql`
-    SELECT ap.awork_project_id, ap.name, ap.project_key,
-           ap.awork_company_id, co.name AS awork_company_name,
-           COALESCE(t.n_entries, 0)::int AS n_entries
-    FROM awork_project_link link
-    JOIN awork_project ap ON ap.awork_project_id = link.awork_project_id
-    LEFT JOIN awork_company co ON co.awork_company_id = ap.awork_company_id
-    LEFT JOIN (
-      SELECT awork_project_id, COUNT(*) AS n_entries
-      FROM awork_time_entry
-      WHERE awork_project_id IS NOT NULL
-      GROUP BY awork_project_id
-    ) t ON t.awork_project_id = link.awork_project_id
-    WHERE link.project_id = ${project_id}
-    ORDER BY ap.name
-  `);
-  return (r.rows as Array<Record<string, unknown>>).map((row) => ({
-    awork_project_id: row.awork_project_id,
-    name: row.name,
-    project_key: row.project_key,
-    awork_company_id: row.awork_company_id,
-    awork_company_name: (row.awork_company_name as string | null) ?? null,
-    mapped_to_project_id: project_id,
-    mapped_to_project_name: null,
-    mapped_to_customer_name: null,
-    is_billable_by_default: null,
-    is_external: null,
-    n_time_entries: Number(row.n_entries ?? 0),
-  }));
-}
-
-export type ProjectPersonioLinkRow = {
-  personio_project_id: unknown;
-  name: unknown;
-  active: unknown;
-  n_attendance_entries: number;
-  mapped_to_project_id: number;
-  mapped_to_project_name: null;
-  mapped_to_customer_name: null;
-};
-
-export async function listProjectPersonioLinks(
-  project_id: number,
-): Promise<ProjectPersonioLinkRow[]> {
-  const r = await db.execute(sql`
-    SELECT pp.personio_project_id, pp.name, pp.active,
-           COALESCE(att.n_entries, 0)::int AS n_entries, link.mapped_at
-    FROM personio_project_link link
-    JOIN personio_project pp
-      ON pp.personio_project_id = link.personio_project_id
-    LEFT JOIN (
-      SELECT project_id AS personio_project_id, COUNT(*) AS n_entries
-      FROM attendance WHERE project_id IS NOT NULL
-      GROUP BY project_id
-    ) att ON att.personio_project_id = link.personio_project_id
-    WHERE link.project_id = ${project_id}
-    ORDER BY pp.name
-  `);
-  return (r.rows as Array<Record<string, unknown>>).map((row) => ({
-    personio_project_id: row.personio_project_id,
-    name: row.name,
-    active: row.active,
-    n_attendance_entries: Number(row.n_entries ?? 0),
-    mapped_to_project_id: project_id,
-    mapped_to_project_name: null,
-    mapped_to_customer_name: null,
-  }));
-}
-
 export type ProjectLoggedTimeConsultant = {
   employee_id: unknown;
   who_name: unknown;
@@ -435,32 +347,20 @@ export async function getProjectLoggedTimeSummary(
   if (!pRow) return null;
   const project_name = pRow.name;
 
-  // Dedup per (employee, day) between Personio and awork so a project
-  // mapped in both doesn't double-count tracked hours.
+  // Dedup per (employee, day) across sources so a project mapped in more
+  // than one tool doesn't double-count tracked hours.
   const result = await db.execute(sql`
-    WITH personio AS (
-      SELECT a.employee_id, a.work_date,
-             SUM(a.duration_minutes) AS minutes
-      FROM attendance a
-      JOIN personio_project_link pl
-        ON pl.personio_project_id = a.project_id
-      WHERE pl.project_id = ${project_id}
-      GROUP BY a.employee_id, a.work_date
-    ),
-    awork AS (
-      SELECT ul.employee_id, t.work_date,
-             SUM(t.duration_minutes) AS minutes
-      FROM awork_time_entry t
-      JOIN awork_project_link apl
-        ON apl.awork_project_id = t.awork_project_id
-      JOIN awork_user_link ul
-        ON ul.awork_user_id = t.awork_user_id
-      WHERE apl.project_id = ${project_id}
-      GROUP BY ul.employee_id, t.work_date
+    WITH per_source AS (
+      SELECT r.integration_slug, r.employee_id, r.work_date,
+             SUM(r.duration_minutes) AS minutes
+      FROM time_entry_resolved r
+      WHERE r.project_id = ${project_id}
+        AND r.employee_id IS NOT NULL
+      GROUP BY r.integration_slug, r.employee_id, r.work_date
     ),
     deduped AS (
       SELECT employee_id, work_date, MAX(minutes) AS minutes
-      FROM (SELECT * FROM personio UNION ALL SELECT * FROM awork) u
+      FROM per_source
       GROUP BY employee_id, work_date
     ),
     consolidated AS (
@@ -469,8 +369,8 @@ export async function getProjectLoggedTimeSummary(
         SUM(d.minutes) AS total_min,
         MIN(d.work_date) AS earliest,
         MAX(d.work_date) AS latest,
-        MAX(CASE WHEN EXISTS (SELECT 1 FROM personio p WHERE p.employee_id = d.employee_id AND p.work_date = d.work_date) THEN 1 ELSE 0 END) AS has_personio,
-        MAX(CASE WHEN EXISTS (SELECT 1 FROM awork w WHERE w.employee_id = d.employee_id AND w.work_date = d.work_date) THEN 1 ELSE 0 END) AS has_awork
+        (SELECT array_agg(DISTINCT ps.integration_slug ORDER BY ps.integration_slug)
+           FROM per_source ps WHERE ps.employee_id = d.employee_id) AS sources
       FROM deduped d
       GROUP BY d.employee_id
     )
@@ -478,7 +378,7 @@ export async function getProjectLoggedTimeSummary(
       c.employee_id,
       ec.first_name || ' ' || ec.last_name AS who_name,
       c.total_min, c.earliest, c.latest,
-      c.has_personio, c.has_awork,
+      c.sources,
       (SELECT COUNT(*) FROM assignment a
        WHERE a.employee_id = c.employee_id AND a.project_id = ${project_id}) AS n_assignments
     FROM consolidated c
@@ -494,9 +394,7 @@ export async function getProjectLoggedTimeSummary(
     const hours = Math.round(total_min / 60);
     if (hours === 0) continue;
     const days = Math.round((hours / 8) * 1000) / 1000;
-    const sources: string[] = [];
-    if (Number(raw.has_personio) === 1) sources.push("personio");
-    if (Number(raw.has_awork) === 1) sources.push("awork");
+    const sources: string[] = Array.isArray(raw.sources) ? (raw.sources as string[]) : [];
     consultants.push({
       employee_id: raw.employee_id,
       who_name: raw.who_name,
@@ -673,7 +571,7 @@ export async function updateProject(
 }
 
 /** Set just `time_budget_hours` on an existing project. Used by the
- * awork import path which patches in the awork-project's time budget
+ * import path which patches in the source project's time budget
  * after the project row has already been created by
  * `createProjectAction` (which doesn't know about `time_budget_hours`
  * — it's a Phase B.4 addition). Deliberately does NOT stamp
@@ -825,8 +723,8 @@ export type MergeProjectsResult = {
   moved_assignments: number;
   moved_rates: number;
   dropped_rates: number;
-  moved_personio_links: number;
-  moved_awork_links: number;
+  /** External links moved, per integration slug. */
+  moved_links: Record<string, number>;
 };
 
 export type MergeProjectsPreflight =
@@ -921,8 +819,8 @@ export async function mergeProjects(
         ),
       )
       .returning({ id: externalLink.external_id, slug: externalLink.integration_slug });
-    const movedPersonio = movedLinks.filter((l) => l.slug === "personio");
-    const movedAwork = movedLinks.filter((l) => l.slug === "awork");
+    const moved_links: Record<string, number> = {};
+    for (const l of movedLinks) moved_links[l.slug] = (moved_links[l.slug] ?? 0) + 1;
 
     // Drop the now-orphaned source project.
     await tx.delete(project).where(eq(project.project_id, source_project_id));
@@ -932,8 +830,7 @@ export async function mergeProjects(
       moved_assignments: movedAssignments.length,
       moved_rates: movedRates.length,
       dropped_rates,
-      moved_personio_links: movedPersonio.length,
-      moved_awork_links: movedAwork.length,
+      moved_links,
     } satisfies MergeProjectsResult;
   });
 }
@@ -975,151 +872,4 @@ export async function deleteProjectSdm(
         eq(projectSdm.user_id, user_id),
       ),
     );
-}
-
-// ----------------------------------------------------------------------------
-// personio_project_link write-side helpers.
-// ----------------------------------------------------------------------------
-
-/** Look up a personio project's name — used in error messages when
- * the FE tries to link an unknown personio project. `null` when the
- * upstream row does not exist (operator needs to run `dante sync`). */
-export async function getPersonioProjectName(
-  personio_project_id: string,
-): Promise<string | null> {
-  const [row] = await db
-    .select({ name: personioProject.name })
-    .from(personioProject)
-    .where(eq(personioProject.personio_project_id, personio_project_id));
-  return row?.name ?? null;
-}
-
-/** The Personio project's synced `billable` flag — used at link time to
- * seed the Dante project's billability. `null` when unknown (row missing
- * or Personio hasn't set the flag). */
-export async function getPersonioProjectBillable(
-  personio_project_id: string,
-): Promise<boolean | null> {
-  const [row] = await db
-    .select({ billable: personioProject.billable })
-    .from(personioProject)
-    .where(eq(personioProject.personio_project_id, personio_project_id));
-  return row?.billable ?? null;
-}
-
-/** Is this personio project already linked? Returns the linked
- * `project_id` (so the caller can craft a useful error message) or
- * `null` if no link exists. */
-export async function getPersonioLinkProjectId(
-  personio_project_id: string,
-): Promise<number | null> {
-  return getProjectLinkProjectId("personio", personio_project_id);
-}
-
-export async function insertPersonioProjectLink(input: {
-  personio_project_id: string;
-  project_id: number;
-}): Promise<void> {
-  await insertProjectLink("personio", input.personio_project_id, input.project_id);
-}
-
-export async function deletePersonioProjectLink(
-  project_id: number,
-  personio_project_id: string,
-): Promise<number> {
-  return deleteProjectLink("personio", personio_project_id, project_id);
-}
-
-// ----------------------------------------------------------------------------
-// Generic external project link helpers (external_link, entity 'project').
-// ----------------------------------------------------------------------------
-
-async function getProjectLinkProjectId(
-  integration_slug: string,
-  external_id: string,
-): Promise<number | null> {
-  const [row] = await db
-    .select({ project_id: externalLink.dante_id })
-    .from(externalLink)
-    .where(
-      and(
-        eq(externalLink.integration_slug, integration_slug),
-        eq(externalLink.entity_type, "project"),
-        eq(externalLink.external_id, external_id),
-      ),
-    );
-  return row?.project_id ?? null;
-}
-
-async function insertProjectLink(
-  integration_slug: string,
-  external_id: string,
-  project_id: number,
-): Promise<void> {
-  await db.insert(externalLink).values({
-    integration_slug,
-    entity_type: "project",
-    external_id,
-    dante_type: "project",
-    dante_id: project_id,
-    origin: "manual",
-    mapped_at: new Date(),
-  });
-}
-
-async function deleteProjectLink(
-  integration_slug: string,
-  external_id: string,
-  project_id: number,
-): Promise<number> {
-  const rows = await db
-    .delete(externalLink)
-    .where(
-      and(
-        eq(externalLink.integration_slug, integration_slug),
-        eq(externalLink.entity_type, "project"),
-        eq(externalLink.external_id, external_id),
-        eq(externalLink.dante_id, project_id),
-      ),
-    )
-    .returning({ id: externalLink.external_id });
-  return rows.length;
-}
-
-// ----------------------------------------------------------------------------
-// awork_project_link write-side helpers.
-// ----------------------------------------------------------------------------
-
-/** Look up an awork project's name — `null` when the upstream awork
- * project row does not exist. */
-export async function getAworkProjectName(
-  awork_project_id: string,
-): Promise<string | null> {
-  const [row] = await db
-    .select({ name: aworkProject.name })
-    .from(aworkProject)
-    .where(eq(aworkProject.awork_project_id, awork_project_id));
-  return row?.name ?? null;
-}
-
-/** Is this awork project already linked? Returns the linked
- * `project_id` or `null`. */
-export async function getAworkProjectLinkProjectId(
-  awork_project_id: string,
-): Promise<number | null> {
-  return getProjectLinkProjectId("awork", awork_project_id);
-}
-
-export async function insertAworkProjectLink(input: {
-  awork_project_id: string;
-  project_id: number;
-}): Promise<void> {
-  await insertProjectLink("awork", input.awork_project_id, input.project_id);
-}
-
-export async function deleteAworkProjectLink(
-  project_id: number,
-  awork_project_id: string,
-): Promise<number> {
-  return deleteProjectLink("awork", awork_project_id, project_id);
 }

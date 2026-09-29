@@ -1,11 +1,11 @@
 /** Per-consultant tracked-hours rollup for `/api/tracked-hours`.
  *
- * Union of two sources — Personio attendance + awork time entries — classified
- * by *effective billability* (project-level, uniform across sources):
+ * Union of every integration bound to `time_entries`, classified by
+ * *effective billability* (project-level, uniform across sources):
  *   - billable      — tracked on a billable project.
  *   - non_billable  — tracked on a project marked non-billable (internal work,
  *                     e.g. "Interne Tätigkeit").
- *   - untagged      — Personio-only; no project picked.
+ *   - untagged      — HRIS attendance with no project picked.
  * `non_billable + untagged` = internal (non-billed) tracked time. NB: this is
  * NOT "bench" — bench is unused *capacity* (available − allocation), a Forecast-
  * report concept. This report is purely actual tracked hours.
@@ -19,12 +19,13 @@
  * Sub-projects are flat: each leaf is its own row, linked individually — a
  * parent link does not cascade (see the sub-project decision).
  *
- * **awork day-level reconciliation:** pentesters track real (billable) work in
- * awork but also book placeholder time in Personio ("Generic Pentest" /
- * untagged). For any (employee, day) that has ≥1 awork entry, that day's
- * Personio attendance is dropped as a duplicate — awork is the truth. Non-awork
- * users have no awork days, so all their Personio attendance is kept (untagged
- * = genuine internal / unaccounted time).
+ * **Day-level reconciliation** follows the admin's `time_entries.overlap_policy`
+ * rule (Settings → Integrations → Sources & rules). With "one source wins the
+ * day", any (employee, day) that has time from the winning integration drops
+ * every other source's time that day — e.g. pentesters track real work in
+ * awork but also book placeholder attendance in Personio. Employees without
+ * time in the winner keep all their attendance (untagged = genuine internal /
+ * unaccounted time). "Keep both" merges everything.
  *
  * Roster: every active, real, project-contributing employee appears — even
  * with no tracked time this month (zeros; the gap is the signal). Non-project-
@@ -58,8 +59,8 @@ export async function getTrackedHoursForMonth(opts: {
 
   const result = await db.execute(sql`
     WITH all_tracked AS (
-      -- Day-level awork/Personio reconciliation + effective billability
-      -- live in the tracked_time_effective VIEW (migration 0022) so every
+      -- Day-level source reconciliation + effective billability live in the
+      -- tracked_time_effective VIEW (migration 0026, rule-driven) so every
       -- consumer shares one definition.
       SELECT employee_id, bucket, duration_minutes AS dm
       FROM tracked_time_effective

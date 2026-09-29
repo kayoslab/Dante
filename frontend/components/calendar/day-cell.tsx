@@ -16,12 +16,12 @@ import { formatRate } from "@/lib/format";
 //   3. weekend          — muted gray, no work expected
 //   4. load             — blue scale, red/orange above 1.0. The server
 //                         picks ONE signal per cell (`load_kind`):
-//                          • past days:  awork tracked hours / 8h, or
-//                                        Personio attendance / 8h when
-//                                        nothing was tracked in awork
+//                          • past days:  delivery-tool tracked hours / 8h,
+//                                        or HRIS attendance / 8h when
+//                                        nothing was tracked there
 //                                        → > 1.0 is OVERTIME (orange)
 //                          • today+future: manual allocation_pct and
-//                                        awork planned hours / 8h,
+//                                        planner hours / 8h,
 //                                        max per project, summed
 //                                        → > 1.0 is OVERBOOKED (red)
 //   5. empty            — nothing
@@ -90,12 +90,13 @@ export function DayCell({
   // load coloring — the employee is not expected to work.
   const holiday = day.public_holiday;
   const localHoliday = cell?.local_public_holiday ?? null;
-  // Personio attendance — corner number for comparison with awork.
+  // HRIS attendance — corner number for comparison with the delivery tools.
   const trackedHours = cell?.tracked_hours ?? 0;
-  const aworkTrackedHours = cell?.awork_tracked_hours ?? 0;
+  const deliveryTrackedHours = cell?.delivery_tracked_hours ?? 0;
   // Color signal — computed server-side from ONE source depending on
-  // the day (see colorClass). Personio only feeds it as the past-day
-  // fallback when awork has nothing; otherwise it's the corner number.
+  // the day (see colorClass). Attendance only feeds it as the past-day
+  // fallback when the delivery tools have nothing; otherwise it's the
+  // corner number.
   const plannedHours = cell?.planned_hours ?? 0;
   const load = cell ? Number(cell.load) : 0;
   const loadKind: LoadKind = cell?.load_kind ?? "planned";
@@ -212,14 +213,14 @@ export function DayCell({
               ⚠ Overtime: {(load * DAY_HOURS).toFixed(1)}h worked of{" "}
               {DAY_HOURS}h{" "}
               <span className="text-orange-900/70">
-                [{actualSource === "personio" ? "Personio" : "awork"}]
+                [{actualSource === "attendance" ? "attendance" : "tracked"}]
               </span>
             </div>
           )}
           {cell && cell.planned_entries.length > 0 && (
             <div className="border-t pt-1">
               <div className="text-xs font-medium">
-                Planned: {plannedHours}h <span className="text-muted-foreground">[awork]</span>
+                Planned: {plannedHours}h <span className="text-muted-foreground">[planner]</span>
               </div>
               <ul className="mt-1 space-y-0.5">
                 {cell.planned_entries.map((e, i) => (
@@ -240,9 +241,9 @@ export function DayCell({
             <div className="border-t pt-1">
               <div className="text-xs font-medium">
                 Clocked: {cell.tracked_hours}h{" "}
-                <span className="text-muted-foreground">[Personio]</span> ·{" "}
-                {aworkTrackedHours}h{" "}
-                <span className="text-muted-foreground">[awork]</span>
+                <span className="text-muted-foreground">[attendance]</span> ·{" "}
+                {deliveryTrackedHours}h{" "}
+                <span className="text-muted-foreground">[tracked]</span>
               </div>
               <ul className="mt-1 space-y-0.5">
                 {cell.tracked_entries.map((e, i) => (

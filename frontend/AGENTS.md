@@ -48,7 +48,7 @@ MFA is mandatory for every role — Cognito's hosted UI enforces it (TOTP). See 
 ### Per-role endpoint matrix
 
 - **employee**: `/calendar`, `/profile`, `/employees` (list only), `/api/calendar`, `/api/employees`, `/api/employees/teams`.
-- **manager** adds: `/api/portfolio/*`, `/api/salary/*`, `/api/projects/*`, `/api/employees/[id]` (detail), `/api/employees/[id]/salary-history`, `/api/employees/[id]/monthly*`, `/api/employees/[id]/allocations`, `/api/inspect/[employee_id]`, `/api/freelancers/*`, `/api/awork-*`, `/api/tracked-hours`.
+- **manager** adds: `/api/portfolio/*`, `/api/salary/*`, `/api/projects/*`, `/api/employees/[id]` (detail), `/api/employees/[id]/salary-history`, `/api/employees/[id]/monthly*`, `/api/employees/[id]/allocations`, `/api/inspect/[employee_id]`, `/api/freelancers/*`, `/api/integrations/*`, `/api/links`, `/api/tracked-hours`.
 - **admin** adds: `/settings/*`, `/api/config`, `/auth/awork/*`.
 
 ### Accepted risk: manager has full-org per-employee access

@@ -168,7 +168,7 @@ export async function GET(req: NextRequest) {
     // 3) Assignment day-expansion
     const asnRows = await listCalendarAssignments({ start, end });
 
-    // 4) Tracked time (Personio + awork)
+    // 4) Tracked time (every time-entry integration)
     const trkRows = await listCalendarTrackedTime({ start, end });
 
     // 4b) Per-day planned breakdown for the tooltip. The same data
@@ -199,8 +199,8 @@ export async function GET(req: NextRequest) {
         allocation_pct: string;
         daily_rate_eur: string | null;
       }>;
-      personio_minutes_raw: number;
-      awork_minutes_raw: number;
+      attendance_minutes_raw: number;
+      delivery_minutes_raw: number;
       tracked_entries: Array<{
         project_name: string;
         hours: number;
@@ -213,7 +213,7 @@ export async function GET(req: NextRequest) {
       // Per-project rollup of all load signals. See bucketKey + the
       // computeLoad doc in lib/api/_calendar-load.ts: future days score
       // the plan (max-per-project / sum-across-projects), past days score
-      // awork tracked hours only.
+      // delivery-tool tracked hours only.
       project_load: Map<string, ProjectLoadBucket>;
     };
 
@@ -239,8 +239,8 @@ export async function GET(req: NextRequest) {
           vacation_type: null,
           local_public_holiday: localName,
           assignments: [],
-          personio_minutes_raw: 0,
-          awork_minutes_raw: 0,
+          attendance_minutes_raw: 0,
+          delivery_minutes_raw: 0,
           tracked_entries: [],
           planned_entries: [],
           project_load: new Map(),
@@ -266,7 +266,7 @@ export async function GET(req: NextRequest) {
     const getBucket = (c: Cell, key: string) => {
       let b = c.project_load.get(key);
       if (!b) {
-        b = { manual: 0, planned_h: 0, awork_tracked_h: 0 };
+        b = { manual: 0, planned_h: 0, delivery_tracked_h: 0 };
         c.project_load.set(key, b);
       }
       return b;
@@ -297,16 +297,16 @@ export async function GET(req: NextRequest) {
       if (emp_id === null || !employeeIds.has(emp_id)) continue;
       const c = cellFor(emp_id, raw.work_date);
       const mins = raw.minutes;
-      if (raw.source === "personio") {
-        c.personio_minutes_raw += mins;
+      if (raw.is_attendance) {
+        c.attendance_minutes_raw += mins;
       } else {
-        // awork tracked time contributes to the project bucket so the
-        // load math can take max(manual, planned, awork_tracked) at
-        // the project level. Personio is intentionally excluded — it
+        // Delivery-tool tracked time contributes to the project bucket so
+        // the load math can take max(manual, planned, tracked) at the
+        // project level. HRIS attendance is intentionally excluded — it
         // backs the corner number, not the color signal.
-        c.awork_minutes_raw += mins;
-        const key = bucketKey(raw.dante_project_id, raw.awork_project_id);
-        getBucket(c, key).awork_tracked_h += mins / 60;
+        c.delivery_minutes_raw += mins;
+        const key = bucketKey(raw.dante_project_id, raw.external_project_id);
+        getBucket(c, key).delivery_tracked_h += mins / 60;
       }
       c.tracked_entries.push({
         project_name: raw.project_name,
@@ -325,7 +325,7 @@ export async function GET(req: NextRequest) {
       if (emp_id === null || !employeeIds.has(emp_id)) continue;
       const c = cellFor(emp_id, raw.day);
       const sec = raw.per_day_seconds;
-      const bkey = bucketKey(raw.dante_project_id, raw.awork_project_id);
+      const bkey = bucketKey(raw.dante_project_id, raw.external_project_id);
       getBucket(c, bkey).planned_h += sec / 3600;
       const nameKey = raw.project_name;
       let perCell = plannedSeen.get(c);
@@ -371,25 +371,25 @@ export async function GET(req: NextRequest) {
         return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
       })
       .map((c) => {
-        const personio_h = bankerHours(c.personio_minutes_raw);
-        const awork_h = bankerHours(c.awork_minutes_raw);
+        const attendance_h = bankerHours(c.attendance_minutes_raw);
+        const delivery_h = bankerHours(c.delivery_minutes_raw);
         const tracked_entries = c.tracked_entries
           .filter((e) => e.hours > 0)
           .sort((a, b) => b.hours - a.hours);
         const planned_entries = c.planned_entries
           .filter((e) => e.hours > 0)
           .sort((a, b) => b.hours - a.hours);
-        // Past days: what was actually worked (awork tracked hours,
-        // falling back to Personio attendance when nothing was tracked
-        // in awork); > 1.0 = overtime. Today + future: what is planned
-        // (manual allocation + awork Planner); > 1.0 = overbooked.
+        // Past days: what was actually worked (delivery-tool tracked
+        // hours, falling back to HRIS attendance when nothing was tracked
+        // there); > 1.0 = overtime. Today + future: what is planned
+        // (manual allocation + planner); > 1.0 = overbooked.
         // Never both — mixing them flagged "planned on A, worked on B"
         // as 2.0.
         const load_kind = loadKindFor(c.date, today);
         const { load, planned_hours, actual_source } = computeLoad(
           c.project_load.values(),
           load_kind,
-          c.personio_minutes_raw / 60,
+          c.attendance_minutes_raw / 60,
         );
         return {
           employee_id: c.employee_id,
@@ -401,11 +401,11 @@ export async function GET(req: NextRequest) {
           on_vacation: c.on_vacation,
           vacation_type: c.vacation_type,
           assignments: c.assignments,
-          // Corner number on the calendar = Personio attendance only.
-          // Surface awork's clocked + planned figures separately for
-          // tooltip + color logic in the client.
-          tracked_hours: personio_h,
-          awork_tracked_hours: awork_h,
+          // Corner number on the calendar = HRIS attendance only.
+          // Surface the delivery tools' clocked + planned figures
+          // separately for tooltip + color logic in the client.
+          tracked_hours: attendance_h,
+          delivery_tracked_hours: delivery_h,
           tracked_entries,
           planned_hours,
           planned_entries,

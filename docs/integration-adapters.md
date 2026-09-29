@@ -2,11 +2,12 @@
 
 Status: agreed design (2026-09-29). Phases 1 (migration 0023), 2 (adapter
 extraction, canonical writes, migration 0024), 3 (secret store,
-write-only credential UI, migration 0025) and 4 (integrations, sources &
-rules settings) implemented. The code lives
+write-only credential UI, migration 0025), 4 (integrations, sources &
+rules settings) and 5 (read side on the canonical tables, generic links,
+migration 0026) implemented. The code lives
 under `frontend/lib/integrations/`; `frontend/lib/sync/` keeps only the
 connection helper, the Lambda handler and a re-export of `runSync`.
-Phases 5-6 pending.
+Phase 6 pending.
 
 Dante pulls people from an HRIS and work from a project / time-tracking
 tool. Today those are Personio and awork, and both are hard-wired: the
@@ -334,6 +335,24 @@ All writes are server actions gated on `admin`, audited with
 
 ## Read side and UI
 
+As shipped in phase 5: migration 0026 drops the compatibility views and
+adds two resolved views — `time_entry_resolved` and
+`planned_booking_resolved` (record + person link + project link + source
+project name / billability) — that every report reads. The monthly
+helpers keep their symmetric MAX-per-day dedup across sources; only
+`tracked_time_effective` applies the admin's `overlap_policy`, and it
+derives "untagged" from the primary `people` binding (HRIS attendance
+without a project). The calendar classifies sources as attendance (HRIS)
+vs delivery (everything else) instead of naming providers; its wire
+fields are `tracked_hours` / `delivery_tracked_hours` and `actual_source`
+is `attendance` | `delivery`. Records and links are served by
+`/api/integrations` (enabled integrations + import source),
+`/api/integrations/[slug]/records?type=person|project|company` and
+`/api/links?dante_type=&dante_id=`; `lib/actions/external-links.ts` holds
+the generic create / delete / import actions and
+`components/integrations/entity-link-cards.tsx` renders one link card per
+integration that provides the entity's capability.
+
 - Report queries (`tracked-hours`, `calendar`, `utilization`, `forecast`,
   `project-monthly`, `project`, `employee`, `awork`, `personio` query files
   and the two API routes) read `time_entry` / `absence` / `planned_booking`
@@ -369,7 +388,7 @@ All writes are server actions gated on `admin`, audited with
 | 2 | Adapter extraction (Personio, awork) + core runner + canonical writes + compat views (**done**, 0024) | Behaviour-neutral | High: sync parity; verified by diffing every report-relevant relation across old sync → migration → new sync |
 | 3 | SecretStore + write-only credential UI + terraform grants (**done**, 0025) | Feature | Medium: IAM change on web task role |
 | 4 | Integrations / bindings / rules settings pages + health check + audit (**done**) | Feature | Low |
-| 5 | Read side on canonical tables, generic link card, collapsed routes/actions | Refactor, report by report | Medium: each report has a parity test |
+| 5 | Read side on canonical tables, generic link card, collapsed routes/actions (**done**, 0026) | Refactor | Medium: verified by a 75-call read-side harness diffed before/after |
 | 6 | Guard, conformance suite, template, contributor docs | Docs / tooling | Low |
 
 Phases 1 and 2 ship together as one release with no visible change. 3 and 4

@@ -25,9 +25,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useCreateProject } from "@/lib/api/projects";
 import {
-  useImportableAworkProjects,
-  useImportProjectFromAwork,
-} from "@/lib/api/awork";
+  useImportableProjects,
+  useImportProject,
+  useIntegrations,
+} from "@/lib/api/integrations";
 import { cn } from "@/lib/utils";
 import { formatEUR } from "@/lib/format";
 
@@ -72,11 +73,15 @@ type Props = {
   frameworks: { framework_id: number; name: string }[];
 };
 
-type Tab = "manual" | "awork";
+type Tab = "manual" | "import";
 
 export function AddProjectDialog({ customerId, frameworks }: Props) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("manual");
+  const integrations = useIntegrations();
+  const source = integrations.data?.import_source?.projects
+    ? integrations.data.import_source
+    : null;
 
   return (
     <Dialog
@@ -107,10 +112,12 @@ export function AddProjectDialog({ customerId, frameworks }: Props) {
           <TabButton active={tab === "manual"} onClick={() => setTab("manual")}>
             Manual
           </TabButton>
-          <TabButton active={tab === "awork"} onClick={() => setTab("awork")}>
-            <Download className="mr-1.5 h-3.5 w-3.5" />
-            Import from awork
-          </TabButton>
+          {source && (
+            <TabButton active={tab === "import"} onClick={() => setTab("import")}>
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              Import from {source.display_name}
+            </TabButton>
+          )}
         </div>
 
         {tab === "manual" ? (
@@ -119,13 +126,14 @@ export function AddProjectDialog({ customerId, frameworks }: Props) {
             frameworks={frameworks}
             onDone={() => setOpen(false)}
           />
-        ) : (
-          <AworkImportTab
+        ) : source ? (
+          <ImportTab
+            source={source}
             customerId={customerId}
             frameworks={frameworks}
             onDone={() => setOpen(false)}
           />
-        )}
+        ) : null}
       </DialogContent>
     </Dialog>
   );
@@ -300,17 +308,19 @@ function ManualTab({
   );
 }
 
-function AworkImportTab({
+function ImportTab({
+  source,
   customerId,
   frameworks,
   onDone,
 }: {
+  source: { slug: string; display_name: string };
   customerId: number;
   frameworks: { framework_id: number; name: string }[];
   onDone: () => void;
 }) {
-  const list = useImportableAworkProjects(customerId);
-  const imp = useImportProjectFromAwork();
+  const list = useImportableProjects(source.slug, customerId);
+  const imp = useImportProject();
 
   // Per-row overrides
   const [selectedFrameworkId, setSelectedFrameworkId] = useState<number | null>(
@@ -320,10 +330,11 @@ function AworkImportTab({
     "time_and_material" | "fixed_price"
   >("time_and_material");
 
-  async function importProject(awork_project_id: string, name: string) {
+  async function importProject(external_id: string, name: string) {
     try {
       await imp.mutateAsync({
-        awork_project_id,
+        integration_slug: source.slug,
+        external_id,
         customer_id_override: customerId,
         framework_id_override: selectedFrameworkId,
         billing_model_override: billingModel,
@@ -383,36 +394,37 @@ function AworkImportTab({
         )}
         {!list.isLoading && list.data?.length === 0 && (
           <p className="p-4 text-sm text-muted-foreground">
-            No importable awork projects for this customer. Either none of
-            this customer&apos;s awork projects are unmapped, or no awork
-            company is linked to this customer yet.
+            No importable {source.display_name} projects for this customer.
+            Either none of this customer&apos;s {source.display_name} projects
+            are unmapped, or no {source.display_name} company is linked to
+            this customer yet.
           </p>
         )}
         {list.data && list.data.length > 0 && (
           <ul className="divide-y text-sm">
             {list.data.slice(0, 200).map((p) => (
               <li
-                key={p.awork_project_id}
+                key={p.external_id}
                 className="flex items-start justify-between gap-3 px-3 py-2 hover:bg-muted/40"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium truncate">{p.name}</span>
-                    {p.project_key && (
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {p.project_key}
+                    {p.secondary && (
+                      <span className="text-xs text-muted-foreground">
+                        {p.secondary}
                       </span>
                     )}
-                    {p.project_status_name && (
+                    {p.status_name && (
                       <Badge
                         variant="outline"
                         className={cn(
                           "text-xs",
-                          p.project_status_type === "closed" &&
+                          p.status_type === "closed" &&
                             "text-muted-foreground",
                         )}
                       >
-                        {p.project_status_name}
+                        {p.status_name}
                       </Badge>
                     )}
                   </div>
@@ -423,8 +435,8 @@ function AworkImportTab({
                       p.time_budget_hours !== undefined && (
                         <span>budget {p.time_budget_hours}h</span>
                       )}
-                    {p.n_time_entries > 0 && (
-                      <span>{p.n_time_entries} entries logged</span>
+                    {p.n_entries > 0 && (
+                      <span>{p.n_entries} entries logged</span>
                     )}
                   </div>
                 </div>
@@ -432,7 +444,7 @@ function AworkImportTab({
                   size="sm"
                   variant="outline"
                   onClick={() =>
-                    importProject(p.awork_project_id, p.name ?? "")
+                    importProject(p.external_id, p.name ?? "")
                   }
                   disabled={imp.isPending}
                 >
@@ -444,8 +456,8 @@ function AworkImportTab({
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        Imports pre-fill name, dates, notes (from the awork description), and
-        time budget. The awork project gets linked automatically so tracked
+        Imports pre-fill name, dates, notes (from the source description), and
+        time budget. The source project gets linked automatically so tracked
         hours flow into the breakdown.
       </p>
     </div>

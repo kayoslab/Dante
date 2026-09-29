@@ -1016,7 +1016,7 @@ export async function projectTotalWeightedAllocInMonth(
 
 // ----------------------------------------------------------------------------
 // Employee's TOTAL tracked minutes in a month across every project they
-// touched (Personio + awork combined, deduped per day). Used as the
+// touched (every source combined, deduped per day). Used as the
 // denominator for proportional cost attribution — an employee who
 // over-tracks doesn't get charged more than their salary, just redistributed.
 // ----------------------------------------------------------------------------
@@ -1027,24 +1027,16 @@ export async function employeeTotalTrackedMinutesInMonth(
   month_end: string,
 ): Promise<number> {
   const r = await db.execute(sql`
-    WITH personio AS (
-      SELECT a.work_date, SUM(a.duration_minutes) AS minutes
-      FROM attendance a
-      WHERE a.employee_id = ${employee_id}
-        AND a.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY a.work_date
-    ),
-    awork AS (
-      SELECT t.work_date, SUM(t.duration_minutes) AS minutes
-      FROM awork_time_entry t
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      WHERE ul.employee_id = ${employee_id}
-        AND t.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY t.work_date
+    WITH per_source AS (
+      SELECT r.integration_slug, r.work_date, SUM(r.duration_minutes) AS minutes
+      FROM time_entry_resolved r
+      WHERE r.employee_id = ${employee_id}
+        AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY r.integration_slug, r.work_date
     ),
     per_day AS (
       SELECT work_date, MAX(minutes) AS minutes
-      FROM (SELECT * FROM personio UNION ALL SELECT * FROM awork) u
+      FROM per_source
       GROUP BY work_date
     )
     SELECT COALESCE(SUM(minutes), 0) AS m FROM per_day
@@ -1137,26 +1129,17 @@ export async function employeeProjectTrackedMinutesInMonth(
   month_end: string,
 ): Promise<number> {
   const r = await db.execute(sql`
-    WITH personio AS (
-      SELECT a.work_date, SUM(a.duration_minutes) AS minutes
-      FROM attendance a
-      JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
-      WHERE a.employee_id = ${employee_id}
-        AND a.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY a.work_date
-    ),
-    awork AS (
-      SELECT t.work_date, SUM(t.duration_minutes) AS minutes
-      FROM awork_time_entry t
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-      WHERE ul.employee_id = ${employee_id}
-        AND t.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY t.work_date
+    WITH per_source AS (
+      SELECT r.integration_slug, r.work_date, SUM(r.duration_minutes) AS minutes
+      FROM time_entry_resolved r
+      WHERE r.employee_id = ${employee_id}
+        AND r.project_id IS NOT NULL
+        AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY r.integration_slug, r.work_date
     ),
     per_day AS (
       SELECT work_date, MAX(minutes) AS minutes
-      FROM (SELECT * FROM personio UNION ALL SELECT * FROM awork) u
+      FROM per_source
       GROUP BY work_date
     )
     SELECT COALESCE(SUM(minutes), 0) AS m FROM per_day
@@ -1169,37 +1152,26 @@ export async function employeeProjectTrackedMinutesInMonth(
  * month. Returns Map<project_id, minutes>. Mirrors
  * `employeeProjectTrackedMinutesInMonth` (which sums across every
  * mapped project) but keeps the per-project axis so per-assignment
- * revenue can multiply by the right tracked total. Personio + awork
- * with MAX dedup per (project, day) so a double-logged day doesn't
- * count twice. */
+ * revenue can multiply by the right tracked total. All sources with MAX
+ * dedup per (project, day) so a double-logged day doesn't count twice. */
 export async function trackedMinutesByProjectForEmployee(
   employee_id: number,
   month_start: string,
   month_end: string,
 ): Promise<Map<number, number>> {
   const r = await db.execute(sql`
-    WITH personio AS (
-      SELECT pl.project_id, a.work_date,
-             SUM(a.duration_minutes) AS minutes
-      FROM attendance a
-      JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
-      WHERE a.employee_id = ${employee_id}
-        AND a.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY pl.project_id, a.work_date
-    ),
-    awork AS (
-      SELECT apl.project_id, t.work_date,
-             SUM(t.duration_minutes) AS minutes
-      FROM awork_time_entry t
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-      WHERE ul.employee_id = ${employee_id}
-        AND t.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY apl.project_id, t.work_date
+    WITH per_source AS (
+      SELECT r.integration_slug, r.project_id, r.work_date,
+             SUM(r.duration_minutes) AS minutes
+      FROM time_entry_resolved r
+      WHERE r.employee_id = ${employee_id}
+        AND r.project_id IS NOT NULL
+        AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY r.integration_slug, r.project_id, r.work_date
     ),
     per_project_day AS (
       SELECT project_id, work_date, MAX(minutes) AS minutes
-      FROM (SELECT * FROM personio UNION ALL SELECT * FROM awork) u
+      FROM per_source
       GROUP BY project_id, work_date
     )
     SELECT project_id, COALESCE(SUM(minutes), 0) AS m
@@ -1266,27 +1238,13 @@ export async function projectTrackedHoursThrough(
   through_date: string,
 ): Promise<Decimal> {
   const r = await db.execute(sql`
-    WITH personio AS (
-      SELECT a.employee_id, a.work_date,
-             SUM(a.duration_minutes) AS minutes
-      FROM attendance a
-      JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
-      WHERE pl.project_id = ${project_id}
-        AND a.work_date <= ${through_date}::date
-      GROUP BY a.employee_id, a.work_date
-    ),
-    awork AS (
-      SELECT ul.employee_id, t.work_date,
-             SUM(t.duration_minutes) AS minutes
-      FROM awork_time_entry t
-      JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      WHERE apl.project_id = ${project_id}
-        AND t.work_date <= ${through_date}::date
-      GROUP BY ul.employee_id, t.work_date
-    ),
-    merged AS (
-      SELECT * FROM personio UNION ALL SELECT * FROM awork
+    WITH merged AS (
+      SELECT r.employee_id, r.work_date, SUM(r.duration_minutes) AS minutes
+      FROM time_entry_resolved r
+      WHERE r.project_id = ${project_id}
+        AND r.employee_id IS NOT NULL
+        AND r.work_date <= ${through_date}::date
+      GROUP BY r.integration_slug, r.employee_id, r.work_date
     )
     SELECT COALESCE(SUM(per_day_minutes), 0) AS m FROM (
       SELECT MAX(minutes) AS per_day_minutes
@@ -1441,36 +1399,22 @@ export async function trackedMinutesPerEmployeeInMonth(
   month_start: string,
   month_end: string,
 ): Promise<Map<number, number>> {
-  // When a project is mapped in BOTH Personio and awork, the same hours are
-  // often logged in both systems. Dedup by taking MAX(personio, awork) per
-  // (employee, day) so we don't double-count. Matches projectTrackedHoursThrough.
+  // When a project is mapped in more than one tool, the same hours are often
+  // logged in both. Dedup by taking MAX over sources per (employee, day) so
+  // we don't double-count. Matches projectTrackedHoursThrough.
   const r = await db.execute(sql`
-    WITH personio AS (
-      SELECT a.employee_id, a.work_date,
-             SUM(a.duration_minutes) AS minutes
-      FROM attendance a
-      JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
-      WHERE pl.project_id = ${project_id}
-        AND a.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY a.employee_id, a.work_date
-    ),
-    awork AS (
-      SELECT ul.employee_id, t.work_date,
-             SUM(t.duration_minutes) AS minutes
-      FROM awork_time_entry t
-      JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      WHERE apl.project_id = ${project_id}
-        AND t.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY ul.employee_id, t.work_date
+    WITH per_source AS (
+      SELECT r.integration_slug, r.employee_id, r.work_date,
+             SUM(r.duration_minutes) AS minutes
+      FROM time_entry_resolved r
+      WHERE r.project_id = ${project_id}
+        AND r.employee_id IS NOT NULL
+        AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY r.integration_slug, r.employee_id, r.work_date
     ),
     per_day AS (
       SELECT employee_id, work_date, MAX(minutes) AS minutes
-      FROM (
-        SELECT * FROM personio
-        UNION ALL
-        SELECT * FROM awork
-      ) u
+      FROM per_source
       GROUP BY employee_id, work_date
     )
     SELECT employee_id, COALESCE(SUM(minutes), 0) AS m
@@ -1486,16 +1430,16 @@ export async function trackedMinutesPerEmployeeInMonth(
 }
 
 // ----------------------------------------------------------------------------
-// Project has a time-tracking mapping (Personio or awork)
+// Project has a time-tracking mapping (any integration)
 // ----------------------------------------------------------------------------
 
 export async function projectHasTimeMapping(
   project_id: number,
 ): Promise<boolean> {
   const r = await db.execute(sql`
-    SELECT (
-      EXISTS (SELECT 1 FROM personio_project_link WHERE project_id = ${project_id})
-      OR EXISTS (SELECT 1 FROM awork_project_link WHERE project_id = ${project_id})
+    SELECT EXISTS (
+      SELECT 1 FROM external_link
+      WHERE entity_type = 'project' AND dante_type = 'project' AND dante_id = ${project_id}
     ) AS has_mapping
   `);
   const row = (r.rows as Array<{ has_mapping: boolean }>)[0];
@@ -1504,7 +1448,7 @@ export async function projectHasTimeMapping(
 
 /** Lifetime billable revenue for a T&M project through `through_date`.
  *
- * Employees: lifetime tracked person-days (Personio + awork, deduped by
+ * Employees: lifetime tracked person-days (all sources, deduped by
  * MAX per employee/day — same rule as `trackedMinutesPerEmployeeInMonth`)
  * × the assignment's effective daily rate. Freelancers: entered
  * person-days (`freelancer_time_entry.hours / 8`) × effective rate.
@@ -1523,20 +1467,12 @@ export async function cumulativeProjectRevenue(
   const r = await db.execute(sql`
     WITH per_day AS (
       SELECT employee_id, work_date, MAX(minutes) AS minutes FROM (
-        SELECT a.employee_id, a.work_date, SUM(a.duration_minutes) AS minutes
-        FROM attendance a
-        JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
-        WHERE pl.project_id = ${project_id}
-          AND a.work_date <= ${through_date}::date
-        GROUP BY a.employee_id, a.work_date
-        UNION ALL
-        SELECT ul.employee_id, t.work_date, SUM(t.duration_minutes)
-        FROM awork_time_entry t
-        JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-        JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-        WHERE apl.project_id = ${project_id}
-          AND t.work_date <= ${through_date}::date
-        GROUP BY ul.employee_id, t.work_date
+        SELECT r.employee_id, r.work_date, SUM(r.duration_minutes) AS minutes
+        FROM time_entry_resolved r
+        WHERE r.project_id = ${project_id}
+          AND r.employee_id IS NOT NULL
+          AND r.work_date <= ${through_date}::date
+        GROUP BY r.integration_slug, r.employee_id, r.work_date
       ) u GROUP BY employee_id, work_date
     ),
     emp_days AS (
@@ -1585,68 +1521,46 @@ export async function unassignedTrackedForProject(
 ): Promise<Array<Record<string, unknown>>> {
   // Two dedup passes:
   //  1. Per (employee, day) inside this project — protects against the same
-  //     hours being logged in both Personio and awork.
+  //     hours being logged in two tools.
   //  2. Per (employee, day) across ALL projects — needed so the cost
   //     attribution denominator (Option A's `total_all_min`) reflects each
   //     person's true monthly tracked total, not double-counted hours.
   const r = await db.execute(sql`
-    WITH personio_per_day AS (
-      SELECT a.employee_id, a.work_date,
-             SUM(a.duration_minutes) AS minutes
-      FROM attendance a
-      JOIN personio_project_link pl ON pl.personio_project_id = a.project_id
-      WHERE pl.project_id = ${project_id}
-        AND a.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY a.employee_id, a.work_date
-    ),
-    awork_per_day AS (
-      SELECT ul.employee_id, t.work_date,
-             SUM(t.duration_minutes) AS minutes
-      FROM awork_time_entry t
-      JOIN awork_project_link apl ON apl.awork_project_id = t.awork_project_id
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      WHERE apl.project_id = ${project_id}
-        AND t.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY ul.employee_id, t.work_date
+    WITH per_source AS (
+      SELECT r.integration_slug, r.employee_id, r.work_date,
+             SUM(r.duration_minutes) AS minutes
+      FROM time_entry_resolved r
+      WHERE r.project_id = ${project_id}
+        AND r.employee_id IS NOT NULL
+        AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY r.integration_slug, r.employee_id, r.work_date
     ),
     deduped AS (
       SELECT employee_id, work_date, MAX(minutes) AS minutes
-      FROM (
-        SELECT * FROM personio_per_day
-        UNION ALL
-        SELECT * FROM awork_per_day
-      ) u
+      FROM per_source
       GROUP BY employee_id, work_date
     ),
     all_tracked AS (
       SELECT d.employee_id,
              SUM(d.minutes) AS total_min,
-             MAX(CASE WHEN EXISTS (SELECT 1 FROM personio_per_day p WHERE p.employee_id = d.employee_id AND p.work_date = d.work_date) THEN 1 ELSE 0 END) AS has_personio,
-             MAX(CASE WHEN EXISTS (SELECT 1 FROM awork_per_day w WHERE w.employee_id = d.employee_id AND w.work_date = d.work_date) THEN 1 ELSE 0 END) AS has_awork
+             (SELECT array_agg(DISTINCT ps.integration_slug ORDER BY ps.integration_slug)
+                FROM per_source ps WHERE ps.employee_id = d.employee_id) AS sources
       FROM deduped d
       GROUP BY d.employee_id
     ),
     -- For each unassigned tracker, what's their TOTAL tracked across every
-    -- project they touched this month (Personio + awork, deduped per day)?
+    -- project they touched this month (all sources, deduped per day)?
     -- This is the Option A denominator.
-    emp_all_personio AS (
-      SELECT a.employee_id, a.work_date, SUM(a.duration_minutes) AS minutes
-      FROM attendance a
-      WHERE a.employee_id IN (SELECT employee_id FROM all_tracked)
-        AND a.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY a.employee_id, a.work_date
-    ),
-    emp_all_awork AS (
-      SELECT ul.employee_id, t.work_date, SUM(t.duration_minutes) AS minutes
-      FROM awork_time_entry t
-      JOIN awork_user_link ul ON ul.awork_user_id = t.awork_user_id
-      WHERE ul.employee_id IN (SELECT employee_id FROM all_tracked)
-        AND t.work_date BETWEEN ${month_start}::date AND ${month_end}::date
-      GROUP BY ul.employee_id, t.work_date
+    emp_all_source AS (
+      SELECT r.integration_slug, r.employee_id, r.work_date, SUM(r.duration_minutes) AS minutes
+      FROM time_entry_resolved r
+      WHERE r.employee_id IN (SELECT employee_id FROM all_tracked)
+        AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
+      GROUP BY r.integration_slug, r.employee_id, r.work_date
     ),
     emp_all_deduped AS (
       SELECT employee_id, work_date, MAX(minutes) AS minutes
-      FROM (SELECT * FROM emp_all_personio UNION ALL SELECT * FROM emp_all_awork) u
+      FROM emp_all_source
       GROUP BY employee_id, work_date
     ),
     emp_all_total AS (
@@ -1658,8 +1572,7 @@ export async function unassignedTrackedForProject(
       t.employee_id,
       ec.first_name || ' ' || ec.last_name AS who_name,
       t.total_min,
-      t.has_personio,
-      t.has_awork,
+      t.sources,
       rt.role_tier,
       ea.total_all_min
     FROM all_tracked t
@@ -1735,9 +1648,7 @@ export async function unassignedTrackedForProject(
 
     const margin = billing === "time_and_material" ? revenue.sub(cost) : null;
 
-    const sources: string[] = [];
-    if (Number(raw.has_personio) === 1) sources.push("personio");
-    if (Number(raw.has_awork) === 1) sources.push("awork");
+    const sources: string[] = Array.isArray(raw.sources) ? (raw.sources as string[]) : [];
 
     out.push({
       employee_id: emp_id,

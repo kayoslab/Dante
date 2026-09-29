@@ -124,122 +124,6 @@ export type AssignmentUpdate = {
         notes?: string | null;
     };
 
-export type AworkCompanyItem = {
-        /** Awork Company Id */
-        awork_company_id: string;
-        /** Name */
-        name?: string | null;
-        /** Is External */
-        is_external?: boolean | null;
-        /** Projects Count */
-        projects_count?: number | null;
-        /** Projects In Progress Count */
-        projects_in_progress_count?: number | null;
-        /** Mapped To Customer Id */
-        mapped_to_customer_id?: number | null;
-        /** Mapped To Customer Name */
-        mapped_to_customer_name?: string | null;
-    };
-
-
-
-
-export type AworkImportableProject = {
-        /** Awork Project Id */
-        awork_project_id: string;
-        /** Name */
-        name?: string | null;
-        /** Project Key */
-        project_key?: string | null;
-        /** Awork Company Id */
-        awork_company_id?: string | null;
-        /** Awork Company Name */
-        awork_company_name?: string | null;
-        /** Start Date */
-        start_date?: string | null;
-        /** Due Date */
-        due_date?: string | null;
-        /** Closed On */
-        closed_on?: string | null;
-        /** Time Budget Hours */
-        time_budget_hours?: number | null;
-        /** Project Status Type */
-        project_status_type?: string | null;
-        /** Project Status Name */
-        project_status_name?: string | null;
-        /** Description */
-        description?: string | null;
-        /**
-         * N Time Entries
-         * @default 0
-         */
-        n_time_entries: number;
-        /** Mapped To Customer Id */
-        mapped_to_customer_id?: number | null;
-        /** Mapped To Customer Name */
-        mapped_to_customer_name?: string | null;
-    };
-
-export type AworkProjectItem = {
-        /** Awork Project Id */
-        awork_project_id: string;
-        /** Name */
-        name?: string | null;
-        /** Project Key */
-        project_key?: string | null;
-        /** Awork Company Id */
-        awork_company_id?: string | null;
-        /** Awork Company Name */
-        awork_company_name?: string | null;
-        /** Is Billable By Default */
-        is_billable_by_default?: boolean | null;
-        /** Is External */
-        is_external?: boolean | null;
-        /** Mapped To Project Id */
-        mapped_to_project_id?: number | null;
-        /** Mapped To Project Name */
-        mapped_to_project_name?: string | null;
-        /** Mapped To Customer Name */
-        mapped_to_customer_name?: string | null;
-        /**
-         * N Time Entries
-         * @default 0
-         */
-        n_time_entries: number;
-    };
-
-
-export type AworkUserItem = {
-        /** Awork User Id */
-        awork_user_id: string;
-        /** First Name */
-        first_name?: string | null;
-        /** Last Name */
-        last_name?: string | null;
-        /** Email */
-        email?: string | null;
-        /** Position */
-        position?: string | null;
-        /** Title */
-        title?: string | null;
-        /** Is Archived */
-        is_archived?: boolean | null;
-        /** Is Deactivated */
-        is_deactivated?: boolean | null;
-        /** Is External */
-        is_external?: boolean | null;
-        /** Mapped To Employee Id */
-        mapped_to_employee_id?: number | null;
-        /** Mapped To Employee Name */
-        mapped_to_employee_name?: string | null;
-        /**
-         * N Time Entries
-         * @default 0
-         */
-        n_time_entries: number;
-    };
-
-
 export type BenchSummary = {
         /** Total Loaded Cost */
         total_loaded_cost: string;
@@ -275,9 +159,70 @@ export type CalendarAssignment = {
         daily_rate_eur?: string | null;
     };
 
+/** An enabled integration as the UI sees it (`/api/integrations`). */
+export type IntegrationSummary = {
+        slug: string;
+        display_name: string;
+        provider: string;
+        capabilities: string[];
+    };
+
+export type IntegrationsResponse = {
+        integrations: IntegrationSummary[];
+        /** The integration the import policy points at, if any. */
+        import_source: {
+            slug: string;
+            display_name: string;
+            customers: boolean;
+            projects: boolean;
+        } | null;
+    };
+
+/** A record in an external tool with its mapping status
+ * (`/api/integrations/[slug]/records`). */
+export type ExternalRecordItem = {
+        integration_slug: string;
+        entity_type: "person" | "project" | "company";
+        external_id: string;
+        name?: string | null;
+        /** Person: e-mail. Project: company name. */
+        secondary?: string | null;
+        active?: boolean | null;
+        is_external?: boolean | null;
+        billable?: boolean | null;
+        parent_external_id?: string | null;
+        parent_name?: string | null;
+        mapped_to?: {
+            dante_type: "employee" | "freelancer" | "project" | "customer";
+            dante_id: number;
+            name?: string | null;
+            customer_name?: string | null;
+        } | null;
+        /** @default 0 */
+        n_entries: number;
+        start_date?: string | null;
+        due_date?: string | null;
+        closed_on?: string | null;
+        time_budget_hours?: number | null;
+        status_type?: string | null;
+        status_name?: string | null;
+        description?: string | null;
+    };
+
+export type ImportableProjectItem = ExternalRecordItem & {
+        company_mapped_to?: { dante_type: "customer"; dante_id: number; name?: string | null } | null;
+    };
+
+/** An external record linked to a Dante entity (`/api/links`). */
+export type LinkItem = ExternalRecordItem & {
+        integration_name: string;
+        mapped_at: string;
+    };
+
 export type CalendarTrackedEntry = {
         project_name: string;
         hours: number;
+        /** Integration slug the time came from. */
         source: string;
     };
 
@@ -295,28 +240,28 @@ export type CalendarCell = {
         allocation_pct: string;
         /**
          * Cell load as a fraction of an 8h day. Which signal feeds it
-         * depends on `load_kind`: past days score awork tracked hours
-         * only, or Personio attendance when there are none (> 1.0 =
-         * overtime); today and future days score the plan
-         * only — sum over projects of max(manual_allocation,
-         * awork_planned/8) — (> 1.0 = overbooked). Manual + awork on
-         * the same project collapse to max (same work, two views)
-         * rather than summing. Not scaled by weekly FTE.
+         * depends on `load_kind`: past days score delivery-tool tracked
+         * hours only, or HRIS attendance when there are none (> 1.0 =
+         * overtime); today and future days score the plan only — sum over
+         * projects of max(manual_allocation, planned/8) — (> 1.0 =
+         * overbooked). Manual + planned on the same project collapse to
+         * max (same work, two views) rather than summing. Not scaled by
+         * weekly FTE.
          */
         load: string;
         /**
          * Which signal `load` was computed from: "actual" for days
-         * before today (awork tracked hours), "planned" for today and
-         * later (manual allocation + awork Planner).
+         * before today (tracked hours), "planned" for today and later
+         * (manual allocation + planner bookings).
          */
         load_kind: "planned" | "actual";
         /**
-         * For `load_kind = "actual"`: which system the hours came from.
-         * "awork" when any awork time exists for the day, "personio"
-         * when none does and Personio attendance stood in, null when
-         * nothing was tracked anywhere. Always null on planned cells.
+         * For `load_kind = "actual"`: which kind of source the hours came
+         * from. "delivery" when any delivery-tool time exists for the day,
+         * "attendance" when none does and HRIS attendance stood in, null
+         * when nothing was tracked anywhere. Always null on planned cells.
          */
-        actual_source: "awork" | "personio" | null;
+        actual_source: "delivery" | "attendance" | null;
         /** On Vacation */
         on_vacation: boolean;
         /** Vacation Type */
@@ -324,20 +269,21 @@ export type CalendarCell = {
         /** Assignments */
         assignments: CalendarAssignment[];
         /**
-         * Personio-attendance hours for this cell — the corner number on
-         * the calendar grid. Compare against `allocation_pct` (= planned
-         * load including awork bookings rolled up by the sync) to spot
-         * "she was planned for 100% but clocked 4h" gaps.
+         * HRIS attendance hours for this cell (the primary `people`
+         * integration) — the corner number on the calendar grid. Compare
+         * against `allocation_pct` to spot "planned for 100% but clocked
+         * 4h" gaps.
          * @default 0
          */
         tracked_hours: number;
         /**
-         * awork-time-entry hours for this cell. Surfaced in the tooltip
-         * via `tracked_entries`; the corner number stays on the
-         * Personio signal so the two numbers can be visually compared.
+         * Delivery-tool tracked hours for this cell (every other
+         * time-entry integration). Surfaced in the tooltip via
+         * `tracked_entries`; the corner number stays on attendance so the
+         * two can be compared.
          * @default 0
          */
-        awork_tracked_hours: number;
+        delivery_tracked_hours: number;
         /**
          * Tracked Entries
          * @default []
@@ -1302,7 +1248,7 @@ export type MonthlyBreakdown = {
         /** Tracked Revenue */
         tracked_revenue?: string | null;
         /**
-         * Has Personio Mapping
+         * Has a time-tracking mapping (any integration)
          * @default false
          */
         has_personio_mapping: boolean;
@@ -1315,7 +1261,7 @@ export type MonthlyBreakdown = {
         has_freelancer_hours: boolean;
         /** Total freelancer hours entered this month (all freelancer
          * assignments). Distinct from `tracked_hours`, which is
-         * Personio/awork employee attendance only. */
+         * employee tracked time only. */
         freelancer_hours?: string;
         /** Assignments */
         assignments: MonthlyAssignmentRow[];
@@ -1394,36 +1340,11 @@ export type MonthlySeriesPoint = {
         /** Tracked Revenue */
         tracked_revenue?: string | null;
         /**
-         * Has Personio Mapping
+         * Has a time-tracking mapping (any integration)
          * @default false
          */
         has_personio_mapping: boolean;
     };
-
-export type PersonioProjectItem = {
-        /** Personio Project Id */
-        personio_project_id: string;
-        /** Name */
-        name: string;
-        /** Active */
-        active?: boolean | null;
-        /** Parent Id */
-        parent_id?: string | null;
-        /** Parent Name */
-        parent_name?: string | null;
-        /** Mapped To Project Id */
-        mapped_to_project_id?: number | null;
-        /** Mapped To Project Name */
-        mapped_to_project_name?: string | null;
-        /** Mapped To Customer Name */
-        mapped_to_customer_name?: string | null;
-        /**
-         * N Attendance Entries
-         * @default 0
-         */
-        n_attendance_entries: number;
-    };
-
 
 /** Per-month detail returned by `/api/reports/portfolio-rentability/month`.
  * Mirrors the wire shape the report's income-statement client reads —

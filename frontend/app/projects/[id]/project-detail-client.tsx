@@ -18,8 +18,7 @@ import { FreelancerHoursCard } from "@/components/project/freelancer-hours-card"
 import { MergeProjectDialog } from "@/components/project/merge-project-dialog";
 import { ProjectSdmCard } from "@/components/project/project-sdm-card";
 import { ProjectEconomicsCard } from "@/components/project/project-economics";
-import { AworkLinkCard } from "@/components/project/awork-link-card";
-import { PersonioLinkCard } from "@/components/project/personio-link-card";
+import { EntityLinkCards } from "@/components/integrations/entity-link-cards";
 import { ProjectLoggedTimeCard } from "@/components/project/project-logged-time-card";
 import { ProjectMonthlyBreakdownCard } from "@/components/project/project-monthly-breakdown";
 import { ProjectTrendChart } from "@/components/project/project-trend-chart";
@@ -212,8 +211,7 @@ function ProjectBody({
 
         <div className="space-y-6">
           <ProjectEconomicsCard economics={data.economics} />
-          <PersonioLinkCard projectId={data.project_id} />
-          <AworkLinkCard projectId={data.project_id} />
+          <EntityLinkCards danteType="project" danteId={data.project_id} />
           <ProjectSdmCard
             projectId={data.project_id}
             viewerRole={viewer_role}
