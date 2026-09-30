@@ -57,7 +57,10 @@ ENV DATABASE_URL=postgresql://build:build@localhost:1/build_placeholder
 # Next.js standalone output + the bundled migration runner. Both end up
 # under dist/ — `next build` writes .next/standalone, the migrate script
 # writes dist/migrate/migrate.js.
-RUN npm run build && npm run build:migrate
+# `check:shell-csp` runs against the fresh build output: fails the image
+# if a prerendered shell contains an inline script the CSP nonce/hash
+# policy in proxy.ts would block (see lib/csp/shell-hashes.ts).
+RUN npm run build && npm run check:shell-csp && npm run build:migrate
 
 # --- runner -------------------------------------------------------------
 

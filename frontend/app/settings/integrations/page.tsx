@@ -15,9 +15,6 @@ import { CredentialStateBadge, formatWhen } from "./_status";
 
 export const metadata = { title: "Integrations — Dante" };
 
-// Status reflects the secret store and the last sync; never pre-render.
-export const dynamic = "force-dynamic";
-
 export default async function IntegrationsPage() {
   const ctx = await requireSession();
   if (!hasRole(ctx, "admin")) forbidden();

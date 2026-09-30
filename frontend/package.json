@@ -14,6 +14,7 @@
     "build:migrate": "tsx scripts/build-migrate.ts",
     "check:integration-readonly": "tsx scripts/check-integration-readonly.ts",
     "check:db-locality": "tsx scripts/check-db-locality.ts",
+    "check:shell-csp": "tsx scripts/check-shell-csp.ts",
     "check:types": "tsc --noEmit",
     "test": "tsx --test 'lib/**/*.test.ts'",
     "check": "npm run check:types && npm run check:integration-readonly && npm run check:db-locality && npm test"

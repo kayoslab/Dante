@@ -1,4 +1,5 @@
 /** Shared helpers for Next.js route handlers: HTTP error envelope + auth. */
+import { unstable_rethrow } from "next/navigation";
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
@@ -115,6 +116,12 @@ export async function handle(
     const data = await fn();
     return NextResponse.json(data);
   } catch (err) {
+    // Next.js signals "bail out of prerendering" / redirect / notFound by
+    // throwing. With Cache Components, GET handlers are attempted at
+    // build time and the first `headers()` / `cookies()` read throws
+    // one of these. Swallowing it here turned the bail-out into a
+    // logged 500 during `next build`. Rethrow framework internals first.
+    unstable_rethrow(err);
     if (err instanceof HTTPError) {
       return NextResponse.json(
         { detail: err.message, code: err.code },

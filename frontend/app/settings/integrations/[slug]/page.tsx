@@ -22,8 +22,6 @@ import { CredentialStateBadge, formatWhen } from "../_status";
 
 export const metadata = { title: "Integration — Dante" };
 
-export const dynamic = "force-dynamic";
-
 const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   missing_params: "The provider didn't send back a code. Try authorizing again.",
   missing_cookie: "The authorization session expired before you returned. Try again.",

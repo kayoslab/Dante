@@ -7,10 +7,6 @@ import { listIntegrations } from "@/lib/db/queries/integration";
 
 export const metadata = { title: "Run sync — Dante" };
 
-// The Sync UI streams the result of a multi-minute Lambda invoke;
-// pre-rendering it would lose the running state across navigations.
-export const dynamic = "force-dynamic";
-
 export default async function SyncPage() {
   const ctx = await requireSession();
   if (!hasRole(ctx, "admin")) forbidden();

@@ -21,6 +21,7 @@
  * Dante deploy is the safest way to pick up newly-added operations
  * before the cache TTL elapses. */
 import { OpenApiGeneratorV31 } from "@asteasolutions/zod-to-openapi";
+import { connection } from "next/server";
 import { NextResponse, type NextRequest } from "next/server";
 
 import "@/lib/agent/operations";
@@ -28,6 +29,11 @@ import "@/lib/agent/operations";
 import { agentRegistry } from "@/lib/agent/openapi-registry";
 
 export async function GET(req: NextRequest) {
+  // Under Cache Components a GET handler with no request read would be
+  // prerendered at build time — with the build container's NEXTAUTH_URL
+  // (unset) or a placeholder baked into `servers[].url`. Force request
+  // time so the document always reflects the serving deployment.
+  await connection();
   const generator = new OpenApiGeneratorV31(agentRegistry.definitions);
   const document = generator.generateDocument({
     openapi: "3.1.0",

@@ -29,6 +29,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { auth } from "@/lib/auth";
+import { SHELL_INLINE_SCRIPT_HASHES } from "@/lib/csp/shell-hashes";
 
 const PUBLIC_PATHS = ["/login"];
 
@@ -90,11 +91,18 @@ function buildCsp(req: NextRequest): CspResult | null {
 
   const directives = [
     "default-src 'self'",
-    // `'strict-dynamic'` lets nonced scripts dynamically import more
-    // scripts without us having to enumerate hosts. Dev mode needs
-    // `'unsafe-eval'` for React's enhanced error-overlay debugger and
-    // Turbopack/Webpack HMR.
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ""}`,
+    // Three sources, each load-bearing under Cache Components (PPR):
+    //  - `'self'`  — the static shell's `<script src="/_next/…">` tags
+    //    are prerendered at build time and carry NO nonce. Do not add
+    //    `'strict-dynamic'`: it makes the browser ignore `'self'`, which
+    //    blocks the shell's chunks and kills hydration on every route.
+    //  - `'nonce-…'` — everything Next streams at request time (flight
+    //    data pushes, Suspense `$RC` completions) is tagged per request.
+    //  - `'sha256-…'` — the shell's constant inline bootstrap(s); see
+    //    lib/csp/shell-hashes.ts and the post-build guard.
+    // Dev mode needs `'unsafe-eval'` for React's enhanced error-overlay
+    // debugger and Turbopack HMR.
+    `script-src 'self' 'nonce-${nonce}' ${SHELL_INLINE_SCRIPT_HASHES.map((h) => `'${h}'`).join(" ")}${isDev ? " 'unsafe-eval'" : ""}`,
     // Tailwind utility classes + Recharts inline transforms produce
     // inline `<style>` tags we can't nonce.
     "style-src 'self' 'unsafe-inline'",

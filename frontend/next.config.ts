@@ -46,6 +46,14 @@ const nextConfig: NextConfig = {
   // Next only runs the plugin on files with JSX/hooks, so the build-time
   // cost is small.
   reactCompiler: true,
+  // Cache Components (= Partial Prerendering in Next 16): every route
+  // prerenders a static shell — layout chrome + the route's loading.tsx
+  // fallback — and the session-gated content streams in behind the
+  // per-route Suspense boundary. Nothing here is server-cached (all data
+  // is per-user and live); the win is instant shells on navigation.
+  cacheComponents: true,
+  // One prefetched shell per route instead of one request per link.
+  partialPrefetching: true,
   // Opt into the `forbidden()` / `unauthorized()` helpers from
   // `next/navigation`. Without this flag the helpers fall through to
   // the generic error boundary (500), which is why /reports/salary, /settings

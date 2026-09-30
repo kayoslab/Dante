@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 import { Providers } from "./providers";
 import { TopNav } from "@/components/layout/top-nav";
+import { TopNavSkeleton } from "@/components/layout/top-nav-skeleton";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -36,7 +38,13 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <Providers>
-          <TopNav />
+          {/* TopNav reads the session (cookies). Behind Suspense so the
+              layout prerenders into the static shell and the nav streams
+              in per request — without this every route, even /_not-found,
+              blocks on the session read under Cache Components. */}
+          <Suspense fallback={<TopNavSkeleton />}>
+            <TopNav />
+          </Suspense>
           <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-8">
             {children}
           </main>

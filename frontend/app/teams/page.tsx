@@ -9,9 +9,6 @@ import { hasRole, requireSession } from "@/lib/auth/session";
 
 export const metadata = { title: "Teams — Dante" };
 
-// Headcount + financials depend on live assignment data; never cache.
-export const dynamic = "force-dynamic";
-
 /** Manager/admin-only team index. Not in nav — reached from the home
  * "Per team" bench rollup and from the `/employees` Team column.
  * Detail pages live at `/teams/[slug]`. */

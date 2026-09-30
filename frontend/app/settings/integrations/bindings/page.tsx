@@ -12,8 +12,6 @@ import { parseRule, RULE_CATALOG } from "@/lib/integrations/core/rules";
 
 export const metadata = { title: "Sources & rules — Dante" };
 
-export const dynamic = "force-dynamic";
-
 /** The logical connection between integrations and Dante: which source
  * feeds each capability (in priority order) and the per-capability rules
  * the sync applies around them. */
