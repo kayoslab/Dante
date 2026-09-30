@@ -19,6 +19,7 @@ export type GapBasis = "fix" | "total";
 
 export function useSalaryBands(grouping: BandGrouping) {
   return useQuery<SalaryBandRow[]>({
+    // Keep in sync with app/reports/salary/page.tsx prefetch.
     queryKey: ["salary", "bands", grouping],
     queryFn: async () => {
       return apiGet<SalaryBandRow[]>("/salary/bands", { query: { grouping } });
@@ -29,6 +30,7 @@ export function useSalaryBands(grouping: BandGrouping) {
 
 export function useSalaryOutliers(grouping: BandGrouping) {
   return useQuery<SalaryOutlier[]>({
+    // Keep in sync with app/reports/salary/page.tsx prefetch.
     queryKey: ["salary", "outliers", grouping],
     queryFn: async () => {
       return apiGet<SalaryOutlier[]>("/salary/outliers", {
@@ -41,6 +43,7 @@ export function useSalaryOutliers(grouping: BandGrouping) {
 
 export function useGenderGap(grouping: GapGrouping, basis: GapBasis) {
   return useQuery<GenderGapRow[]>({
+    // Keep in sync with app/reports/salary/page.tsx prefetch.
     queryKey: ["salary", "gender-gap", grouping, basis],
     queryFn: async () => {
       return apiGet<GenderGapRow[]>("/salary/gender-gap", { query: { grouping, basis } });

@@ -9,15 +9,24 @@ import { QueryGuard } from "@/components/ui/query-guard";
 
 import { EntityLinkCards } from "@/components/integrations/entity-link-cards";
 import { EmployeeFlagsCard } from "@/components/employee/employee-flags-card";
-import { EmployeeSalaryChart } from "@/components/employee/employee-salary-chart";
 import { InspectDialog } from "@/components/employee/inspect-dialog";
-import {
-  EmployeeMonthlyCard,
-  EmployeeTrendChartCard,
-} from "@/components/consultant/consultant-monthly-breakdown";
+import { EmployeeMonthlyCard } from "@/components/consultant/consultant-monthly-breakdown";
 import { useEmployee, useEmployeeAllocations } from "@/lib/api/employees";
 import type { EmployeeDetail } from "@/lib/api/employees";
 import { formatEUR } from "@/lib/format";
+import dynamic from "next/dynamic";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// Chart components pull in recharts (~400 KB minified). Load them on
+// demand so the page shell, KPIs and tables paint without it.
+const EmployeeTrendChartCard = dynamic(
+  () => import("@/components/consultant/consultant-trend-chart").then((m) => m.EmployeeTrendChartCard),
+  { loading: () => <Skeleton className="h-96 w-full" /> },
+);
+const EmployeeSalaryChart = dynamic(
+  () => import("@/components/employee/employee-salary-chart").then((m) => m.EmployeeSalaryChart),
+  { loading: () => <Skeleton className="h-96 w-full" /> },
+);
 
 export function EmployeeDetailClient({
   employee_id,

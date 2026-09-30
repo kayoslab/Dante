@@ -7,6 +7,8 @@ import type { ConsultantTrackedHoursRow, TrackedHoursMonth } from "./types";
 export type { TrackedHoursMonth };
 export type { ConsultantTrackedHoursRow };
 
+// Key shape `["tracked-hours", month, team ?? null]` is prefetched server-side
+// in app/reports/time/page.tsx (month = current, team = null) — keep in sync.
 export function useTrackedHours(month: string, team?: string) {
   return useQuery<TrackedHoursMonth>({
     queryKey: ["tracked-hours", month, team ?? null],

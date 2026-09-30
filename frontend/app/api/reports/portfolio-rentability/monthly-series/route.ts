@@ -7,19 +7,15 @@ import {
 } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { audit } from "@/lib/auth/audit";
-import {
-  addMonths,
-  firstOfMonth,
-  mapWithConcurrency,
-} from "@/lib/db/_monthly-helpers";
-import { computePortfolioMonthlyTotals } from "@/lib/db/queries/portfolio";
+import { firstOfMonth } from "@/lib/db/_monthly-helpers";
+import { buildPortfolioRentabilitySeries } from "@/lib/reports/portfolio-rentability";
 
 /** Portfolio P&L series across a month range (trailing actuals + forecast).
  *
- * For each month: iterates every active project and aggregates revenue
- * (T&M + FP recognized) and cost (T&M + FP this month). Months whose
- * start is in the future are flagged `is_forecast`; the engine projects
- * from committed assignment rows, no speculative pipeline.
+ * Body lives in `lib/reports/portfolio-rentability.ts`
+ * (`buildPortfolioRentabilitySeries`) so the report page can prefetch
+ * the same payload server-side. This route keeps auth, rate-limit,
+ * param validation, and audit.
  *
  * Cost: projects × months. At ~30 active projects × 16 months (12 back
  * + current + 3 ahead) it's ~480 inner calls, so it's tagged with the
@@ -40,22 +36,8 @@ export async function GET(req: NextRequest) {
     if (to_month < from_month) {
       throw Validation("to_month must be >= from_month");
     }
-    const months: string[] = [];
-    let cur = from_month;
-    while (cur <= to_month && months.length < 24) {
-      months.push(cur.slice(0, 7));
-      cur = addMonths(cur, 1);
-    }
 
-    const today = new Date().toISOString().slice(0, 10);
-    // Bounded month fan-out: each month is internally parallel already;
-    // running all 16 at once would just flood the pg pool queue.
-    const points = await mapWithConcurrency(months, 2, async (monthYm) => {
-      const totals = await computePortfolioMonthlyTotals(monthYm);
-      const month_start = `${monthYm}-01`;
-      const is_forecast = month_start > today;
-      return { ...totals, is_forecast };
-    });
+    const result = await buildPortfolioRentabilitySeries(from_raw, to_raw);
 
     await audit(ctx, {
       action: "view_portfolio_rentability_series",
@@ -63,6 +45,6 @@ export async function GET(req: NextRequest) {
       target_id: "portfolio_rentability",
     });
 
-    return { points };
+    return result;
   });
 }

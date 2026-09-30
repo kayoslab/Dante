@@ -28,6 +28,7 @@ export function useCustomerRentabilitySeries(
   to_month: string,
 ) {
   return useQuery<CustomerRentabilitySeries>({
+    // Keep in sync with app/reports/customer-rentability/page.tsx prefetch.
     queryKey: [
       "reports",
       "customer-rentability",
@@ -77,6 +78,7 @@ export type CustomerRentabilityMonth = {
 
 export function useCustomerRentabilityMonth(month: string) {
   return useQuery<CustomerRentabilityMonth>({
+    // Keep in sync with app/reports/customer-rentability/page.tsx prefetch.
     queryKey: ["reports", "customer-rentability", "month", month],
     queryFn: () =>
       apiGet<CustomerRentabilityMonth>("/reports/customer-rentability/month", {

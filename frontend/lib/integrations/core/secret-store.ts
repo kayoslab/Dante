@@ -145,7 +145,15 @@ class EnvSecretStore implements SecretStore {
 /** Upsert `key=value` lines in the repo-root .env (dev layout) or the
  * local .env. Kept from the pre-adapter token rotation. */
 async function rewriteDotEnv(kv: Record<string, string>): Promise<void> {
-  const candidates = [path.resolve("../.env"), path.resolve(".env")];
+  // Static `process.cwd()`-anchored paths (with the turbopackIgnore hint)
+  // so Turbopack's output tracer doesn't treat the relative `../.env`
+  // resolve as "this module may read anything" and copy the whole
+  // project tree into `.next/standalone`.
+  const cwd = process.cwd();
+  const candidates = [
+    path.join(/*turbopackIgnore: true*/ cwd, "..", ".env"),
+    path.join(/*turbopackIgnore: true*/ cwd, ".env"),
+  ];
   let target = candidates[0];
   for (const c of candidates) {
     try {

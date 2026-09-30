@@ -22,6 +22,7 @@ export function usePortfolioRentabilitySeries(
   to_month: string,
 ) {
   return useQuery<PortfolioRentabilitySeries>({
+    // Keep in sync with app/reports/portfolio-rentability/page.tsx prefetch.
     queryKey: [
       "reports",
       "portfolio-rentability",

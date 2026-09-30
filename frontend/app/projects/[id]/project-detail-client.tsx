@@ -21,10 +21,18 @@ import { ProjectEconomicsCard } from "@/components/project/project-economics";
 import { EntityLinkCards } from "@/components/integrations/entity-link-cards";
 import { ProjectLoggedTimeCard } from "@/components/project/project-logged-time-card";
 import { ProjectMonthlyBreakdownCard } from "@/components/project/project-monthly-breakdown";
-import { ProjectTrendChart } from "@/components/project/project-trend-chart";
 import { AddAssignmentDialog } from "@/components/assignment/add-assignment-dialog";
 import { AssignmentsTable } from "@/components/assignment/assignments-table";
 import { formatEUR, formatRate } from "@/lib/format";
+import dynamic from "next/dynamic";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// Chart components pull in recharts (~400 KB minified). Load them on
+// demand so the page shell, KPIs and tables paint without it.
+const ProjectTrendChart = dynamic(
+  () => import("@/components/project/project-trend-chart").then((m) => m.ProjectTrendChart),
+  { loading: () => <Skeleton className="h-96 w-full" /> },
+);
 
 export function ProjectDetailClient({
   project_id,

@@ -19,6 +19,9 @@ export type TeamMonthlySeries = {
   points: TeamMonthlySeriesPoint[];
 };
 
+// Key shape `["team", slug, "monthly-series", from_month, to_month]` is
+// prefetched server-side in app/teams/[slug]/page.tsx (current month -6 / +3)
+// — keep in sync.
 export function useTeamMonthlySeries(
   slug: string,
   from_month: string,
@@ -102,6 +105,8 @@ export type TeamMonthResponse = {
   project_mix: TeamMonthProjectMixRow[];
 };
 
+// Key shape `["team", slug, "month", month]` is prefetched server-side in
+// app/teams/[slug]/page.tsx (month = current) — keep in sync.
 export function useTeamMonth(slug: string, month: string) {
   return useQuery<TeamMonthResponse>({
     queryKey: ["team", slug, "month", month],

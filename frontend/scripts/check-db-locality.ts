@@ -23,6 +23,13 @@ const SCAN_DIRS = [
   path.join(FRONTEND_ROOT, "lib/actions"),
   path.join(FRONTEND_ROOT, "lib/api"),
   path.join(FRONTEND_ROOT, "lib/auth"),
+  // `lib/reports` holds the report builders shared by /api/reports/*
+  // routes and the Server Component pages that prefetch the same data.
+  // They compose named query functions + pure math, same rule as actions.
+  path.join(FRONTEND_ROOT, "lib/reports"),
+  // `components/layout` renders on every page (top nav) — keep it on the
+  // named-query path too.
+  path.join(FRONTEND_ROOT, "components/layout"),
   // `lib/sync` and `lib/integrations` are the data-ingest tier — sync
   // code legitimately reads and writes through Drizzle for the typed
   // upsert path. `check-integration-readonly` covers the external write

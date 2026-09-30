@@ -5,7 +5,6 @@ import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { TeamForecastSection } from "@/components/team/team-forecast-section";
-import { TeamMonthlyPLChart } from "@/components/team/team-monthly-pl-chart";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -24,6 +23,14 @@ import {
 import { formatEUR } from "@/lib/format";
 import { isoMonthOf, monthLabel, shiftMonth } from "@/lib/month";
 import { cn } from "@/lib/utils";
+import dynamic from "next/dynamic";
+
+// Chart components pull in recharts (~400 KB minified). Load them on
+// demand so the page shell, KPIs and tables paint without it.
+const TeamMonthlyPLChart = dynamic(
+  () => import("@/components/team/team-monthly-pl-chart").then((m) => m.TeamMonthlyPLChart),
+  { loading: () => <Skeleton className="h-96 w-full" /> },
+);
 
 /** Client half of the team detail page. Server pre-computes `team_name`
  * + the forecast-section's "upcoming" list (anchored at now) and hands

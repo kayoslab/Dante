@@ -218,3 +218,47 @@ export async function employeeExists(employee_id: number): Promise<boolean> {
     .where(eq(employeeCurrent.employee_id, employee_id));
   return rows.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// Nav display name
+// ---------------------------------------------------------------------------
+
+/** Per-process cache of the signed-in user's display name for the top
+ * nav. The nav renders on every page, so without this every navigation
+ * paid a `employee_current` round-trip just to draw avatar initials.
+ * Names change on Personio sync (rare); a 5-minute TTL is plenty. Sized
+ * for a 40-user org — a Map, not Redis. Mirrors the `isUserDisabled`
+ * cache in lib/auth/session.ts. */
+const NAME_CACHE_TTL_MS = 5 * 60_000;
+const nameCache = new Map<
+  number,
+  { name: EmployeeDisplayName; expires_at: number }
+>();
+
+export type EmployeeDisplayName = {
+  first_name: string | null;
+  last_name: string | null;
+};
+
+export async function getEmployeeDisplayName(
+  employee_id: number,
+): Promise<EmployeeDisplayName> {
+  const now = Date.now();
+  const cached = nameCache.get(employee_id);
+  if (cached && cached.expires_at > now) return cached.name;
+
+  const [row] = await db
+    .select({
+      first_name: employeeCurrent.first_name,
+      last_name: employeeCurrent.last_name,
+    })
+    .from(employeeCurrent)
+    .where(eq(employeeCurrent.employee_id, employee_id))
+    .limit(1);
+  const name: EmployeeDisplayName = {
+    first_name: row?.first_name ?? null,
+    last_name: row?.last_name ?? null,
+  };
+  nameCache.set(employee_id, { name, expires_at: now + NAME_CACHE_TTL_MS });
+  return name;
+}

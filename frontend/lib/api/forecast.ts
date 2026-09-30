@@ -72,6 +72,7 @@ export type ForecastReport = {
 
 export function useForecast() {
   return useQuery<ForecastReport>({
+    // Keep in sync with app/reports/forecast/page.tsx prefetch.
     queryKey: ["reports", "forecast"],
     queryFn: () => apiGet<ForecastReport>("/reports/forecast"),
     staleTime: 30_000,

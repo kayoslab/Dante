@@ -14,8 +14,6 @@ import {
 } from "@/components/ui/card";
 import { Kpi, KpiGrid } from "@/components/ui/kpi";
 import { Skeleton } from "@/components/ui/skeleton";
-import { UtilizationSparkline } from "@/components/utilization/utilization-sparkline";
-import { UtilizationTrendChart } from "@/components/utilization/utilization-trend-chart";
 import {
   type BillableUtilGroup,
   type UtilizationGroupAggregate,
@@ -28,6 +26,18 @@ import { formatEUR } from "@/lib/format";
 import { isoMonthOf, monthLabel, shiftMonth } from "@/lib/month";
 import { teamSlug } from "@/lib/team-slug";
 import { cn } from "@/lib/utils";
+import dynamic from "next/dynamic";
+
+// Chart components pull in recharts (~400 KB minified). Load them on
+// demand so the page shell, KPIs and tables paint without it.
+const UtilizationSparkline = dynamic(
+  () => import("@/components/utilization/utilization-sparkline").then((m) => m.UtilizationSparkline),
+  { loading: () => <Skeleton className="h-8 w-full" /> },
+);
+const UtilizationTrendChart = dynamic(
+  () => import("@/components/utilization/utilization-trend-chart").then((m) => m.UtilizationTrendChart),
+  { loading: () => <Skeleton className="h-96 w-full" /> },
+);
 
 /** Client half of the utilization report. Owns selected-month state for
  * the per-month KPI / rollup / consultant blocks; the trend chart is

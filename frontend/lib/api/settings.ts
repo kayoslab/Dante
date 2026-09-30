@@ -8,6 +8,8 @@ import { putSettingAction } from "@/lib/actions/link";
 
 export type { Setting };
 
+// `settingKeys.all` is prefetched server-side in app/settings/page.tsx as the
+// literal ["settings"] (this is a "use client" module) — keep in sync.
 export const settingKeys = {
   all: ["settings"] as const,
   detail: (key: string) => [...settingKeys.all, key] as const,

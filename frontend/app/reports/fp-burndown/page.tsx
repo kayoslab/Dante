@@ -1,12 +1,15 @@
+import { HydrationBoundary, dehydrate } from "@tanstack/react-query";
 import { forbidden } from "next/navigation";
 
 import { audit } from "@/lib/auth/audit";
 import { hasRole, requireSession } from "@/lib/auth/session";
+import { computeFpBurndownForMonth } from "@/lib/db/queries/fp-burndown";
+import { isoMonthOf } from "@/lib/month";
+import { getQueryClient } from "@/lib/query/server";
 
 import { FpBurndownClient } from "./fp-burndown-client";
 
 export const metadata = { title: "Fixed-price burn-down — Dante" };
-export const dynamic = "force-dynamic";
 
 export default async function FpBurndownPage() {
   const ctx = await requireSession();
@@ -18,5 +21,24 @@ export default async function FpBurndownPage() {
     target_id: "fp_burndown",
   });
 
-  return <FpBurndownClient />;
+  // Prefetch the month the client selects on first render
+  // (`isoMonthOf(new Date())` in fp-burndown-client.tsx). Key must match
+  // `useFpBurndownMonth` in lib/api/fp-burndown.ts exactly; the payload is
+  // what app/api/reports/fp-burndown/month/route.ts returns.
+  // A server/browser timezone mismatch around midnight on the month
+  // boundary only makes this prefetch miss — the client then fetches as
+  // before. Harmless.
+  const qc = getQueryClient();
+  const month = isoMonthOf(new Date());
+  const today = new Date().toISOString().slice(0, 10);
+  await qc.prefetchQuery({
+    queryKey: ["reports", "fp-burndown", "month", month],
+    queryFn: () => computeFpBurndownForMonth(month, today),
+  });
+
+  return (
+    <HydrationBoundary state={dehydrate(qc)}>
+      <FpBurndownClient />
+    </HydrationBoundary>
+  );
 }

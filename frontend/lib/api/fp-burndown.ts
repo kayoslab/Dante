@@ -59,6 +59,7 @@ export type FpBurndownMonth = {
 
 export function useFpBurndownMonth(month: string) {
   return useQuery<FpBurndownMonth>({
+    // Keep in sync with app/reports/fp-burndown/page.tsx prefetch.
     queryKey: ["reports", "fp-burndown", "month", month],
     queryFn: () =>
       apiGet<FpBurndownMonth>("/reports/fp-burndown/month", {

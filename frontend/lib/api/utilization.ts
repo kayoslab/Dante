@@ -55,6 +55,7 @@ export type UtilizationSeries = {
 
 export function useUtilizationSeries(from_month: string, to_month: string) {
   return useQuery<UtilizationSeries>({
+    // Keep in sync with app/reports/utilization/page.tsx prefetch.
     queryKey: ["reports", "utilization", "series", from_month, to_month],
     queryFn: () =>
       apiGet<UtilizationSeries>("/reports/utilization/monthly-series", {
@@ -110,6 +111,7 @@ export type UtilizationMonthDetail = {
 
 export function useUtilizationMonth(month: string) {
   return useQuery<UtilizationMonthDetail>({
+    // Keep in sync with app/reports/utilization/page.tsx prefetch.
     queryKey: ["reports", "utilization", "month", month],
     queryFn: () =>
       apiGet<UtilizationMonthDetail>("/reports/utilization/month", {

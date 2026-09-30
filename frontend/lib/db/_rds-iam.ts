@@ -68,7 +68,11 @@ let cachedCa: Buffer | null = null;
  * `ssl.ca` in pg / pg.Pool config. Cached after first read. */
 export function getRdsCaBundle(): Buffer {
   if (cachedCa !== null) return cachedCa;
-  cachedCa = fs.readFileSync(CA_BUNDLE_PATH);
+  // `turbopackIgnore`: the path comes from env / a fixed Docker location,
+  // not from the source tree. Without the hint Turbopack's output tracer
+  // treats this read as "may touch any file" and copies the whole
+  // frontend tree (graphify-out, dist, lockfiles) into .next/standalone.
+  cachedCa = fs.readFileSync(/*turbopackIgnore: true*/ CA_BUNDLE_PATH);
   return cachedCa;
 }
 

@@ -34,6 +34,8 @@ export function useEmployees(filters: {
   });
 }
 
+// Prefetched server-side in app/reports/time/page.tsx under
+// employeeKeys.teams() — keep in sync.
 export function useEmployeeTeams() {
   return useQuery<string[]>({
     queryKey: employeeKeys.teams(),

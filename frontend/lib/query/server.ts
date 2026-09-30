@@ -15,7 +15,11 @@ export const getQueryClient = cache(
     new QueryClient({
       defaultOptions: {
         queries: {
-          staleTime: 30_000,
+          // 60s: every report page re-queried its expensive /api/reports/*
+          // endpoints on each tab switch with the old 30s window. Reports
+          // are month-granular, so a minute of staleness is invisible and
+          // halves the focus-triggered refetch load on RDS.
+          staleTime: 60_000,
           refetchOnWindowFocus: true,
         },
       },

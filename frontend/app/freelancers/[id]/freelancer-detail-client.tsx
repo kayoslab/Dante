@@ -13,11 +13,17 @@ import {
   useDeleteFreelancer,
 } from "@/lib/api/freelancers";
 import { EditFreelancerDialog } from "@/components/freelancer/edit-freelancer-dialog";
-import {
-  FreelancerMonthlyCard,
-  FreelancerTrendChartCard,
-} from "@/components/consultant/consultant-monthly-breakdown";
+import { FreelancerMonthlyCard } from "@/components/consultant/consultant-monthly-breakdown";
 import { formatRate } from "@/lib/format";
+import dynamic from "next/dynamic";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// Chart components pull in recharts (~400 KB minified). Load them on
+// demand so the page shell, KPIs and tables paint without it.
+const FreelancerTrendChartCard = dynamic(
+  () => import("@/components/consultant/consultant-trend-chart").then((m) => m.FreelancerTrendChartCard),
+  { loading: () => <Skeleton className="h-96 w-full" /> },
+);
 
 export function FreelancerDetailClient({
   freelancer_id,

@@ -14,6 +14,8 @@ export type { TeamItem };
 export type { TeamCreate };
 export type { TeamRename };
 
+// `teamKeys.list()` is prefetched server-side in app/settings/page.tsx as the
+// literal ["teams", "list"] (this is a "use client" module) — keep in sync.
 export const teamKeys = {
   all: ["teams"] as const,
   list: () => [...teamKeys.all, "list"] as const,

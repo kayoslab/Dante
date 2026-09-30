@@ -5,7 +5,6 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { GenderGapChart } from "@/components/salary/gender-gap-chart";
 import { SalaryBandChart } from "@/components/salary/salary-band-chart";
 import { SalaryOutliersList } from "@/components/salary/salary-outliers-list";
 import {
@@ -17,6 +16,14 @@ import {
   type GapGrouping,
 } from "@/lib/api/salary-insights";
 import { cn } from "@/lib/utils";
+import dynamic from "next/dynamic";
+
+// Chart components pull in recharts (~400 KB minified). Load them on
+// demand so the page shell, KPIs and tables paint without it.
+const GenderGapChart = dynamic(
+  () => import("@/components/salary/gender-gap-chart").then((m) => m.GenderGapChart),
+  { loading: () => <Skeleton className="h-64 w-full" /> },
+);
 
 const BAND_GROUPINGS: { value: BandGrouping; label: string; hint: string }[] = [
   { value: "tier", label: "Role tier", hint: "junior / advanced / senior / expert" },

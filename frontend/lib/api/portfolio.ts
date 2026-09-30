@@ -14,6 +14,7 @@ export type { BenchSummary };
 
 export function usePortfolioMonthly(month: string) {
   return useQuery<PortfolioMonthly>({
+    // Keep in sync with app/reports/portfolio-rentability/page.tsx prefetch.
     queryKey: ["reports", "portfolio-rentability", "month", month],
     queryFn: async () => {
       return apiGet<PortfolioMonthly>(

@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
-import { PortfolioRentabilityChart } from "@/components/portfolio/portfolio-rentability-chart";
 import { ProjectTable } from "@/components/portfolio/portfolio-project-table";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +22,14 @@ import type { PortfolioMonthly } from "@/lib/api/types";
 import { formatEUR } from "@/lib/format";
 import { isoMonthOf, monthLabel, shiftMonth } from "@/lib/month";
 import { cn } from "@/lib/utils";
+import dynamic from "next/dynamic";
+
+// Chart components pull in recharts (~400 KB minified). Load them on
+// demand so the page shell, KPIs and tables paint without it.
+const PortfolioRentabilityChart = dynamic(
+  () => import("@/components/portfolio/portfolio-rentability-chart").then((m) => m.PortfolioRentabilityChart),
+  { loading: () => <Skeleton className="h-96 w-full" /> },
+);
 
 /** Client half of the portfolio-rentability report.
  *

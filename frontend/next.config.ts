@@ -40,6 +40,12 @@ const nextConfig: NextConfig = {
   // copies this and runs `node server.js` — no `next start`, no full
   // node_modules in the final image, ~10x smaller.
   output: "standalone",
+  // React Compiler (babel-plugin-react-compiler): auto-memoises the ~90
+  // client components so the hand-written useMemo/useCallback stop being
+  // the only thing between a state change and a full subtree re-render.
+  // Next only runs the plugin on files with JSX/hooks, so the build-time
+  // cost is small.
+  reactCompiler: true,
   // Opt into the `forbidden()` / `unauthorized()` helpers from
   // `next/navigation`. Without this flag the helpers fall through to
   // the generic error boundary (500), which is why /reports/salary, /settings

@@ -7,17 +7,16 @@ import {
 } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { audit } from "@/lib/auth/audit";
-import {
-  computeCustomerConcentration,
-  computeCustomerMonthlyAggregates,
-  listEndingProjectsByCustomer,
-} from "@/lib/db/queries/customer-rentability";
-
-const ENDING_WINDOW_DAYS = 90;
+import { buildCustomerRentabilityMonth } from "@/lib/reports/customer-rentability";
 
 /** Selected-month detail for the customer-rentability report: full
  * Pareto table, concentration KPIs, and the "concentration at risk"
- * panel (customers whose biggest project ends in the next 90 days). */
+ * panel (customers whose biggest project ends in the next 90 days).
+ *
+ * Body lives in `lib/reports/customer-rentability.ts`
+ * (`buildCustomerRentabilityMonth`) so the report page can prefetch
+ * the same payload server-side. This route keeps auth, rate-limit,
+ * param validation, and audit. */
 export async function GET(req: NextRequest) {
   return handle(async () => {
     const ctx = await requireApiSession({ minRole: "manager" });
@@ -31,22 +30,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    const to = addDays(today, ENDING_WINDOW_DAYS);
-
-    const [aggregates, ending_projects] = await Promise.all([
-      computeCustomerMonthlyAggregates(monthRaw),
-      listEndingProjectsByCustomer(today, to),
-    ]);
-
-    const concentration = computeCustomerConcentration(aggregates);
-
-    // Sort customers by margin DESC for Pareto display. Negative-margin
-    // customers sink to the bottom (still visible — they're the
-    // money-pit signal).
-    const customers = [...aggregates].sort(
-      (a, b) => Number(b.margin) - Number(a.margin),
-    );
+    const result = await buildCustomerRentabilityMonth(monthRaw);
 
     await audit(ctx, {
       action: "view_customer_rentability_month",
@@ -54,18 +38,6 @@ export async function GET(req: NextRequest) {
       target_id: "customer_rentability",
     });
 
-    return {
-      month: monthRaw,
-      ending_window: { from: today, to },
-      customers,
-      concentration,
-      ending_projects,
-    };
+    return result;
   });
-}
-
-function addDays(iso: string, days: number): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
 }

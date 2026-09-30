@@ -4,7 +4,6 @@ import { useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
-import { CustomerRentabilityChart } from "@/components/customer-rentability/customer-rentability-chart";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -20,6 +19,14 @@ import {
 import { formatEUR } from "@/lib/format";
 import { isoMonthOf, monthLabel, shiftMonth } from "@/lib/month";
 import { cn } from "@/lib/utils";
+import dynamic from "next/dynamic";
+
+// Chart components pull in recharts (~400 KB minified). Load them on
+// demand so the page shell, KPIs and tables paint without it.
+const CustomerRentabilityChart = dynamic(
+  () => import("@/components/customer-rentability/customer-rentability-chart").then((m) => m.CustomerRentabilityChart),
+  { loading: () => <Skeleton className="h-96 w-full" /> },
+);
 
 export function CustomerRentabilityClient() {
   const todayMonth = isoMonthOf(new Date());

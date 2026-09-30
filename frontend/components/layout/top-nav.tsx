@@ -1,8 +1,6 @@
 import Link from "next/link";
-import { eq } from "drizzle-orm";
 
-import { db } from "@/lib/db/client";
-import { employeeCurrent } from "@/lib/db/schema";
+import { getEmployeeDisplayName } from "@/lib/db/queries/employee";
 import { getSession } from "@/lib/auth/session";
 import type { Role } from "@/lib/auth";
 
@@ -40,21 +38,14 @@ export async function TopNav() {
 
   // Pull the linked employee's name so the avatar can render proper
   // initials. Unlinked users (no Personio match) fall back to email.
+  // Cached per process (5 min) — the nav is on every page, so this used
+  // to be a DB round-trip per navigation.
   let first_name: string | null = null;
   let last_name: string | null = null;
   if (session.employee_id !== null) {
-    const [row] = await db
-      .select({
-        first_name: employeeCurrent.first_name,
-        last_name: employeeCurrent.last_name,
-      })
-      .from(employeeCurrent)
-      .where(eq(employeeCurrent.employee_id, session.employee_id))
-      .limit(1);
-    if (row) {
-      first_name = row.first_name;
-      last_name = row.last_name;
-    }
+    ({ first_name, last_name } = await getEmployeeDisplayName(
+      session.employee_id,
+    ));
   }
 
   const visible = LINKS.filter(

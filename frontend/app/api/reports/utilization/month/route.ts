@@ -7,12 +7,15 @@ import {
 } from "@/lib/api/_route-helpers";
 import { enforceRateLimit } from "@/lib/api/rate-limit";
 import { audit } from "@/lib/auth/audit";
-import { computeUtilizationMonthDetail } from "@/lib/db/queries/utilization";
+import { buildUtilizationMonth } from "@/lib/reports/utilization";
 
 /** Selected-month consultant lists: benched (util < 1, with "since N
  * days" duration) and overbooked (util > 1). Refetched when the user
  * scrubs to a different month; the heavier series API stays anchored
- * at "now". */
+ * at "now".
+ *
+ * Body lives in `lib/reports/utilization.ts` (`buildUtilizationMonth`)
+ * so the report page can prefetch the same payload server-side. */
 export async function GET(req: NextRequest) {
   return handle(async () => {
     const ctx = await requireApiSession({ minRole: "manager" });
@@ -23,10 +26,7 @@ export async function GET(req: NextRequest) {
     if (!/^\d{4}-\d{2}$/.test(monthRaw)) {
       throw Validation(`month must be YYYY-MM (got ${JSON.stringify(monthRaw)})`);
     }
-    const today = new Date().toISOString().slice(0, 10);
-    // One pass: consultant lists + realized billable-util aggregates
-    // (billable_util is null for fully-future months).
-    const detail = await computeUtilizationMonthDetail(monthRaw, today);
+    const result = await buildUtilizationMonth(monthRaw);
 
     await audit(ctx, {
       action: "view_utilization_month",
@@ -34,6 +34,6 @@ export async function GET(req: NextRequest) {
       target_id: "utilization",
     });
 
-    return { month: monthRaw, ...detail };
+    return result;
   });
 }
