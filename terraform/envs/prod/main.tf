@@ -532,6 +532,10 @@ resource "aws_inspector2_enabler" "ecr" {
 
   account_ids    = [data.aws_caller_identity.current.account_id]
   resource_types = ["ECR"]
+
+  # The deploy role's own policy grants inspector2:Enable; wait for that
+  # update to land in the same apply.
+  depends_on = [module.github_oidc]
 }
 
 resource "aws_ecr_registry_scanning_configuration" "this" {

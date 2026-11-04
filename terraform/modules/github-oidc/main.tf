@@ -167,6 +167,34 @@ data "aws_iam_policy_document" "deploy" {
     resources = [var.ecr_repository_arn]
   }
 
+  # Inspector v2 + ECR enhanced scanning — prod enables both once the
+  # account is off the Free Plan (`aws_inspector2_enabler`,
+  # `aws_ecr_registry_scanning_configuration`). Enable creates the
+  # Inspector service-linked role on first use, hence the scoped
+  # CreateServiceLinkedRole. Account-level calls with no resource-level
+  # support.
+  statement {
+    effect = "Allow"
+    actions = [
+      "inspector2:Enable",
+      "inspector2:Disable",
+      "inspector2:BatchGetAccountStatus",
+      "ecr:PutRegistryScanningConfiguration",
+      "ecr:GetRegistryScanningConfiguration",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    effect    = "Allow"
+    actions   = ["iam:CreateServiceLinkedRole"]
+    resources = ["arn:aws:iam::*:role/aws-service-role/inspector2.amazonaws.com/AWSServiceRoleForAmazonInspector2"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values   = ["inspector2.amazonaws.com"]
+    }
+  }
+
   # EC2 — full management on the network + compute primitives terraform
   # touches. VPC endpoints, NAT (gateway OR instance), security groups,
   # network interfaces, EIPs, EC2 instances, routes, tags. Enumerating
