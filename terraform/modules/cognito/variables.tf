@@ -169,3 +169,9 @@ variable "pre_token_generation_lambda_arn" {
   default     = null
 }
 
+
+variable "deletion_protection" {
+  description = "Block deletion of the user pool. Users' password hashes and MFA/passkey enrolments can't be exported, so losing the pool forces every user to re-register. Should be true in any env with real users."
+  type        = bool
+  default     = true
+}

@@ -110,6 +110,10 @@ module "cognito" {
   seed_admin_emails = var.seed_admin_emails
   domain_name       = var.domain
 
+  # Prod safety rail — leave on. The pool can't be recreated without
+  # losing every user's password and MFA enrolment.
+  deletion_protection = true
+
   callback_urls = [
     "https://${var.domain}/api/auth/callback/cognito",
   ]

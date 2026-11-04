@@ -48,6 +48,8 @@ resource "aws_cognito_user_pool" "this" {
   # (advanced_security_mode below). ESSENTIALS is the prior default.
   user_pool_tier = var.user_pool_tier
 
+  deletion_protection = var.deletion_protection ? "ACTIVE" : "INACTIVE"
+
   # Email is the sign-in identifier. Username (the internal Cognito identifier)
   # is auto-generated and stable — we store it as `cognito_sub` on app_user.
   username_attributes      = ["email"]
