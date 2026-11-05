@@ -34,8 +34,11 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ callbackUrl?: string; error?: string }>;
 }) {
-  const session = await getSession();
+  // searchParams first: it's the request-time data access that keeps the
+  // page out of the prerender, so Auth.js's crypto in getSession() runs at
+  // request time instead of tripping Next's "unstable value" check.
   const { callbackUrl, error } = await searchParams;
+  const session = await getSession();
   // Reject absolute / protocol-relative URLs — open-redirect prevention.
   const callback = safeCallback(callbackUrl);
   if (session) redirect(callback);
