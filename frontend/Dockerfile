@@ -59,7 +59,8 @@ ENV DATABASE_URL=postgresql://build:build@localhost:1/build_placeholder
 # writes dist/migrate/migrate.js.
 # `check:shell-csp` runs against the fresh build output: fails the image
 # if a prerendered shell contains an inline script the CSP nonce/hash
-# policy in proxy.ts would block (see lib/csp/shell-hashes.ts).
+# policy in proxy.ts would block (see lib/csp/shell-hashes.ts), and writes
+# the Turbopack bootstrap hashes proxy.ts allows at runtime.
 RUN npm run build && npm run check:shell-csp && npm run build:migrate
 
 # --- runner -------------------------------------------------------------
@@ -74,6 +75,12 @@ WORKDIR /app
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 --ingroup nodejs nextjs
 
+# The runtime only ever runs `node` (migrate.js, server.js). Drop the
+# npm / npx / corepack the base image bundles: their own dependency trees
+# are most of what the ECR scan flags, and they're dead weight here.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
@@ -84,6 +91,9 @@ ENV HOSTNAME=0.0.0.0
 # `.next/static/`.
 COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
+# This build's Turbopack bootstrap hashes, written by `check:shell-csp`
+# and read by proxy.ts for the CSP (see lib/csp/shell-hashes.ts).
+COPY --from=build --chown=nextjs:nodejs /app/.next/shell-csp-hashes.json ./.next/shell-csp-hashes.json
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
 
 # Migration runner: single-file CJS bundle + raw migration SQL files.

@@ -29,7 +29,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { auth } from "@/lib/auth";
-import { SHELL_INLINE_SCRIPT_HASHES } from "@/lib/csp/shell-hashes";
+import { shellScriptHashes } from "@/lib/csp/shell-hashes";
 
 const PUBLIC_PATHS = ["/login"];
 
@@ -98,11 +98,12 @@ function buildCsp(req: NextRequest): CspResult | null {
     //    blocks the shell's chunks and kills hydration on every route.
     //  - `'nonce-…'` — everything Next streams at request time (flight
     //    data pushes, Suspense `$RC` completions) is tagged per request.
-    //  - `'sha256-…'` — the shell's constant inline bootstrap(s); see
-    //    lib/csp/shell-hashes.ts and the post-build guard.
+    //  - `'sha256-…'` — the shell's inline bootstraps: React's constant
+    //    one plus this build's Turbopack runtime bootstrap, written by
+    //    the post-build guard; see lib/csp/shell-hashes.ts.
     // Dev mode needs `'unsafe-eval'` for React's enhanced error-overlay
     // debugger and Turbopack HMR.
-    `script-src 'self' 'nonce-${nonce}' ${SHELL_INLINE_SCRIPT_HASHES.map((h) => `'${h}'`).join(" ")}${isDev ? " 'unsafe-eval'" : ""}`,
+    `script-src 'self' 'nonce-${nonce}' ${shellScriptHashes().map((h) => `'${h}'`).join(" ")}${isDev ? " 'unsafe-eval'" : ""}`,
     // Tailwind utility classes + Recharts inline transforms produce
     // inline `<style>` tags we can't nonce.
     "style-src 'self' 'unsafe-inline'",

@@ -1,5 +1,8 @@
 /** Post-build guard: every inline `<script>` in the prerendered static
- * shells must be allowed by hash in `lib/csp/shell-hashes.ts`.
+ * shells must be allowed by hash in `lib/csp/shell-hashes.ts`, or be
+ * Turbopack's runtime bootstrap (exact `TURBOPACK_BOOTSTRAP` match). The
+ * bootstrap hashes change per build, so they're written to
+ * `BUILD_HASHES_FILE` for `proxy.ts` to read at runtime.
  *
  * Why: under Cache Components the shells are rendered at build time and
  * carry no CSP nonce. `proxy.ts` allows their external chunks via
@@ -15,7 +18,12 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { SHELL_CSP_EXEMPT, SHELL_INLINE_SCRIPT_HASHES } from "../lib/csp/shell-hashes";
+import {
+  BUILD_HASHES_FILE,
+  SHELL_CSP_EXEMPT,
+  SHELL_INLINE_SCRIPT_HASHES,
+  TURBOPACK_BOOTSTRAP,
+} from "../lib/csp/shell-hashes";
 
 const APP_DIR = path.join(process.cwd(), ".next", "server", "app");
 
@@ -39,6 +47,7 @@ async function main(): Promise<void> {
   }
   const allowed = new Set(SHELL_INLINE_SCRIPT_HASHES);
   const seen = new Set<string>();
+  const bootstraps = new Set<string>();
   const violations: string[] = [];
   let shells = 0;
   for (const file of files) {
@@ -51,11 +60,14 @@ async function main(): Promise<void> {
       if (/\bnonce=/.test(attrs)) continue; // never true in a shell, but harmless
       const hash = "sha256-" + createHash("sha256").update(body).digest("base64");
       seen.add(hash);
-      if (!allowed.has(hash)) {
-        violations.push(
-          `${path.relative(process.cwd(), file)}: unlisted inline script ${hash}\n    ${body.slice(0, 100)}${body.length > 100 ? "…" : ""}`,
-        );
+      if (allowed.has(hash)) continue;
+      if (TURBOPACK_BOOTSTRAP.test(body)) {
+        bootstraps.add(hash);
+        continue;
       }
+      violations.push(
+        `${path.relative(process.cwd(), file)}: unlisted inline script ${hash}\n    ${body.slice(0, 100)}${body.length > 100 ? "…" : ""}`,
+      );
     }
   }
   if (shells === 0) {
@@ -68,11 +80,17 @@ async function main(): Promise<void> {
     console.error("  Add the hash to lib/csp/shell-hashes.ts (after checking the script is Next/React's own).");
     process.exit(1);
   }
+  await fs.writeFile(
+    path.join(process.cwd(), BUILD_HASHES_FILE),
+    JSON.stringify([...bootstraps].sort(), null, 2) + "\n",
+  );
   const stale = SHELL_INLINE_SCRIPT_HASHES.filter((h) => !seen.has(h));
   if (stale.length > 0) {
     console.warn(`! shell-csp guard: ${stale.length} listed hash(es) no longer appear in any shell — prune lib/csp/shell-hashes.ts: ${stale.join(", ")}`);
   }
-  console.log(`✓ shell-csp guard: ${shells} shells, every inline script is hash-allowlisted (${seen.size} distinct).`);
+  console.log(
+    `✓ shell-csp guard: ${shells} shells, every inline script is allowed (${seen.size} distinct; ${bootstraps.size} Turbopack bootstrap hash(es) → ${BUILD_HASHES_FILE}).`,
+  );
 }
 
 main().catch((err) => {
