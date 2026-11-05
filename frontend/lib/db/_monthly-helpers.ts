@@ -1016,7 +1016,8 @@ export async function projectTotalWeightedAllocInMonth(
 
 // ----------------------------------------------------------------------------
 // Employee's TOTAL tracked minutes in a month across every project they
-// touched (every source combined, deduped per day). Used as the
+// touched (sources reconciled by the overlap policy via
+// `time_entry_effective`). Used as the
 // denominator for proportional cost attribution — an employee who
 // over-tracks doesn't get charged more than their salary, just redistributed.
 // ----------------------------------------------------------------------------
@@ -1029,13 +1030,13 @@ export async function employeeTotalTrackedMinutesInMonth(
   const r = await db.execute(sql`
     WITH per_source AS (
       SELECT r.integration_slug, r.work_date, SUM(r.duration_minutes) AS minutes
-      FROM time_entry_resolved r
+      FROM time_entry_effective r
       WHERE r.employee_id = ${employee_id}
         AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
       GROUP BY r.integration_slug, r.work_date
     ),
     per_day AS (
-      SELECT work_date, MAX(minutes) AS minutes
+      SELECT work_date, SUM(minutes) AS minutes
       FROM per_source
       GROUP BY work_date
     )
@@ -1131,14 +1132,14 @@ export async function employeeProjectTrackedMinutesInMonth(
   const r = await db.execute(sql`
     WITH per_source AS (
       SELECT r.integration_slug, r.work_date, SUM(r.duration_minutes) AS minutes
-      FROM time_entry_resolved r
+      FROM time_entry_effective r
       WHERE r.employee_id = ${employee_id}
         AND r.project_id IS NOT NULL
         AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
       GROUP BY r.integration_slug, r.work_date
     ),
     per_day AS (
-      SELECT work_date, MAX(minutes) AS minutes
+      SELECT work_date, SUM(minutes) AS minutes
       FROM per_source
       GROUP BY work_date
     )
@@ -1152,8 +1153,8 @@ export async function employeeProjectTrackedMinutesInMonth(
  * month. Returns Map<project_id, minutes>. Mirrors
  * `employeeProjectTrackedMinutesInMonth` (which sums across every
  * mapped project) but keeps the per-project axis so per-assignment
- * revenue can multiply by the right tracked total. All sources with MAX
- * dedup per (project, day) so a double-logged day doesn't count twice. */
+ * revenue can multiply by the right tracked total. Reads
+ * `time_entry_effective`, so overlapping sources follow the overlap policy. */
 export async function trackedMinutesByProjectForEmployee(
   employee_id: number,
   month_start: string,
@@ -1163,14 +1164,14 @@ export async function trackedMinutesByProjectForEmployee(
     WITH per_source AS (
       SELECT r.integration_slug, r.project_id, r.work_date,
              SUM(r.duration_minutes) AS minutes
-      FROM time_entry_resolved r
+      FROM time_entry_effective r
       WHERE r.employee_id = ${employee_id}
         AND r.project_id IS NOT NULL
         AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
       GROUP BY r.integration_slug, r.project_id, r.work_date
     ),
     per_project_day AS (
-      SELECT project_id, work_date, MAX(minutes) AS minutes
+      SELECT project_id, work_date, SUM(minutes) AS minutes
       FROM per_source
       GROUP BY project_id, work_date
     )
@@ -1191,7 +1192,7 @@ export async function trackedMinutesByProjectForEmployee(
 
 /** Utilization based on tracked hours instead of assignment allocation.
  * Numerator = `employeeTotalTrackedMinutesInMonth` — ALL tracked time
- * (Personio + awork, per-day MAX dedup), NOT just time on Dante-linked
+ * (all sources, overlap policy applied), NOT just time on Dante-linked
  * projects. Using linked-only badly understated teams whose real work is
  * on unmapped projects: pentesters book "Generic Pentest" (unlinked
  * Personio) and much of their awork is on unlinked projects, so e.g.
@@ -1229,8 +1230,7 @@ export async function employeeTrackedUtilizationInMonth(
 }
 
 // ----------------------------------------------------------------------------
-// Project tracked hours through a date (Personio + awork, MAX dedup per
-// (employee, day))
+// Project tracked hours through a date (all sources, overlap policy applied)
 // ----------------------------------------------------------------------------
 
 export async function projectTrackedHoursThrough(
@@ -1240,14 +1240,14 @@ export async function projectTrackedHoursThrough(
   const r = await db.execute(sql`
     WITH merged AS (
       SELECT r.employee_id, r.work_date, SUM(r.duration_minutes) AS minutes
-      FROM time_entry_resolved r
+      FROM time_entry_effective r
       WHERE r.project_id = ${project_id}
         AND r.employee_id IS NOT NULL
         AND r.work_date <= ${through_date}::date
       GROUP BY r.integration_slug, r.employee_id, r.work_date
     )
     SELECT COALESCE(SUM(per_day_minutes), 0) AS m FROM (
-      SELECT MAX(minutes) AS per_day_minutes
+      SELECT SUM(minutes) AS per_day_minutes
       FROM merged
       GROUP BY employee_id, work_date
     ) s
@@ -1400,20 +1400,20 @@ export async function trackedMinutesPerEmployeeInMonth(
   month_end: string,
 ): Promise<Map<number, number>> {
   // When a project is mapped in more than one tool, the same hours are often
-  // logged in both. Dedup by taking MAX over sources per (employee, day) so
-  // we don't double-count. Matches projectTrackedHoursThrough.
+  // logged in both. `time_entry_effective` applies the admin's overlap
+  // policy (e.g. awork wins the day), so summing it never double-counts.
   const r = await db.execute(sql`
     WITH per_source AS (
       SELECT r.integration_slug, r.employee_id, r.work_date,
              SUM(r.duration_minutes) AS minutes
-      FROM time_entry_resolved r
+      FROM time_entry_effective r
       WHERE r.project_id = ${project_id}
         AND r.employee_id IS NOT NULL
         AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
       GROUP BY r.integration_slug, r.employee_id, r.work_date
     ),
     per_day AS (
-      SELECT employee_id, work_date, MAX(minutes) AS minutes
+      SELECT employee_id, work_date, SUM(minutes) AS minutes
       FROM per_source
       GROUP BY employee_id, work_date
     )
@@ -1448,8 +1448,8 @@ export async function projectHasTimeMapping(
 
 /** Lifetime billable revenue for a T&M project through `through_date`.
  *
- * Employees: lifetime tracked person-days (all sources, deduped by
- * MAX per employee/day — same rule as `trackedMinutesPerEmployeeInMonth`)
+ * Employees: lifetime tracked person-days (`time_entry_effective`, the
+ * overlap policy applied — same rule as `trackedMinutesPerEmployeeInMonth`)
  * × the assignment's effective daily rate. Freelancers: entered
  * person-days (`freelancer_time_entry.hours / 8`) × effective rate.
  *
@@ -1466,9 +1466,9 @@ export async function cumulativeProjectRevenue(
 ): Promise<Decimal> {
   const r = await db.execute(sql`
     WITH per_day AS (
-      SELECT employee_id, work_date, MAX(minutes) AS minutes FROM (
+      SELECT employee_id, work_date, SUM(minutes) AS minutes FROM (
         SELECT r.employee_id, r.work_date, SUM(r.duration_minutes) AS minutes
-        FROM time_entry_resolved r
+        FROM time_entry_effective r
         WHERE r.project_id = ${project_id}
           AND r.employee_id IS NOT NULL
           AND r.work_date <= ${through_date}::date
@@ -1519,24 +1519,24 @@ export async function unassignedTrackedForProject(
   billing: string,
   burden: number,
 ): Promise<Array<Record<string, unknown>>> {
-  // Two dedup passes:
-  //  1. Per (employee, day) inside this project — protects against the same
-  //     hours being logged in two tools.
-  //  2. Per (employee, day) across ALL projects — needed so the cost
-  //     attribution denominator (Option A's `total_all_min`) reflects each
-  //     person's true monthly tracked total, not double-counted hours.
+  // Both passes read `time_entry_effective`, so overlapping sources follow
+  // the admin's overlap policy:
+  //  1. Per (employee, day) inside this project.
+  //  2. Per (employee, day) across ALL projects — the cost attribution
+  //     denominator (Option A's `total_all_min`), reconciled the same way
+  //     as the numerator so the shares add up.
   const r = await db.execute(sql`
     WITH per_source AS (
       SELECT r.integration_slug, r.employee_id, r.work_date,
              SUM(r.duration_minutes) AS minutes
-      FROM time_entry_resolved r
+      FROM time_entry_effective r
       WHERE r.project_id = ${project_id}
         AND r.employee_id IS NOT NULL
         AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
       GROUP BY r.integration_slug, r.employee_id, r.work_date
     ),
     deduped AS (
-      SELECT employee_id, work_date, MAX(minutes) AS minutes
+      SELECT employee_id, work_date, SUM(minutes) AS minutes
       FROM per_source
       GROUP BY employee_id, work_date
     ),
@@ -1549,17 +1549,17 @@ export async function unassignedTrackedForProject(
       GROUP BY d.employee_id
     ),
     -- For each unassigned tracker, what's their TOTAL tracked across every
-    -- project they touched this month (all sources, deduped per day)?
+    -- project they touched this month (overlap policy applied)?
     -- This is the Option A denominator.
     emp_all_source AS (
       SELECT r.integration_slug, r.employee_id, r.work_date, SUM(r.duration_minutes) AS minutes
-      FROM time_entry_resolved r
+      FROM time_entry_effective r
       WHERE r.employee_id IN (SELECT employee_id FROM all_tracked)
         AND r.work_date BETWEEN ${month_start}::date AND ${month_end}::date
       GROUP BY r.integration_slug, r.employee_id, r.work_date
     ),
     emp_all_deduped AS (
-      SELECT employee_id, work_date, MAX(minutes) AS minutes
+      SELECT employee_id, work_date, SUM(minutes) AS minutes
       FROM emp_all_source
       GROUP BY employee_id, work_date
     ),

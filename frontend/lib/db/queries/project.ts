@@ -347,19 +347,19 @@ export async function getProjectLoggedTimeSummary(
   if (!pRow) return null;
   const project_name = pRow.name;
 
-  // Dedup per (employee, day) across sources so a project mapped in more
-  // than one tool doesn't double-count tracked hours.
+  // `time_entry_effective` applies the admin's overlap policy, so a project
+  // mapped in more than one tool doesn't double-count tracked hours.
   const result = await db.execute(sql`
     WITH per_source AS (
       SELECT r.integration_slug, r.employee_id, r.work_date,
              SUM(r.duration_minutes) AS minutes
-      FROM time_entry_resolved r
+      FROM time_entry_effective r
       WHERE r.project_id = ${project_id}
         AND r.employee_id IS NOT NULL
       GROUP BY r.integration_slug, r.employee_id, r.work_date
     ),
     deduped AS (
-      SELECT employee_id, work_date, MAX(minutes) AS minutes
+      SELECT employee_id, work_date, SUM(minutes) AS minutes
       FROM per_source
       GROUP BY employee_id, work_date
     ),

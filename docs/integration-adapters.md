@@ -339,11 +339,15 @@ All writes are server actions gated on `admin`, audited with
 As shipped in phase 5: migration 0026 drops the compatibility views and
 adds two resolved views — `time_entry_resolved` and
 `planned_booking_resolved` (record + person link + project link + source
-project name / billability) — that every report reads. The monthly
-helpers keep their symmetric MAX-per-day dedup across sources; only
-`tracked_time_effective` applies the admin's `overlap_policy`, and it
-derives "untagged" from the primary `people` binding (HRIS attendance
-without a project). The calendar classifies sources as attendance (HRIS)
+project name / billability) — that every report reads. Migration 0027
+adds `time_entry_effective`: `time_entry_resolved` with the admin's
+`overlap_policy` applied (day_wins drops every other source's time on a
+(person, day) the winner has time for; merge keeps everything). Every
+calculation — project cost and revenue, FP burn, utilisation, logged-time
+summaries — reads it and sums, so they all follow the leading system.
+`tracked_time_effective` is built on it and additionally derives
+"untagged" from the primary `people` binding (HRIS attendance without a
+project). The calendar classifies sources as attendance (HRIS)
 vs delivery (everything else) instead of naming providers; its wire
 fields are `tracked_hours` / `delivery_tracked_hours` and `actual_source`
 is `attendance` | `delivery`. Records and links are served by
