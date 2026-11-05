@@ -155,11 +155,15 @@ jobs:
           # reports `ACTIVE` once findings are available (and stays
           # `ACTIVE` thereafter because Inspector continuously rescans).
           # 60 attempts × 10s = 10 minutes, plenty for a one-off scan.
+          # `--no-paginate`: once findings span several pages the CLI
+          # prints the query once per page ("COMPLETE\nNone"), which never
+          # matches the case below.
           status=""
           for i in $(seq 1 60); do
             status=$(aws ecr describe-image-scan-findings \
               --repository-name "$REPO_NAME" \
               --image-id imageTag="$IMAGE_TAG" \
+              --no-paginate \
               --query 'imageScanStatus.status' \
               --output text 2>/dev/null || echo "PENDING")
             case "$status" in
@@ -181,6 +185,7 @@ jobs:
           findings=$(aws ecr describe-image-scan-findings \
             --repository-name "$REPO_NAME" \
             --image-id imageTag="$IMAGE_TAG" \
+            --no-paginate \
             --query 'imageScanFindings.findingSeverityCounts' \
             --output json)
           echo "Scan findings: $findings"
