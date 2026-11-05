@@ -99,9 +99,9 @@ variable "vpc_single_nat_gateway" {
 # --- RDS ---------------------------------------------------------------
 
 variable "rds_instance_class" {
-  description = "Prod RDS instance class. t4g.micro covers 40 users; bump to t4g.small if buffer cache pressure or analytic queries show up in Performance Insights."
+  description = "Prod RDS instance class. t4g.small (2 GB RAM): on t4g.micro, report page loads pinned the CPU with ~70 MB RAM free, and RDS's IAM token check timed out (\"PAM authentication failed\" in the sync Lambda, 2026-11-05)."
   type        = string
-  default     = "db.t4g.micro"
+  default     = "db.t4g.small"
 }
 
 variable "rds_backup_retention_days" {
