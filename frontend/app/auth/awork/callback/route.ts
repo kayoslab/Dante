@@ -25,8 +25,15 @@ import { COOKIE_NAME } from "../start/route";
 
 const SETTINGS_URL = "/settings/integrations/awork";
 
+/** Settings page on the public origin. Behind the ALB `req.nextUrl.origin`
+ * is the ECS task's internal `ip-…compute.internal:3000` host, which the
+ * browser can't reach — same reason `start/route.ts` uses NEXTAUTH_URL. */
+function settingsUrl(req: NextRequest): URL {
+  return new URL(SETTINGS_URL, process.env.NEXTAUTH_URL ?? req.nextUrl.origin);
+}
+
 function fail(req: NextRequest, slug: string): NextResponse {
-  const url = new URL(SETTINGS_URL, req.nextUrl.origin);
+  const url = settingsUrl(req);
   url.searchParams.set("error", slug);
   const res = NextResponse.redirect(url);
   res.cookies.delete(COOKIE_NAME);
@@ -113,7 +120,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     target_id: "awork",
   });
 
-  const url = new URL(SETTINGS_URL, req.nextUrl.origin);
+  const url = settingsUrl(req);
   url.searchParams.set("ok", "1");
   const res = NextResponse.redirect(url);
   res.cookies.delete(COOKIE_NAME);
